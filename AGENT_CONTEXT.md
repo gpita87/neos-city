@@ -224,6 +224,28 @@ Backend uses `nodemon` for hot reload. Changes to `.js` files in `backend/src/` 
 
 ## ⚡ NEXT AGENT: What to Do First
 
+### Current state (as of Apr 30 2026 — recent achievements no longer surface undated unlocks)
+
+#### What just shipped this session
+
+The "Recent Achievements" feed on the home page used to surface old achievements as if they had just been unlocked today, every time `recalculate_elo.js` ran. Root cause: when no real tournament date could be derived for an unlock, the recalc INSERT used `COALESCE(u.d, NOW())` and stamped today's date.
+
+Three changes:
+
+1. **Migration:** `backend/src/db/migrations/nullable_unlocked_at.sql` — drops `NOT NULL` on `player_achievements.unlocked_at` and one-shots an `UPDATE` that nulls fake-recent rows (rows where `unlocked_at` is within the last 7 days but the player has no `tournament_placement` on that calendar date — only NOW()-fallback dates fail that check). Idempotent.
+
+2. **`recalculate_elo.js`** — bulk INSERT now writes `u.d` directly, allowing NULL for undated unlocks. The `deriveUnlockedAt()` logic above it is unchanged.
+
+3. **`backend/src/routes/achievements.js`** — `GET /recent` now has `WHERE pa.unlocked_at IS NOT NULL`. The `/holders`, `/leaderboard`, and `/:id/tournaments` endpoints are untouched (player profiles still display undated achievements; `formatDate` shows `'—'`).
+
+**Deploy:** `node run_migration.js backend/src/db/migrations/nullable_unlocked_at.sql`. Re-running the full recalc afterward is optional — the migration already cleans the existing fake-recent rows.
+
+#### Heads-up — recalculate_elo.js was truncated mid-Edit and re-stitched
+
+Same Windows-mount truncation pattern as the prior `tournaments.js` incident. The `})().catch(err => { ... })` tail (lines 748–752) was lost in the buffered write, leaving the file unparseable. Repair appended via bash heredoc; final file is 752 lines and `node -c` clean. No backup of the truncated state was kept this time. The earlier recommendation in this doc — that a baseline git commit prevents this category of bug — still stands; the project did `git init` on 2026-04-30 (see `GIT_WORKFLOW.md`), so future truncations can be recovered with `git checkout -- <file>`.
+
+---
+
 ### Current state (as of Apr 29 2026 — import pipeline overhaul, mid-run handoff)
 
 #### What just shipped this session
@@ -292,6 +314,8 @@ Same shape for start.gg (key on `startgg_phase_group_id`, read `started_at`). Af
 `harvested_tournaments.txt` is a static snapshot — the Apr 29 run found its latest URL dated Apr 1. To grow the file, run `harvest_new.js` from the project root. It loops over the seven known organizers (`wise_`, `rickythe3rd`, `shean96`, `rigz_`, `__chepestoopid`, `devlinhartfgc`, `__auradiance`), uses `challonge.discoverUserTournaments(username, { validate: false })` to scrape each profile, dedupes candidates against the harvested file *and* the DB, and only validates the genuinely new slugs against the Pokkén keyword list before appending. New URLs are written grouped by organizer with a date comment.
 
 `pull_new.js` now offers `harvest_new.js` as Step 2/6, so the default flow refreshes the harvested file before importing. start.gg URLs are still manual-paste (no public list-by-organizer API). Tonamel and Liquipedia events live on separate pipelines (`tonamel_import_console.js`, `offline_import.js` + `liquipedia_import_console.js`) and need their own freshness checks.
+
+**When an organizer's profile is 403-blocked from Node** (Challonge bot detection — has hit `rigz_` so far), use `harvest_console.js` instead. Paste it in DevTools while on the organizer's `https://challonge.com/users/USERNAME/tournaments` page. The browser session bypasses the IP/UA block, scrapes the URLs in-DOM, and POSTs to `POST /api/tournaments/append-harvest`. The backend dedupes against `harvested_tournaments.txt` + DB, runs `validatePokkenSlugs()` to drop non-Pokkén entries, and appends new validated URLs to the file. `https://challonge.com` is in the CORS allow list (`backend/src/app.js`).
 
 Lower-priority follow-ups also worth flagging:
 

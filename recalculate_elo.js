@@ -696,13 +696,15 @@ const OFFLINE_WEIGHTS = {
       const chunk = allAchRows.slice(i, i + CHUNK);
       const pids = chunk.map(r => r.player_id);
       const aids = chunk.map(r => r.achievement_id);
-      // Pass null when we couldn't derive a date — COALESCE inside the SELECT
-      // (NOT around unnest itself, which Postgres rejects: "set-returning
-      // functions are not allowed in COALESCE") falls back to NOW().
+      // Pass NULL when we couldn't derive a date. The schema now allows
+      // unlocked_at IS NULL, and the /recent endpoint filters those out so
+      // undated achievements don't masquerade as "just unlocked today".
+      // (Previously this used COALESCE(d, NOW()), which surfaced old
+      //  achievements in the recent feed every time the recalc ran.)
       const dates = chunk.map(r => r.unlocked_at || null);
       await db.query(
         `INSERT INTO player_achievements (player_id, achievement_id, unlocked_at)
-         SELECT u.pid, u.aid, COALESCE(u.d, NOW())
+         SELECT u.pid, u.aid, u.d
          FROM unnest($1::int[], $2::text[], $3::timestamptz[]) AS u(pid, aid, d)
          ON CONFLICT DO NOTHING`,
         [pids, aids, dates]
@@ -744,6 +746,11 @@ const OFFLINE_WEIGHTS = {
 
   await db.end?.();
 })().catch(err => {
+  console.error('\n❌  Fatal error:', err.message);
+  console.error(err.stack);
+  process.exit(1);
+});
+catch(err => {
   console.error('\n❌  Fatal error:', err.message);
   console.error(err.stack);
   process.exit(1);

@@ -54,7 +54,10 @@ router.get('/', (req, res) => {
 });
 
 // GET /api/achievements/recent — most recently unlocked achievements across all players
-// Now includes tournament_id metadata when available
+// Includes tournament_id metadata when available.
+// Excludes rows with NULL unlocked_at: those are achievements where no real
+// tournament date could be derived (e.g. old tournaments without dates),
+// and we'd rather hide them than have them surface as "just unlocked today".
 router.get('/recent', async (req, res) => {
   try {
     const limit = Math.min(parseInt(req.query.limit) || 20, 50);
@@ -67,6 +70,7 @@ router.get('/recent', async (req, res) => {
       JOIN players p ON p.id = pa.player_id
       JOIN achievements a ON a.id = pa.achievement_id
       LEFT JOIN tournaments t ON t.id = pa.tournament_id
+      WHERE pa.unlocked_at IS NOT NULL
       ORDER BY pa.unlocked_at DESC
       LIMIT $1
     `, [limit]);
