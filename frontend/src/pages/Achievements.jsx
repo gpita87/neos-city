@@ -1,16 +1,17 @@
 import { useEffect, useState } from 'react';
 import { getAchievements } from '../lib/api';
 import AchievementTournamentsModal from '../components/AchievementTournamentsModal';
+import AchievementIcon, { REGION_NUMERALS } from '../components/AchievementIcon';
 
-const REGION_ORDER = ['kanto', 'johto', 'hoenn', 'sinnoh', 'unova', 'kalos', 'alola', 'galar'];
+const REGION_ORDER = ['kanto', 'johto', 'hoenn', 'sinnoh', 'unova', 'kalos', 'alola', 'galar', 'paldea'];
 
 const REGION_LABELS = {
   kanto: 'Kanto', johto: 'Johto', hoenn: 'Hoenn', sinnoh: 'Sinnoh',
-  unova: 'Unova', kalos: 'Kalos', alola: 'Alola', galar: 'Galar',
+  unova: 'Unova', kalos: 'Kalos', alola: 'Alola', galar: 'Galar', paldea: 'Paldea',
 };
 
 const REGION_THRESHOLDS = {
-  kanto: 1, johto: 3, hoenn: 5, sinnoh: 10, unova: 20, kalos: 40, alola: 80, galar: 150,
+  kanto: 1, johto: 3, hoenn: 5, sinnoh: 10, unova: 20, kalos: 40, alola: 80, galar: 150, paldea: 250,
 };
 
 const REGION_COLORS = {
@@ -22,7 +23,25 @@ const REGION_COLORS = {
   kalos: 'border-sky-800/40 bg-sky-900/10',
   alola: 'border-orange-800/40 bg-orange-900/10',
   galar: 'border-pink-800/40 bg-pink-900/10',
+  paldea: 'border-fuchsia-800/40 bg-fuchsia-900/10',
 };
+
+// What each placement tier means — explained on the page so players don't have to guess
+const TIER_GLOSSARY = [
+  { icon: '🏟️', name: 'Gym Leader', desc: 'Finished in the top 8 of a tournament.' },
+  { icon: '⭐', name: 'Elite Four', desc: 'Finished in the top 4 of a tournament.' },
+  { icon: '🔥', name: 'Rival',      desc: 'Finished as the runner-up (2nd place) of a tournament.' },
+  { icon: '👑', name: 'Champion',   desc: 'Won a tournament outright (1st place).' },
+];
+
+const META_GLOSSARY = [
+  { icon: '⚔️', name: 'Rival Battle!',  desc: 'Took at least one game from a Rival in any match.' },
+  { icon: '👋', name: 'Smell Ya Later!', desc: 'Won an entire match against a Rival.' },
+  { icon: '🔮', name: 'Foreshadowing',  desc: 'Took at least one game from a Champion in any match.' },
+  { icon: '🐴', name: 'Dark Horse',     desc: 'Won an entire match against a Champion.' },
+  { icon: '🎖️', name: '8 Badges!',     desc: 'Defeated 8 unique Gym Leaders (or higher).' },
+  { icon: '🏆', name: 'Elite Trainer',  desc: 'Defeated 4 unique Elite Four members (or higher).' },
+];
 
 const CATEGORY_SECTIONS = [
   { key: 'placement',     label: '🏟️ Placement',     desc: 'Top 8 · Top 4 · Runner-up · Champion' },
@@ -112,10 +131,10 @@ export default function Achievements() {
                       <button
                         type="button"
                         onClick={() => setOpenAchievement(ach)}
-                        className={`inline-block w-8 h-8 leading-8 rounded-lg border cursor-pointer hover:scale-110 transition-transform ${REGION_COLORS[r]}`}
-                        title={`${ach.name}\n${ach.description}\n\nClick to see contributing tournaments`}
+                        className={`inline-flex items-center justify-center w-9 h-9 rounded-lg border cursor-pointer hover:scale-110 transition-transform ${REGION_COLORS[r]}`}
+                        title={`${ach.name} (${REGION_NUMERALS[r]})\n${ach.description}\n\nClick to see contributing tournaments`}
                       >
-                        {ach.icon}
+                        <AchievementIcon icon={ach.icon} region={r} size="sm" />
                       </button>
                     </td>
                   );
@@ -158,6 +177,58 @@ export default function Achievements() {
         {achievements.length} achievements to unlock across {REGION_ORDER.length} Pokémon regions.
         Hover over any achievement for details.
       </p>
+
+      {/* How achievements work — quick glossary so the tier names mean something */}
+      <div className="bg-[#0c1425] border border-[#1a2744] rounded-xl p-5 space-y-4">
+        <div>
+          <h2 className="font-display text-sm tracking-widest text-cyan-400 mb-1">HOW THIS WORKS</h2>
+          <p className="text-xs text-slate-400">
+            Each achievement has a <span className="text-slate-200">placement tier</span> (how well you finished)
+            and a <span className="text-slate-200">region tier</span> (how many times you've done it).
+            Region tiers progress through the Pokémon regions and are marked with a Roman numeral
+            ({Object.entries(REGION_NUMERALS).map(([r, n], i) => (
+              <span key={r}>
+                {i > 0 ? ', ' : ''}
+                <span className="text-slate-300">{n}</span> = {REGION_LABELS[r]} ({REGION_THRESHOLDS[r]}×)
+              </span>
+            ))}).
+          </p>
+        </div>
+
+        <div>
+          <h3 className="text-xs uppercase tracking-wider text-slate-500 mb-2">Placement tiers</h3>
+          <div className="grid grid-cols-1 sm:grid-cols-2 gap-2">
+            {TIER_GLOSSARY.map(t => (
+              <div key={t.name} className="flex items-start gap-3 p-2 rounded-lg bg-white/5">
+                <span className="text-xl mt-0.5">{t.icon}</span>
+                <div>
+                  <p className="text-sm text-white font-medium">{t.name}</p>
+                  <p className="text-xs text-slate-400">{t.desc}</p>
+                </div>
+              </div>
+            ))}
+          </div>
+        </div>
+
+        <div>
+          <h3 className="text-xs uppercase tracking-wider text-slate-500 mb-2">Match &amp; meta achievements</h3>
+          <p className="text-[11px] text-slate-500 mb-2">
+            These are earned by playing <em>against</em> Rivals and Champions — meaning players who already
+            hold the corresponding placement achievement.
+          </p>
+          <div className="grid grid-cols-1 sm:grid-cols-2 gap-2">
+            {META_GLOSSARY.map(t => (
+              <div key={t.name} className="flex items-start gap-3 p-2 rounded-lg bg-white/5">
+                <span className="text-xl mt-0.5">{t.icon}</span>
+                <div>
+                  <p className="text-sm text-white font-medium">{t.name}</p>
+                  <p className="text-xs text-slate-400">{t.desc}</p>
+                </div>
+              </div>
+            ))}
+          </div>
+        </div>
+      </div>
 
       {/* Category nav */}
       <div className="flex flex-wrap gap-2">

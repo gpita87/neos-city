@@ -3,10 +3,11 @@ import { useParams, Link } from 'react-router-dom';
 import { getPlayer } from '../lib/api';
 import { winRate, formatDate } from '../lib/utils';
 import AchievementTournamentsModal from '../components/AchievementTournamentsModal';
+import AchievementIcon, { REGION_NUMERALS } from '../components/AchievementIcon';
 
 const REGION_LABELS = {
   kanto: 'Kanto', johto: 'Johto', hoenn: 'Hoenn', sinnoh: 'Sinnoh',
-  unova: 'Unova', kalos: 'Kalos', alola: 'Alola', galar: 'Galar',
+  unova: 'Unova', kalos: 'Kalos', alola: 'Alola', galar: 'Galar', paldea: 'Paldea',
 };
 
 const REGION_COLORS = {
@@ -18,6 +19,7 @@ const REGION_COLORS = {
   kalos: 'bg-sky-900/30 text-sky-400 border-sky-800/50',
   alola: 'bg-orange-900/30 text-orange-400 border-orange-800/50',
   galar: 'bg-pink-900/30 text-pink-400 border-pink-800/50',
+  paldea: 'bg-fuchsia-900/30 text-fuchsia-400 border-fuchsia-800/50',
 };
 
 // Group achievements by category for display
@@ -72,9 +74,9 @@ function RegionTierDisplay({ highestRegions }) {
           <span
             key={t.key}
             className={`inline-flex items-center gap-1.5 px-2.5 py-1 rounded-lg border text-xs font-medium ${colorClass}`}
-            title={`${REGION_LABELS[region]} ${t.name} — achieved ${t.name.toLowerCase()} placement enough times to reach the ${REGION_LABELS[region]} tier`}
+            title={`${REGION_LABELS[region]} ${t.name} (${REGION_NUMERALS[region]}) — achieved ${t.name.toLowerCase()} placement enough times to reach the ${REGION_LABELS[region]} tier`}
           >
-            <span>{t.icon}</span>
+            <AchievementIcon icon={t.icon} region={region} size="sm" />
             <span>{REGION_LABELS[region]} {t.name}</span>
           </span>
         );
@@ -219,7 +221,7 @@ export default function PlayerProfile() {
                   className="flex items-center gap-3 p-2 rounded-lg bg-white/5 hover:bg-white/10 group relative text-left transition-colors"
                   title="Click to see contributing tournaments"
                 >
-                  <span className="text-xl">{a.icon}</span>
+                  <AchievementIcon icon={a.icon} regionFromId={a.achievement_id} size="md" />
                   <div className="flex-1 min-w-0">
                     <p className="text-sm font-medium text-white truncate">{a.name}</p>
                     <p className="text-[10px] text-slate-600">{formatDate(a.unlocked_at)}</p>

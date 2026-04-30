@@ -1,160 +1,150 @@
-/**
- * harvest_new.js
- *
- * Re-harvest Challonge tournament URLs from the known organizers and
- * append any new entries to harvested_tournaments.txt.
- *
- * What it does:
- *   1. Reads existing harvested_tournaments.txt; extracts every slug for dedup.
- *   2. Connects to Supabase; reads every `challonge_id` already in the DB
- *      (these are slugs too) for a second dedup layer.
- *   3. Loops over the seven known organizers from seed_organizers.sql, calling
- *      challonge.discoverUserTournaments(username) — which now runs
- *      validatePokkenSlugs() by default, so non-Pokkén tournaments are filtered
- *      out before we even consider them.
- *   4. Writes only the genuinely new slugs to the bottom of the harvested file
- *      as `https://challonge.com/{slug}` (root-namespace form, matching the
- *      existing 495 root entries in the file).
- *   5. Prints a per-organizer summary plus the new total line count.
- *
- * Idempotent — re-running it after a fresh harvest should append zero new
- * lines (assuming no new tournaments have been published in the meantime).
- *
- * Usage (from the neos-city directory):
- *   node harvest_new.js
- *
- * After this completes, run `node pull_new.js` to import the new URLs.
- */
+#!/usr/bin/env node
+// ===========================================================================
+// NEOS CITY - Harvest new tournament URLs from known organizers
+// Run from the neos-city directory:  node harvest_new.js
+//
+// Walks each Pokkén organizer's Challonge profile (via discoverUserTournaments),
+// dedupes against harvested_tournaments.txt and against the tournaments table,
+// validates the genuinely new slugs against the Pokkén keyword allow-list,
+// and appends them to harvested_tournaments.txt.
+//
+// After this finishes, run `node pull_new.js` to import the new URLs.
+//
+// Notes:
+// - start.gg URLs are NOT auto-discovered (no public list-by-organizer API);
+//   add those to harvested_tournaments.txt by hand.
+// - Tonamel and Liquipedia events live on separate pipelines and are
+//   unaffected by this script.
+// - Backend doesn't need to be running. The script uses the Challonge service
+//   directly and reads the DB through the same connection string.
+// ===========================================================================
 
-const fs = require('fs');
+require('dotenv').config({ path: './backend/.env' });
+
+const fs   = require('fs');
 const path = require('path');
 const { Pool } = require('pg');
-require('dotenv').config({ path: path.join(__dirname, 'backend', '.env') });
+const challonge = require('./backend/src/services/challonge');
 
-const challonge = require(path.join(__dirname, 'backend', 'src', 'services', 'challonge.js'));
+// Per seed_organizers.sql / AGENT_CONTEXT.md community section
+const ORGANIZERS = [
+  { username: 'wise_',          series: 'FFC' },
+  { username: 'rickythe3rd',    series: 'FFC' },
+  { username: 'shean96',        series: 'RTG NA' },
+  { username: 'rigz_',          series: 'RTG NA' },
+  { username: '__chepestoopid', series: 'RTG EU' },
+  { username: 'devlinhartfgc',  series: 'DCM' },
+  { username: '__auradiance',   series: 'TCC' },
+];
 
 const HARVESTED_FILE = path.join(__dirname, 'harvested_tournaments.txt');
 
-// Per seed_organizers.sql — the seven Challonge usernames whose tournament
-// pages we scrape for new slugs. Note the double-underscore prefix on the EU
-// organizers (Challonge requires that exact spelling).
-const ORGANIZERS = [
-  'wise_',
-  'rickythe3rd',
-  'shean96',
-  'rigz_',
-  '__chepestoopid',
-  '__auradiance',
-  'devlinhartfgc',
-];
+(async () => {
+  console.log('Harvesting new Challonge tournaments...\n');
 
-function readExistingHarvested() {
-  if (!fs.existsSync(HARVESTED_FILE)) return { lines: [], slugs: new Set() };
-  const raw = fs.readFileSync(HARVESTED_FILE, 'utf8');
-  const lines = raw.split(/\r?\n/).map(s => s.trim()).filter(Boolean);
+  // ── 1. Build a set of already-known slugs ──────────────────────────────
+  const existingLines = fs.existsSync(HARVESTED_FILE)
+    ? fs.readFileSync(HARVESTED_FILE, 'utf8').split('\n').map(l => l.trim()).filter(Boolean)
+    : [];
 
-  // Pull the slug out of each URL using the same parser tournaments.js uses.
-  const slugs = new Set();
-  for (const url of lines) {
-    const slug = challonge.extractSlugFromUrl(url);
-    if (slug) slugs.add(slug.toLowerCase());
-  }
-  return { lines, slugs };
-}
-
-async function readDbSlugs(pool) {
-  const { rows } = await pool.query(
-    `SELECT challonge_id FROM tournaments WHERE challonge_id IS NOT NULL`
+  const fileSlugs = new Set(
+    existingLines
+      .filter(l => l.startsWith('http') && !l.includes('start.gg'))
+      .map(l => challonge.extractSlugFromUrl(l))
+      .filter(Boolean)
   );
-  const set = new Set();
-  for (const r of rows) {
-    if (r.challonge_id) set.add(String(r.challonge_id).toLowerCase());
-  }
-  return set;
-}
+  console.log(`harvested_tournaments.txt: ${fileSlugs.size} Challonge slugs already listed`);
 
-async function main() {
-  if (!process.env.DATABASE_URL) {
-    console.error('DATABASE_URL not set — check backend/.env');
-    process.exit(1);
-  }
-  if (!process.env.CHALLONGE_V1_KEY) {
-    console.warn('CHALLONGE_V1_KEY not set — validation calls will fall back to OAuth.');
-  }
-
-  const pool = new Pool({ connectionString: process.env.DATABASE_URL });
-
-  console.log('📥 Reading existing harvested_tournaments.txt…');
-  const { lines: existingLines, slugs: harvestedSlugs } = readExistingHarvested();
-  console.log(`   ${existingLines.length} URLs in file, ${harvestedSlugs.size} unique slugs parsed.`);
-
-  console.log('📥 Reading challonge_id values from DB…');
-  const dbSlugs = await readDbSlugs(pool);
-  console.log(`   ${dbSlugs.size} Challonge tournaments already imported.`);
-
-  const seen = new Set([...harvestedSlugs, ...dbSlugs]);
-  const newEntries = []; // { organizer, slug, url }
-  const perOrganizer = {};
-
-  for (const username of ORGANIZERS) {
-    console.log(`\n🔎 Discovering tournaments for ${username}…`);
-    let slugs;
+  let dbSlugs = new Set();
+  if (process.env.DATABASE_URL) {
+    const pool = new Pool({ connectionString: process.env.DATABASE_URL });
     try {
-      slugs = await challonge.discoverUserTournaments(username);
+      const { rows } = await pool.query(
+        "SELECT challonge_id FROM tournaments WHERE challonge_id IS NOT NULL"
+      );
+      dbSlugs = new Set(rows.map(r => r.challonge_id));
+      console.log(`tournaments table: ${dbSlugs.size} Challonge tournaments already imported`);
     } catch (err) {
-      console.warn(`   ⚠️  ${username} failed: ${err.message}`);
-      perOrganizer[username] = { discovered: 0, new: 0, error: err.message };
-      continue;
+      console.warn(`  WARN: DB lookup failed (${err.message}) - continuing with file-only dedup`);
+    } finally {
+      await pool.end();
     }
-
-    let newForThisOrg = 0;
-    for (const slug of slugs) {
-      const key = String(slug).toLowerCase();
-      if (seen.has(key)) continue;
-      seen.add(key);
-      const url = `https://challonge.com/${slug}`;
-      newEntries.push({ organizer: username, slug, url });
-      newForThisOrg++;
-    }
-    perOrganizer[username] = { discovered: slugs.length, new: newForThisOrg };
-    console.log(`   ${slugs.length} validated slugs returned, ${newForThisOrg} new.`);
+  } else {
+    console.warn('  WARN: DATABASE_URL not set in backend/.env - dedup will only check the file');
   }
 
-  console.log('\n📊 Summary by organizer:');
-  for (const [user, info] of Object.entries(perOrganizer)) {
-    if (info.error) {
-      console.log(`   ${user.padEnd(18)} ERROR: ${info.error}`);
-    } else {
-      console.log(`   ${user.padEnd(18)} discovered ${String(info.discovered).padStart(3)}  new ${String(info.new).padStart(3)}`);
+  const known = new Set([...fileSlugs, ...dbSlugs]);
+  console.log(`Combined known slugs: ${known.size}\n`);
+
+  // ── 2. For each organizer, scrape -> filter -> validate new ones ───────
+  const newSlugsByOrg = {};
+  let totalNew = 0;
+  let totalErrors = 0;
+
+  for (const { username, series } of ORGANIZERS) {
+    console.log(`[${series}] ${username}`);
+    try {
+      // First pass: scrape without validation (fast)
+      const allScraped = await challonge.discoverUserTournaments(username, {
+        pages: 5,
+        validate: false,
+      });
+      console.log(`  Scraped ${allScraped.length} slugs`);
+
+      const candidates = allScraped.filter(s => !known.has(s));
+      if (candidates.length === 0) {
+        console.log('  Nothing new since last harvest');
+        newSlugsByOrg[username] = { slugs: [], series };
+        continue;
+      }
+      console.log(`  ${candidates.length} candidate(s) not yet in file or DB - validating...`);
+
+      // Second pass: validate ONLY the new candidates against the Pokkén keyword list
+      const validated = await challonge.validatePokkenSlugs(candidates);
+      newSlugsByOrg[username] = { slugs: validated, series };
+      totalNew += validated.length;
+      validated.forEach(s => known.add(s)); // prevent cross-organizer duplicates
+      console.log(`  ${validated.length} new validated slug(s)`);
+    } catch (err) {
+      console.error(`  ERROR: ${err.message}`);
+      newSlugsByOrg[username] = { slugs: [], series, error: err.message };
+      totalErrors++;
     }
+    console.log('');
   }
 
-  if (newEntries.length === 0) {
-    console.log('\n✅ No new tournaments to add. harvested_tournaments.txt is up to date.');
-    await pool.end();
+  // ── 3. Append the new URLs to harvested_tournaments.txt ───────────────
+  if (totalNew === 0) {
+    console.log('===========================================================');
+    console.log(`No new tournaments found. (errors: ${totalErrors})`);
+    console.log('harvested_tournaments.txt is up to date.');
     return;
   }
 
-  // Append. Preserve trailing-newline convention of the existing file.
-  const needsLeadingNewline = existingLines.length > 0;
-  const block = newEntries.map(e => e.url).join('\n');
-  const toAppend = (needsLeadingNewline ? '\n' : '') + block + '\n';
+  const lines = [];
+  // Ensure separation from any prior content - prepend a blank line if the
+  // file doesn't already end with one
+  const fileContent = fs.existsSync(HARVESTED_FILE) ? fs.readFileSync(HARVESTED_FILE, 'utf8') : '';
+  if (fileContent && !fileContent.endsWith('\n')) lines.push('');
 
-  fs.appendFileSync(HARVESTED_FILE, toAppend, 'utf8');
-
-  const finalCount = existingLines.length + newEntries.length;
-  console.log(`\n✅ Appended ${newEntries.length} new URL(s) to harvested_tournaments.txt`);
-  console.log(`   File now has ${finalCount} URLs (was ${existingLines.length}).`);
-  console.log('\n   New entries:');
-  for (const e of newEntries) {
-    console.log(`     [${e.organizer}] ${e.url}`);
+  lines.push(`# Appended by harvest_new.js on ${new Date().toISOString().slice(0, 10)}`);
+  for (const [username, { slugs, series }] of Object.entries(newSlugsByOrg)) {
+    if (slugs.length === 0) continue;
+    lines.push(`# ${series} / ${username} (${slugs.length} new)`);
+    for (const slug of slugs) {
+      lines.push(`https://challonge.com/${username}/${slug}`);
+    }
   }
+  lines.push(''); // trailing newline
 
-  console.log('\n👉 Next step: run `node pull_new.js` to import the new tournaments.');
-  await pool.end();
-}
+  fs.appendFileSync(HARVESTED_FILE, lines.join('\n'));
 
-main().catch(err => {
-  console.error('\n❌ harvest_new.js failed:', err);
+  console.log('===========================================================');
+  console.log(`Appended ${totalNew} new URL(s) to harvested_tournaments.txt`);
+  if (totalErrors > 0) console.log(`(${totalErrors} organizer(s) failed - see errors above)`);
+  console.log('\nNext step: node pull_new.js');
+})().catch(err => {
+  console.error('\nFatal error:', err.message);
+  console.error(err.stack);
   process.exit(1);
 });

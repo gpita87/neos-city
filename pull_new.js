@@ -5,11 +5,13 @@
 //
 // Replaces the multi-step manual import workflow with a single command:
 //   1. Verify the backend is reachable.
-//   2. Run batch_import.js (Challonge + start.gg, date-sorted).
-//   3. Prompt for any browser-console steps the user still needs to do
-//      (Tonamel and Liquipedia brackets — those need a real Chrome session).
-//   4. Run recalculate_elo.js so Pass-2 achievements and full ELO are correct.
-//   5. Run check_import_status.js for a final sanity check.
+//   2. Optionally refresh harvested_tournaments.txt via harvest_new.js.
+//   3. Run batch_import.js (Challonge + start.gg, date-sorted).
+//   4. Prompt for any browser-console steps the user still needs to do
+//      (Tonamel and Liquipedia brackets - those need a real Chrome session).
+//   5. Run recalculate_elo.js so Pass-2 achievements and full ELO are correct.
+//   6. Run check_import_status.js for a final sanity check.
+//   7. Run backup_db.js for a logical Supabase dump under neos-city/backups/.
 // ===========================================================================
 
 const http        = require('http');
@@ -71,7 +73,7 @@ function banner(title) {
   banner('NEOS CITY - Pull New Tournament Info');
 
   // 1. Backend health check
-  console.log('\nStep 1/5: Checking that the backend is running...');
+  console.log('\nStep 1/7: Checking that the backend is running...');
   const ok = await checkBackend();
   if (!ok) {
     console.error(`\n  Backend is NOT reachable at http://${API_HOST}:${API_PORT}/api/health`);
@@ -80,8 +82,25 @@ function banner(title) {
   }
   console.log('  Backend is up.');
 
-  // 2. Run batch_import.js
-  console.log('\nStep 2/5: Importing Challonge + start.gg URLs from harvested_tournaments.txt');
+  // 2. Optionally refresh harvested_tournaments.txt with new URLs from organizer pages
+  console.log('\nStep 2/7: Refresh harvested_tournaments.txt');
+  console.log('  Walks each Pokken organizer\'s Challonge profile and appends any');
+  console.log('  newly-discovered tournaments to harvested_tournaments.txt.');
+  const harvestAnswer = await ask('  Run harvest_new.js now? (Y/n): ');
+  if (harvestAnswer === 'n' || harvestAnswer === 'no') {
+    console.log('  Skipping harvest. Importing only URLs already in the file.');
+  } else {
+    try {
+      await runScript('harvest_new.js');
+    } catch (err) {
+      console.error(`\n  harvest_new.js failed: ${err.message}`);
+      const cont = await ask('  Continue without a fresh harvest? (Y/n): ');
+      if (cont === 'n' || cont === 'no') process.exit(1);
+    }
+  }
+
+  // 3. Run batch_import.js
+  console.log('\nStep 3/7: Importing Challonge + start.gg URLs from harvested_tournaments.txt');
   console.log('          (URLs will be date-sorted via /preview-dates before import)');
   try {
     await runScript('batch_import.js');
@@ -91,8 +110,8 @@ function banner(title) {
     if (cont !== 'y' && cont !== 'yes') process.exit(1);
   }
 
-  // 3. Browser-console steps (manual, not automatable from Node)
-  console.log('\nStep 3/5: Browser-console imports (manual)');
+  // 4. Browser-console steps (manual, not automatable from Node)
+  console.log('\nStep 4/7: Browser-console imports (manual)');
   console.log('  These sources need a real Chrome tab to run their scrapers:');
   console.log('    - Tonamel    -> tonamel_import_console.js   (paste in any Tonamel bracket page)');
   console.log('    - Liquipedia -> liquipedia_import_console.js (paste on any liquipedia.net page)');
@@ -111,8 +130,8 @@ function banner(title) {
     console.log('  Liquipedia bracket data already imported.');
   }
 
-  // 4. Full ELO + Pass-2 achievement recalculation
-  console.log('\nStep 4/5: Recalculating ELO and re-running achievements');
+  // 5. Full ELO + Pass-2 achievement recalculation
+  console.log('\nStep 5/7: Recalculating ELO and re-running achievements');
   console.log('          (idempotent; this corrects ordering and runs Pass 2)');
   const recalcAnswer = await ask('  Run recalculate_elo.js now? (Y/n): ');
   if (recalcAnswer === 'n' || recalcAnswer === 'no') {
@@ -125,12 +144,29 @@ function banner(title) {
     }
   }
 
-  // 5. Status check
-  console.log('\nStep 5/5: Sanity check');
+  // 6. Status check
+  console.log('\nStep 6/7: Sanity check');
   try {
     await runScript('check_import_status.js');
   } catch (err) {
     console.error(`\n  check_import_status.js failed: ${err.message}`);
+  }
+
+  // 7. DB backup (logical dump via Supabase CLI)
+  console.log('\nStep 7/7: Database backup');
+  console.log('  Writes a timestamped logical dump under neos-city/backups/.');
+  console.log('  Uses pg_dump directly (requires PostgreSQL 17 client tools on PATH).');
+  const backupAnswer = await ask('  Run backup_db.js now? (Y/n): ');
+  if (backupAnswer === 'n' || backupAnswer === 'no') {
+    console.log('  Skipping backup. You can run it later with:  node backup_db.js');
+  } else {
+    try {
+      await runScript('backup_db.js');
+    } catch (err) {
+      console.error(`\n  backup_db.js failed: ${err.message}`);
+      console.error('  Your import is fine - this is just the backup step.');
+      console.error('  Re-run later with:  node backup_db.js');
+    }
   }
 
   banner('DONE');

@@ -432,7 +432,12 @@ const OFFLINE_WEIGHTS = {
 
     const newOnes = checkAchievementsPass2Pure(p.id, playerMatches, globalOppAchMap, alreadyUnlocked);
     for (const ach of newOnes) {
-      pass2Rows.push({ player_id: p.id, achievement_id: ach.id });
+      // Keep contributors attached to the row so we can derive unlocked_at later
+      pass2Rows.push({
+        player_id: p.id,
+        achievement_id: ach.id,
+        contributors: ach.contributors || [],
+      });
       if (ach.contributors && ach.contributors.length > 0) {
         for (const c of ach.contributors) {
           contributorRows.push({
@@ -446,6 +451,158 @@ const OFFLINE_WEIGHTS = {
     }
   }
   console.log(`   ${pass2Rows.length} Pass 2 achievements + ${contributorRows.length} contributor records computed`);
+
+  // ── Step 4.5: Derive unlocked_at per achievement ──────────────────────
+  // Without this, every achievement reverts to NOW() at insert time and old
+  // achievements (e.g. Stephmicky's circa-2018 wins) appear in the "Recent
+  // Achievements" feed. Here we walk each player's placement / match history
+  // chronologically and record the date they actually crossed each threshold.
+  console.log('🕒  Computing unlocked_at for each achievement …');
+
+  const REGION_THRESHOLDS_MAP = {
+    kanto: 1, johto: 3, hoenn: 5, sinnoh: 10,
+    unova: 20, kalos: 40, alola: 80, galar: 150, paldea: 250,
+  };
+
+  // Sort each player's placements by tournament completed_at ASC (online only —
+  // achievements are online-only). Pre-attach the tournament row for cheap lookup.
+  const placementsByPlayerSorted = {};
+  for (const pid of Object.keys(placementsByPlayer)) {
+    placementsByPlayerSorted[pid] = placementsByPlayer[pid]
+      .map(pl => ({ ...pl, _t: tournamentById[pl.tournament_id] }))
+      .filter(pl => pl._t && !pl._t.is_offline)
+      .sort((a, b) => {
+        const da = a._t.completed_at || '';
+        const db_ = b._t.completed_at || '';
+        return da < db_ ? -1 : da > db_ ? 1 : a._t.id - b._t.id;
+      });
+  }
+
+  // Most-recent online tournament date per player — fallback when a precise
+  // crossing date can't be derived.
+  const lastTourneyDateByPlayer = {};
+  for (const pid of Object.keys(placementsByPlayerSorted)) {
+    const list = placementsByPlayerSorted[pid];
+    if (list.length > 0) lastTourneyDateByPlayer[pid] = list[list.length - 1]._t.completed_at;
+  }
+
+  // Match lookup by id (for match-based achievements that store match_ids in contributors)
+  const matchById = {};
+  for (const m of dbMatches) matchById[m.id] = m;
+
+  // For meta achievements: the date player X first defeated opponent Y
+  const firstDefeatByPlayer = {};
+  for (const pid of Object.keys(wonMatchesByPlayer)) {
+    const map = {};
+    const matches = wonMatchesByPlayer[pid]
+      .filter(m => m.winner_id === Number(pid))
+      .map(m => ({ m, t: tournamentById[m.tournament_id] }))
+      .filter(x => x.t)
+      .sort((a, b) => {
+        const da = a.t.completed_at || '';
+        const db_ = b.t.completed_at || '';
+        return da < db_ ? -1 : da > db_ ? 1 : a.m.id - b.m.id;
+      });
+    for (const { m, t } of matches) {
+      const opp = m.player1_id === Number(pid) ? m.player2_id : m.player1_id;
+      if (!opp) continue;
+      if (!map[opp]) map[opp] = t.completed_at;
+    }
+    firstDefeatByPlayer[pid] = map;
+  }
+
+  function deriveUnlockedAt(playerId, achievementId, contributors = []) {
+    // Region threshold (last underscore-segment of the id is the region key)
+    const idParts = String(achievementId).split('_');
+    const region = idParts[idParts.length - 1];
+    const threshold = REGION_THRESHOLDS_MAP[region];
+
+    // Special: World Traveler — the date the player first entered their 2nd series
+    if (achievementId === 'multi_series') {
+      const placements = placementsByPlayerSorted[playerId] || [];
+      const seriesFirst = {};
+      for (const pl of placements) {
+        const s = pl._t.series;
+        if (!s) continue;
+        if (!seriesFirst[s]) seriesFirst[s] = pl._t.completed_at;
+      }
+      const dates = Object.values(seriesFirst).filter(Boolean).sort();
+      return dates[1] || dates[0] || null;
+    }
+
+    // Match-based: rival_battle / smell_ya_later / foreshadowing / dark_horse
+    const matchPrefixes = ['rival_battle_', 'smell_ya_later_', 'foreshadowing_', 'dark_horse_'];
+    if (matchPrefixes.some(pre => achievementId.startsWith(pre))) {
+      if (!threshold) return lastTourneyDateByPlayer[playerId] || null;
+      const dates = (contributors || [])
+        .map(c => {
+          const m = c.match_id ? matchById[c.match_id] : null;
+          if (!m) return null;
+          const t = tournamentById[m.tournament_id];
+          return t ? t.completed_at : null;
+        })
+        .filter(Boolean)
+        .sort();
+      return dates[threshold - 1] || dates[dates.length - 1] || lastTourneyDateByPlayer[playerId] || null;
+    }
+
+    // Meta: eight_badges / elite_trainer — date of the Nth unique qualifying defeat
+    const metaPrefixes = ['eight_badges_', 'elite_trainer_'];
+    if (metaPrefixes.some(pre => achievementId.startsWith(pre))) {
+      if (!threshold) return lastTourneyDateByPlayer[playerId] || null;
+      const firstDefeats = firstDefeatByPlayer[playerId] || {};
+      const dates = (contributors || [])
+        .map(c => firstDefeats[c.opponent_id])
+        .filter(Boolean)
+        .sort();
+      // Required count is fixed per meta type (8 or 4), but we want the date the
+      // player FIRST hit that count — i.e. the Nth date.
+      const required = achievementId.startsWith('eight_badges_') ? 8 : 4;
+      return dates[required - 1] || dates[dates.length - 1] || lastTourneyDateByPlayer[playerId] || null;
+    }
+
+    // Placement / participation: parse tier and scope from the id
+    let tier = null;
+    let scope = null;
+    const tierTokens = ['gym_leader', 'elite_four', 'rival', 'champion', 'participation'];
+    for (const tt of tierTokens) {
+      const marker = `_${tt}_`;
+      if (achievementId.includes(marker)) {
+        tier = tt;
+        scope = achievementId.substring(0, achievementId.indexOf(marker));
+        break;
+      }
+    }
+    if (!tier || !threshold) return lastTourneyDateByPlayer[playerId] || null;
+
+    const placements = placementsByPlayerSorted[playerId] || [];
+    const filtered = placements.filter(pl => {
+      // Scope: 'global' = any series; otherwise tournament series must match
+      if (scope !== 'global' && pl._t.series !== scope) return false;
+      const rank = pl.final_rank;
+      if (tier === 'gym_leader')    return rank > 0 && rank <= 8;
+      if (tier === 'elite_four')    return rank > 0 && rank <= 4;
+      if (tier === 'rival')         return rank === 2;
+      if (tier === 'champion')      return rank === 1;
+      if (tier === 'participation') return true;
+      return false;
+    });
+
+    return filtered[threshold - 1]?._t?.completed_at
+      || filtered[filtered.length - 1]?._t?.completed_at
+      || lastTourneyDateByPlayer[playerId]
+      || null;
+  }
+
+  // Attach unlocked_at to every achievement row
+  for (const r of pass1Rows) {
+    r.unlocked_at = deriveUnlockedAt(r.player_id, r.achievement_id, []);
+  }
+  for (const r of pass2Rows) {
+    r.unlocked_at = deriveUnlockedAt(r.player_id, r.achievement_id, r.contributors);
+  }
+  const datedCount = [...pass1Rows, ...pass2Rows].filter(r => r.unlocked_at).length;
+  console.log(`   Dated ${datedCount}/${pass1Rows.length + pass2Rows.length} achievements (others fall back to NOW())`);
 
   // ═══════════════════════════════════════════════════════════════════════
   //  PHASE 3: BULK WRITE — push everything back to DB
@@ -539,11 +696,16 @@ const OFFLINE_WEIGHTS = {
       const chunk = allAchRows.slice(i, i + CHUNK);
       const pids = chunk.map(r => r.player_id);
       const aids = chunk.map(r => r.achievement_id);
+      // Pass null when we couldn't derive a date — COALESCE inside the SELECT
+      // (NOT around unnest itself, which Postgres rejects: "set-returning
+      // functions are not allowed in COALESCE") falls back to NOW().
+      const dates = chunk.map(r => r.unlocked_at || null);
       await db.query(
-        `INSERT INTO player_achievements (player_id, achievement_id)
-         SELECT unnest($1::int[]), unnest($2::text[])
+        `INSERT INTO player_achievements (player_id, achievement_id, unlocked_at)
+         SELECT u.pid, u.aid, COALESCE(u.d, NOW())
+         FROM unnest($1::int[], $2::text[], $3::timestamptz[]) AS u(pid, aid, d)
          ON CONFLICT DO NOTHING`,
-        [pids, aids]
+        [pids, aids, dates]
       );
     }
   }
@@ -581,7 +743,6 @@ const OFFLINE_WEIGHTS = {
   console.log('\n✨  ELO and achievements are now up to date!');
 
   await db.end?.();
-  process.exit(0);
 })().catch(err => {
   console.error('\n❌  Fatal error:', err.message);
   console.error(err.stack);

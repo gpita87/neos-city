@@ -128,6 +128,38 @@ Migrations can be run via `node run_migration.js <path-to-sql-file>` from the ne
 
 One gotcha: the `achievements` table needs a `series TEXT` column that wasn't in the original schema. It was added via `ALTER TABLE achievements ADD COLUMN IF NOT EXISTS series TEXT;` in add_series.sql.
 
+### Database Backups
+
+Logical Postgres dumps live under `neos-city/backups/<timestamp>/` (gitignored). They're produced by `backup_db.js`, which calls `pg_dump` directly.
+
+**Prereq:** PostgreSQL 17 client tools (for `pg_dump.exe`). One-time install on Windows:
+```powershell
+winget install PostgreSQL.PostgreSQL.17
+```
+Then close and reopen PowerShell so `pg_dump` is on PATH. The "Command Line Tools" component is the only piece needed — the server itself can stay disabled.
+
+(Earlier attempts used the Supabase CLI (`npx supabase db dump`), but Supabase CLI v2 runs `pg_dump` inside a Docker container, which requires Docker Desktop. Calling `pg_dump` directly skips that prerequisite — same tool, fewer dependencies.)
+
+```powershell
+cd neos-city
+node backup_db.js                # full backup: schema + data
+node backup_db.js --schema-only  # only the schema dump
+node backup_db.js --data-only    # only the data dump
+node backup_db.js --keep 10      # also prune to the 10 most recent dumps
+```
+
+Each run creates `backups/YYYY-MM-DD_HHmm/` containing `schema.sql`, `data.sql`, and a small `manifest.json`. Both dumps use `--no-owner --no-privileges` so they replay cleanly against any target Postgres. Data is dumped as `--column-inserts` for human-readable INSERT statements.
+
+`pull_new.js` ends with a `Step 7/7: Database backup` prompt that runs this script after every import + recalc, so a fresh dump is always available alongside any new tournament data.
+
+**Restoring** (against an empty Postgres):
+```bash
+psql "$NEW_DB_URL" -f schema.sql
+psql "$NEW_DB_URL" -f data.sql
+```
+
+For Supabase-tier-level info: free tier has no automatic backups; Pro keeps 7 days, Team 14, Enterprise 30. Even on a paid tier, keeping local dumps is the actual disaster-recovery insurance — Supabase's managed backups live in their infrastructure, so a billing/account/retention-window issue could still leave you stranded.
+
 ---
 
 ## Pulling New Tournament Info
@@ -255,13 +287,11 @@ if (known.has(slug)) {
 
 Same shape for start.gg (key on `startgg_phase_group_id`, read `started_at`). After the fix, the probe phase on a stable harvested file should drop from minutes to seconds.
 
-**Second follow-up: re-harvest. `harvested_tournaments.txt` is stale.**
+**Re-harvest (now automated via `harvest_new.js`).**
 
-The Apr 29 import run reported `Importing in chronological order: 2016-09-18 -> 2026-04-01`, meaning the latest URL in the harvested file is dated April 1. Tournaments that ran in the ~4 weeks since (and any future runs) are not in `harvested_tournaments.txt` and therefore aren't being imported. The harvested file is a static snapshot — nothing automatic refreshes it.
+`harvested_tournaments.txt` is a static snapshot — the Apr 29 run found its latest URL dated Apr 1. To grow the file, run `harvest_new.js` from the project root. It loops over the seven known organizers (`wise_`, `rickythe3rd`, `shean96`, `rigz_`, `__chepestoopid`, `devlinhartfgc`, `__auradiance`), uses `challonge.discoverUserTournaments(username, { validate: false })` to scrape each profile, dedupes candidates against the harvested file *and* the DB, and only validates the genuinely new slugs against the Pokkén keyword list before appending. New URLs are written grouped by organizer with a date comment.
 
-To pull post-Apr-1 events, the file needs to grow first. Cleanest path is a small script that loops over the known organizer usernames, calls `challonge.discoverUserTournaments(username)` (now uses `validatePokkenSlugs` by default), dedupes against the existing harvested file and against the DB (`SELECT challonge_id FROM tournaments`), and appends only the new slugs. Organizer list per `seed_organizers.sql`: `wise_`, `rickythe3rd`, `shean96`, `rigz_`, `__chepestoopid`, `devlinhartfgc`, `__auradiance`. start.gg has no equivalent automated discovery — those URLs still need manual paste.
-
-Tonamel and Liquipedia events are tracked through their own pipelines (`tonamel_import_console.js`, `offline_import.js` + `liquipedia_import_console.js`) and are independent of `harvested_tournaments.txt`. Those need their own freshness check.
+`pull_new.js` now offers `harvest_new.js` as Step 2/6, so the default flow refreshes the harvested file before importing. start.gg URLs are still manual-paste (no public list-by-organizer API). Tonamel and Liquipedia events live on separate pipelines (`tonamel_import_console.js`, `offline_import.js` + `liquipedia_import_console.js`) and need their own freshness checks.
 
 Lower-priority follow-ups also worth flagging:
 

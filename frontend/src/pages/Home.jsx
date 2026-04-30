@@ -2,6 +2,7 @@ import { useEffect, useState } from 'react';
 import { Link } from 'react-router-dom';
 import { getRecentPlacements, getTournaments, getRecentAchievements } from '../lib/api';
 import { formatDate } from '../lib/utils';
+import AchievementIcon from '../components/AchievementIcon';
 
 // Series display names and colors
 const SERIES_META = {
@@ -198,7 +199,7 @@ export default function Home() {
                     key={`${a.player_id}-${a.achievement_id}-${idx}`}
                     className="flex items-center gap-3 p-2.5 rounded-lg bg-white/5"
                   >
-                    <span className="text-lg">{a.icon}</span>
+                    <AchievementIcon icon={a.icon} regionFromId={a.achievement_id} size="md" />
                     <div className="flex-1 min-w-0">
                       <p className="text-sm text-white truncate">
                         <Link
