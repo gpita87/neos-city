@@ -1,0 +1,589 @@
+#!/usr/bin/env node
+// ═══════════════════════════════════════════════════════════════════════════
+// NEOS CITY — ELO Recalculation Script (v4 — bulk I/O)
+// Run from the neos-city directory:  node recalculate_elo.js
+//
+// Architecture: fetch everything → compute in memory → write back in bulk.
+// Total DB round-trips: ~15 (instead of ~15,000+).
+//
+// 1. Bulk-fetch all tables (players, tournaments, matches, placements).
+// 2. Replay every completed match in strict chronological order (in memory).
+// 3. Apply placement bonuses (in memory).
+// 4. Rebuild all player aggregate stats (in memory).
+// 5. Pass 1 achievements — stat-based (in memory).
+// 6. Pass 2 achievements — match + meta (in memory).
+// 7. Bulk-write everything back (ELO, stats, history, achievements).
+// ═══════════════════════════════════════════════════════════════════════════
+
+require('dotenv').config({ path: require('path').join(__dirname, 'backend', '.env') });
+
+const db = require('./backend/src/db');
+const { calculateNewRatings, placementBonus, STARTING_ELO } = require('./backend/src/services/elo');
+const {
+  checkAchievementsPass1,
+  checkAchievementsPass2Pure,
+} = require('./backend/src/services/achievements');
+
+function fmt(n) { return String(n).padStart(4); }
+
+const ALL_SERIES = ['ffc', 'rtg_na', 'rtg_eu', 'dcm', 'tcc', 'eotr', 'nezumi', 'nezumi_rookies', 'ha'];
+const OFFLINE_TIERS = ['worlds', 'major', 'regional', 'other'];
+const OFFLINE_WEIGHTS = {
+  worlds:   { wins: 100, runner_up: 60, top4: 35, top8: 20 },
+  major:    { wins: 50,  runner_up: 30, top4: 18, top8: 10 },
+  regional: { wins: 25,  runner_up: 15, top4: 9,  top8: 5 },
+  other:    { wins: 10,  runner_up: 6,  top4: 3,  top8: 2 },
+};
+
+(async () => {
+  console.log('♻️   Neos City — ELO Recalculation (v4 — bulk I/O)');
+  console.log('═══════════════════════════════════════════════════════════\n');
+
+  // ── Step 0: Pre-flight column check ────────────────────────────────────
+  process.stdout.write('🔍  Checking required DB columns … ');
+
+  const REQUIRED_PLAYER_COLUMNS = [
+    'total_match_wins', 'total_match_losses', 'tournaments_entered',
+    'tournament_wins', 'runner_up_finishes', 'top4_finishes', 'top8_finishes',
+    'career_points', 'current_win_streak', 'longest_win_streak',
+    'games_played', 'peak_elo', 'elo_rating',
+    'games_taken_from_champions', 'comebacks',
+    ...ALL_SERIES.flatMap(s => [`${s}_entered`, `${s}_top8`, `${s}_top4`, `${s}_runner_up`, `${s}_wins`]),
+    'offline_wins', 'offline_top2', 'offline_score',
+    ...OFFLINE_TIERS.flatMap(t => [
+      `offline_${t}_wins`, `offline_${t}_runner_up`, `offline_${t}_top4`, `offline_${t}_top8`
+    ]),
+  ];
+
+  const { rows: existingCols } = await db.query(`
+    SELECT column_name FROM information_schema.columns
+    WHERE table_schema = 'public' AND table_name = 'players'
+  `);
+  const existingSet = new Set(existingCols.map(r => r.column_name));
+  const missing = REQUIRED_PLAYER_COLUMNS.filter(c => !existingSet.has(c));
+
+  if (missing.length > 0) {
+    console.log('FAILED\n');
+    console.error(`❌  Missing ${missing.length} column(s) on the "players" table:`);
+    console.error(`   ${missing.join(', ')}`);
+    console.error(`\n💡  Run the appropriate migration(s) first. Likely candidates:`);
+    console.error(`   node run_migration.js backend/src/db/migrations/achievement_revamp.sql`);
+    console.error(`   node run_migration.js backend/src/db/migrations/add_offline_tier_stats.sql`);
+    console.error(`   node run_migration.js backend/src/db/migrations/add_tonamel_support.sql`);
+    console.error(`   node run_migration.js backend/src/db/migrations/add_ha_series.sql`);
+    await db.end?.();
+    process.exit(1);
+  }
+  console.log(`OK (${existingSet.size} columns found, all ${REQUIRED_PLAYER_COLUMNS.length} required present)`);
+
+  // ═══════════════════════════════════════════════════════════════════════
+  //  PHASE 1: BULK FETCH — pull all relevant data into memory
+  // ═══════════════════════════════════════════════════════════════════════
+  console.log('\n📥  Fetching all data from DB …');
+  const t0 = Date.now();
+
+  const [
+    { rows: dbPlayers },
+    { rows: dbTournaments },
+    { rows: dbMatches },
+    { rows: dbPlacements },
+  ] = await Promise.all([
+    db.query(`SELECT * FROM players`),
+    db.query(`SELECT id, name, series, participants_count, completed_at, is_offline
+              FROM tournaments ORDER BY completed_at ASC NULLS FIRST, id ASC`),
+    db.query(`SELECT id, tournament_id, player1_id, player2_id, winner_id, round,
+                     player1_score, player2_score, state, played_at
+              FROM matches`),
+    db.query(`SELECT player_id, tournament_id, final_rank, career_points
+              FROM tournament_placements`),
+  ]);
+
+  console.log(`   ${dbPlayers.length} players, ${dbTournaments.length} tournaments, ${dbMatches.length} matches, ${dbPlacements.length} placements`);
+  console.log(`   Fetched in ${((Date.now() - t0) / 1000).toFixed(1)}s`);
+
+  // ── Index everything ──────────────────────────────────────────────────
+  // Matches by tournament (only complete ones with both players + winner)
+  const matchesByTournament = {};
+  for (const m of dbMatches) {
+    if (m.state !== 'complete' || !m.player1_id || !m.player2_id || !m.winner_id) continue;
+    if (!matchesByTournament[m.tournament_id]) matchesByTournament[m.tournament_id] = [];
+    matchesByTournament[m.tournament_id].push(m);
+  }
+  // Sort each tournament's matches by round then id
+  for (const tid of Object.keys(matchesByTournament)) {
+    matchesByTournament[tid].sort((a, b) => {
+      const ra = a.round ?? Infinity, rb = b.round ?? Infinity;
+      return ra - rb || a.id - b.id;
+    });
+  }
+
+  // Placements by tournament
+  const placementsByTournament = {};
+  for (const p of dbPlacements) {
+    if (!placementsByTournament[p.tournament_id]) placementsByTournament[p.tournament_id] = [];
+    placementsByTournament[p.tournament_id].push(p);
+  }
+
+  // Placements by player
+  const placementsByPlayer = {};
+  for (const p of dbPlacements) {
+    if (!placementsByPlayer[p.player_id]) placementsByPlayer[p.player_id] = [];
+    placementsByPlayer[p.player_id].push(p);
+  }
+
+  // Tournament lookup
+  const tournamentById = {};
+  for (const t of dbTournaments) tournamentById[t.id] = t;
+
+  // Player state map (mutable, used for ELO replay + stat rebuild)
+  const playerState = {};
+  for (const p of dbPlayers) {
+    playerState[p.id] = {
+      id: p.id,
+      elo: STARTING_ELO,
+      peak_elo: STARTING_ELO,
+      games_played: 0,
+    };
+  }
+
+  // ═══════════════════════════════════════════════════════════════════════
+  //  PHASE 2: IN-MEMORY COMPUTATION
+  // ═══════════════════════════════════════════════════════════════════════
+
+  // ── Step 1: Replay every tournament (ELO) ─────────────────────────────
+  console.log('\n⚔️   Replaying matches for ELO …');
+  let totalMatches = 0;
+  const allHistoryRows = []; // [player_id, old_elo, new_elo, delta, reason]
+
+  for (let ti = 0; ti < dbTournaments.length; ti++) {
+    const t = dbTournaments[ti];
+    const dateStr = t.completed_at ? new Date(t.completed_at).toISOString().slice(0, 10) : 'no date';
+    const matches = matchesByTournament[t.id] || [];
+
+    if (matches.length === 0) {
+      process.stdout.write(`   [${fmt(ti + 1)}/${fmt(dbTournaments.length)}]  ${dateStr}  ${t.name.slice(0, 40).padEnd(40)} (no matches)\n`);
+      continue;
+    }
+
+    const placements = placementsByTournament[t.id] || [];
+    const totalEntrants = t.participants_count || placements.length || 0;
+
+    for (const m of matches) {
+      // Ensure both players are in playerState (handles edge case of match without player row)
+      if (!playerState[m.player1_id]) playerState[m.player1_id] = { id: m.player1_id, elo: STARTING_ELO, peak_elo: STARTING_ELO, games_played: 0 };
+      if (!playerState[m.player2_id]) playerState[m.player2_id] = { id: m.player2_id, elo: STARTING_ELO, peak_elo: STARTING_ELO, games_played: 0 };
+
+      const pA = playerState[m.player1_id];
+      const pB = playerState[m.player2_id];
+      const result = m.winner_id === m.player1_id ? 1 : 0;
+      const { playerA, playerB } = calculateNewRatings(
+        { elo: pA.elo, games_played: pA.games_played },
+        { elo: pB.elo, games_played: pB.games_played },
+        result
+      );
+
+      allHistoryRows.push(
+        [m.player1_id, pA.elo, playerA.newElo, playerA.delta, `Match in ${t.name}`],
+        [m.player2_id, pB.elo, playerB.newElo, playerB.delta, `Match in ${t.name}`]
+      );
+
+      pA.elo = playerA.newElo; pA.games_played++;
+      pB.elo = playerB.newElo; pB.games_played++;
+      pA.peak_elo = Math.max(pA.peak_elo, pA.elo);
+      pB.peak_elo = Math.max(pB.peak_elo, pB.elo);
+    }
+
+    // Placement bonuses
+    for (const p of placements) {
+      if (!p.final_rank) continue;
+      const bonus = placementBonus(p.final_rank, totalEntrants);
+      if (bonus <= 0) continue;
+      if (!playerState[p.player_id]) playerState[p.player_id] = { id: p.player_id, elo: STARTING_ELO, peak_elo: STARTING_ELO, games_played: 0 };
+      const state = playerState[p.player_id];
+      allHistoryRows.push(
+        [p.player_id, state.elo, state.elo + bonus, bonus, `Top ${p.final_rank} bonus in ${t.name}`]
+      );
+      state.elo += bonus;
+      state.peak_elo = Math.max(state.peak_elo, state.elo);
+    }
+
+    totalMatches += matches.length;
+    process.stdout.write(`   [${fmt(ti + 1)}/${fmt(dbTournaments.length)}]  ${dateStr}  ${t.name.slice(0, 40).padEnd(40)} ${fmt(matches.length)} matches\n`);
+  }
+  console.log(`   Total: ${totalMatches} matches replayed, ${allHistoryRows.length} history entries`);
+
+  // ── Step 2: Rebuild aggregate player stats (in memory) ────────────────
+  console.log('\n📊  Rebuilding player stats …');
+
+  // Index all complete matches by player for stat computation
+  const completeMatchesByPlayer = {};
+  for (const m of dbMatches) {
+    if (m.state !== 'complete' || !m.player1_id || !m.player2_id || !m.winner_id) continue;
+    if (!completeMatchesByPlayer[m.player1_id]) completeMatchesByPlayer[m.player1_id] = [];
+    if (!completeMatchesByPlayer[m.player2_id]) completeMatchesByPlayer[m.player2_id] = [];
+    completeMatchesByPlayer[m.player1_id].push(m);
+    completeMatchesByPlayer[m.player2_id].push(m);
+  }
+
+  // Build champion lookup: tournament_id → Set<player_id> who won (rank=1)
+  const champsByTournament = {};
+  for (const p of dbPlacements) {
+    if (p.final_rank === 1) {
+      if (!champsByTournament[p.tournament_id]) champsByTournament[p.tournament_id] = new Set();
+      champsByTournament[p.tournament_id].add(p.player_id);
+    }
+  }
+
+  // Compute stats per player entirely in memory
+  const playerUpdates = {}; // playerId → { all stat fields }
+
+  for (const p of dbPlayers) {
+    const pid = p.id;
+    const myMatches = completeMatchesByPlayer[pid] || [];
+    const myPlacements = placementsByPlayer[pid] || [];
+
+    // Global match stats
+    let wins = 0, losses = 0;
+    const tournamentsInMatches = new Set();
+    for (const m of myMatches) {
+      tournamentsInMatches.add(m.tournament_id);
+      if (m.winner_id === pid) wins++;
+      else losses++;
+    }
+
+    // Placement stats
+    let tWins = 0, runnerUp = 0, top4 = 0, top8 = 0, careerPts = 0;
+    // Per-series placement stats
+    const seriesStats = {};
+    for (const s of ALL_SERIES) seriesStats[s] = { entered: 0, top8: 0, top4: 0, runner_up: 0, wins: 0 };
+    // Offline per-tier stats
+    const offlineStats = {};
+    for (const t of OFFLINE_TIERS) offlineStats[t] = { wins: 0, runner_up: 0, top4: 0, top8: 0 };
+    let offlineWins = 0, offlineTop2 = 0;
+
+    for (const pl of myPlacements) {
+      const rank = pl.final_rank;
+      careerPts += parseInt(pl.career_points) || 0;
+      if (rank === 1) tWins++;
+      if (rank === 2) runnerUp++;
+      if (rank <= 4) top4++;
+      if (rank <= 8) top8++;
+
+      // Series stats
+      const tourney = tournamentById[pl.tournament_id];
+      if (tourney && tourney.series) {
+        const ss = seriesStats[tourney.series];
+        if (ss) {
+          // Count distinct tournaments entered (using a set would be ideal, but
+          // since each placement row is one per player-tournament, this is fine)
+          ss.entered++;
+          if (rank <= 8) ss.top8++;
+          if (rank <= 4) ss.top4++;
+          if (rank === 2) ss.runner_up++;
+          if (rank === 1) ss.wins++;
+        }
+
+        // Offline tier stats
+        if (tourney.is_offline) {
+          if (rank === 1) offlineWins++;
+          if (rank <= 2) offlineTop2++;
+          const ot = offlineStats[tourney.series];
+          if (ot) {
+            if (rank === 1) ot.wins++;
+            if (rank === 2) ot.runner_up++;
+            if (rank <= 4) ot.top4++;
+            if (rank <= 8) ot.top8++;
+          }
+        }
+      }
+    }
+
+    // Win streak (most recent matches first)
+    const sortedMatches = [...myMatches].sort((a, b) => {
+      const da = a.played_at || '', db2 = b.played_at || '';
+      return da < db2 ? 1 : da > db2 ? -1 : b.id - a.id;
+    });
+    let currentStreak = 0, longestStreak = 0, streak = 0;
+    let foundFirst = false;
+    for (const m of sortedMatches) {
+      if (m.winner_id === pid) {
+        streak++;
+        if (streak > longestStreak) longestStreak = streak;
+      } else {
+        if (!foundFirst) { currentStreak = streak; foundFirst = true; }
+        streak = 0;
+      }
+    }
+    if (!foundFirst) currentStreak = streak;
+
+    // Games taken from champions
+    let champGames = 0;
+    for (const m of myMatches) {
+      if (m.winner_id === pid) continue; // I lost this match
+      const champs = champsByTournament[m.tournament_id];
+      if (!champs || !champs.has(m.winner_id)) continue;
+      const myScore = m.player1_id === pid ? m.player1_score : m.player2_score;
+      if (myScore >= 1) champGames++;
+    }
+
+    // Comebacks (won match but opponent had at least 1 game)
+    let comebacks = 0;
+    for (const m of myMatches) {
+      if (m.winner_id !== pid) continue;
+      if (m.player1_score == null || m.player2_score == null) continue;
+      const myScore = m.player1_id === pid ? parseInt(m.player1_score) : parseInt(m.player2_score);
+      const oppScore = m.player1_id === pid ? parseInt(m.player2_score) : parseInt(m.player1_score);
+      if (myScore > oppScore && oppScore > 0) comebacks++;
+    }
+
+    // Compute offline score
+    let offlineScore = 0;
+    for (const [tier, w] of Object.entries(OFFLINE_WEIGHTS)) {
+      const os = offlineStats[tier];
+      const pureTop4 = Math.max(0, os.top4 - os.wins - os.runner_up);
+      const pureTop8 = Math.max(0, os.top8 - os.top4);
+      offlineScore += os.wins * w.wins + os.runner_up * w.runner_up + pureTop4 * w.top4 + pureTop8 * w.top8;
+    }
+
+    const ps = playerState[pid] || { elo: STARTING_ELO, peak_elo: STARTING_ELO, games_played: 0 };
+
+    playerUpdates[pid] = {
+      elo_rating: ps.elo,
+      peak_elo: ps.peak_elo,
+      games_played: ps.games_played,
+      total_match_wins: wins,
+      total_match_losses: losses,
+      tournaments_entered: tournamentsInMatches.size,
+      tournament_wins: tWins,
+      runner_up_finishes: runnerUp,
+      top4_finishes: top4,
+      top8_finishes: top8,
+      career_points: careerPts,
+      current_win_streak: currentStreak,
+      longest_win_streak: longestStreak,
+      games_taken_from_champions: champGames,
+      comebacks,
+      // Per-series
+      ...Object.fromEntries(ALL_SERIES.flatMap(s => [
+        [`${s}_entered`, seriesStats[s].entered],
+        [`${s}_top8`, seriesStats[s].top8],
+        [`${s}_top4`, seriesStats[s].top4],
+        [`${s}_runner_up`, seriesStats[s].runner_up],
+        [`${s}_wins`, seriesStats[s].wins],
+      ])),
+      // Offline
+      offline_wins: offlineWins,
+      offline_top2: offlineTop2,
+      offline_score: offlineScore,
+      ...Object.fromEntries(OFFLINE_TIERS.flatMap(t => [
+        [`offline_${t}_wins`, offlineStats[t].wins],
+        [`offline_${t}_runner_up`, offlineStats[t].runner_up],
+        [`offline_${t}_top4`, offlineStats[t].top4],
+        [`offline_${t}_top8`, offlineStats[t].top8],
+      ])),
+    };
+  }
+  console.log(`   Stats computed for ${Object.keys(playerUpdates).length} players`);
+
+  // ── Step 3: Pass 1 achievements (stat-based, in memory) ───────────────
+  console.log('\n🏅  Pass 1: Awarding stat-based achievements …');
+
+  // Build "fake" player stat rows that checkAchievementsPass1 expects
+  // (it reads column names like tournament_wins, ffc_entered, etc.)
+  const pass1Rows = [];
+  for (const p of dbPlayers) {
+    const updates = playerUpdates[p.id];
+    if (!updates) continue;
+    // Merge original player row with computed updates (updates override)
+    const fakeStats = { ...p, ...updates };
+    const newOnes = checkAchievementsPass1(fakeStats);
+    for (const achId of newOnes) {
+      pass1Rows.push({ player_id: p.id, achievement_id: achId });
+    }
+  }
+  console.log(`   ${pass1Rows.length} Pass 1 achievements computed`);
+
+  // ── Step 4: Pass 2 achievements (match + meta, in memory) ─────────────
+  console.log('🎖️   Pass 2: Awarding match-based & meta achievements …');
+
+  // Index all matches with winner by player (for Pass 2)
+  const wonMatchesByPlayer = {};
+  for (const m of dbMatches) {
+    if (!m.winner_id || !m.player1_id || !m.player2_id) continue;
+    if (!wonMatchesByPlayer[m.player1_id]) wonMatchesByPlayer[m.player1_id] = [];
+    if (!wonMatchesByPlayer[m.player2_id]) wonMatchesByPlayer[m.player2_id] = [];
+    wonMatchesByPlayer[m.player1_id].push(m);
+    wonMatchesByPlayer[m.player2_id].push(m);
+  }
+
+  // Build global achievement map from Pass 1
+  const globalOppAchMap = {};
+  for (const r of pass1Rows) {
+    if (!globalOppAchMap[r.player_id]) globalOppAchMap[r.player_id] = new Set();
+    globalOppAchMap[r.player_id].add(r.achievement_id);
+  }
+
+  const pass2Rows = [];
+  const contributorRows = [];
+
+  for (const p of dbPlayers) {
+    const playerMatches = wonMatchesByPlayer[p.id] || [];
+    const alreadyUnlocked = globalOppAchMap[p.id] ? [...globalOppAchMap[p.id]] : [];
+
+    const newOnes = checkAchievementsPass2Pure(p.id, playerMatches, globalOppAchMap, alreadyUnlocked);
+    for (const ach of newOnes) {
+      pass2Rows.push({ player_id: p.id, achievement_id: ach.id });
+      if (ach.contributors && ach.contributors.length > 0) {
+        for (const c of ach.contributors) {
+          contributorRows.push({
+            player_id: p.id,
+            achievement_id: ach.id,
+            opponent_id: c.opponent_id,
+            match_id: c.match_id || null,
+          });
+        }
+      }
+    }
+  }
+  console.log(`   ${pass2Rows.length} Pass 2 achievements + ${contributorRows.length} contributor records computed`);
+
+  // ═══════════════════════════════════════════════════════════════════════
+  //  PHASE 3: BULK WRITE — push everything back to DB
+  // ═══════════════════════════════════════════════════════════════════════
+  console.log('\n📤  Writing results back to DB …');
+  const t1 = Date.now();
+
+  // ── Clear old computed data ───────────────────────────────────────────
+  await Promise.all([
+    db.query(`DELETE FROM elo_history`),
+    db.query(`DELETE FROM achievement_defeated_opponents`),
+    db.query(`DELETE FROM player_achievements`),
+  ]);
+  console.log('   Cleared elo_history, player_achievements, achievement_defeated_opponents');
+
+  // ── Write ELO history (chunked to avoid param limit) ──────────────────
+  const CHUNK = 5000; // ~5 params per row, Postgres limit is 65535 params
+  let histWritten = 0;
+  for (let i = 0; i < allHistoryRows.length; i += CHUNK) {
+    const chunk = allHistoryRows.slice(i, i + CHUNK);
+    const pids = chunk.map(r => r[0]);
+    const olds = chunk.map(r => r[1]);
+    const news = chunk.map(r => r[2]);
+    const deltas = chunk.map(r => r[3]);
+    const reasons = chunk.map(r => r[4]);
+    await db.query(
+      `INSERT INTO elo_history (player_id, old_elo, new_elo, delta, reason)
+       SELECT unnest($1::int[]), unnest($2::int[]), unnest($3::int[]), unnest($4::int[]), unnest($5::text[])`,
+      [pids, olds, news, deltas, reasons]
+    );
+    histWritten += chunk.length;
+  }
+  console.log(`   Wrote ${histWritten} elo_history rows (${Math.ceil(allHistoryRows.length / CHUNK)} chunks)`);
+
+  // ── Write player stats + ELO (one UPDATE per player, but pipelined) ───
+  // We build all the SET fields dynamically and run them in a single transaction
+  const statFields = [
+    'elo_rating', 'peak_elo', 'games_played',
+    'total_match_wins', 'total_match_losses', 'tournaments_entered',
+    'tournament_wins', 'runner_up_finishes', 'top4_finishes', 'top8_finishes',
+    'career_points', 'current_win_streak', 'longest_win_streak',
+    'games_taken_from_champions', 'comebacks',
+    ...ALL_SERIES.flatMap(s => [`${s}_entered`, `${s}_top8`, `${s}_top4`, `${s}_runner_up`, `${s}_wins`]),
+    'offline_wins', 'offline_top2', 'offline_score',
+    ...OFFLINE_TIERS.flatMap(t => [`offline_${t}_wins`, `offline_${t}_runner_up`, `offline_${t}_top4`, `offline_${t}_top8`]),
+  ];
+
+  // Use a temp table approach for bulk UPDATE
+  // 1. Create temp table with player_id + all stat columns
+  // 2. INSERT all computed values into temp table
+  // 3. UPDATE players FROM temp table
+
+  const colDefs = statFields.map(f => `${f} INTEGER`).join(', ');
+  await db.query(`CREATE TEMP TABLE _player_bulk (player_id INTEGER, ${colDefs})`);
+
+  // Insert into temp table in chunks
+  const playerIds = Object.keys(playerUpdates).map(Number);
+  for (let i = 0; i < playerIds.length; i += CHUNK) {
+    const chunk = playerIds.slice(i, i + CHUNK);
+    const pidArr = chunk;
+    const colArrays = statFields.map(f => chunk.map(pid => playerUpdates[pid][f] ?? 0));
+
+    // Build unnest clause
+    const unnestParts = [`unnest($1::int[])`];
+    const params = [pidArr];
+    for (let fi = 0; fi < statFields.length; fi++) {
+      unnestParts.push(`unnest($${fi + 2}::int[])`);
+      params.push(colArrays[fi]);
+    }
+
+    await db.query(
+      `INSERT INTO _player_bulk (player_id, ${statFields.join(', ')})
+       SELECT ${unnestParts.join(', ')}`,
+      params
+    );
+  }
+
+  // Bulk UPDATE from temp table
+  const setClauses = statFields.map(f => `${f} = b.${f}`).join(', ');
+  await db.query(`
+    UPDATE players p SET ${setClauses}, updated_at = NOW()
+    FROM _player_bulk b WHERE p.id = b.player_id
+  `);
+  await db.query(`DROP TABLE _player_bulk`);
+  console.log(`   Updated ${playerIds.length} player rows (temp table bulk UPDATE)`);
+
+  // ── Write achievements ────────────────────────────────────────────────
+  const allAchRows = [...pass1Rows, ...pass2Rows];
+  if (allAchRows.length > 0) {
+    for (let i = 0; i < allAchRows.length; i += CHUNK) {
+      const chunk = allAchRows.slice(i, i + CHUNK);
+      const pids = chunk.map(r => r.player_id);
+      const aids = chunk.map(r => r.achievement_id);
+      await db.query(
+        `INSERT INTO player_achievements (player_id, achievement_id)
+         SELECT unnest($1::int[]), unnest($2::text[])
+         ON CONFLICT DO NOTHING`,
+        [pids, aids]
+      );
+    }
+  }
+  console.log(`   Wrote ${allAchRows.length} achievements (Pass 1: ${pass1Rows.length}, Pass 2: ${pass2Rows.length})`);
+
+  // ── Write contributor/evidence rows ───────────────────────────────────
+  if (contributorRows.length > 0) {
+    for (let i = 0; i < contributorRows.length; i += CHUNK) {
+      const chunk = contributorRows.slice(i, i + CHUNK);
+      const pids = chunk.map(r => r.player_id);
+      const aids = chunk.map(r => r.achievement_id);
+      const oids = chunk.map(r => r.opponent_id);
+      const mids = chunk.map(r => r.match_id);
+      await db.query(
+        `INSERT INTO achievement_defeated_opponents (player_id, achievement_id, opponent_id, match_id)
+         SELECT unnest($1::int[]), unnest($2::text[]), unnest($3::int[]), unnest($4::int[])
+         ON CONFLICT DO NOTHING`,
+        [pids, aids, oids, mids]
+      );
+    }
+  }
+  console.log(`   Wrote ${contributorRows.length} contributor records`);
+
+  const elapsed = ((Date.now() - t1) / 1000).toFixed(1);
+  console.log(`   All writes completed in ${elapsed}s`);
+
+  // ── Done ─────────────────────────────────────────────────────────────
+  console.log('\n═══════════════════════════════════════════════════════════');
+  console.log('🏁  DONE');
+  console.log(`    Tournaments replayed : ${dbTournaments.length}`);
+  console.log(`    Matches processed    : ${totalMatches}`);
+  console.log(`    Players updated      : ${playerIds.length}`);
+  console.log(`    ELO history rows     : ${allHistoryRows.length}`);
+  console.log(`    Achievements awarded : ${pass1Rows.length} (Pass 1) + ${pass2Rows.length} (Pass 2)`);
+  console.log('\n✨  ELO and achievements are now up to date!');
+
+  await db.end?.();
+  process.exit(0);
+})().catch(err => {
+  console.error('\n❌  Fatal error:', err.message);
+  console.error(err.stack);
+  process.exit(1);
+});

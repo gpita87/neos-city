@@ -1,0 +1,104 @@
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+/* ── Neos City Base ──────────────────────────────────────── */
+body {
+  background-color: #050a18;
+  color: #e0f0ff;
+  font-family: 'Inter', sans-serif;
+}
+
+.font-display { font-family: 'Orbitron', sans-serif; }
+
+/* ── Neon Glow Utilities ─────────────────────────────────── */
+.glow-border {
+  box-shadow: 0 0 0 1px rgba(0,229,255,0.4), 0 0 15px rgba(0,229,255,0.15);
+}
+
+.glow-border-purple {
+  box-shadow: 0 0 0 1px rgba(168,85,247,0.4), 0 0 15px rgba(168,85,247,0.15);
+}
+
+/* Neon card — hover glow effect */
+.neon-card {
+  background: #0c1425;
+  border: 1px solid #1a2744;
+  border-radius: 0.75rem;
+  transition: border-color 0.3s, box-shadow 0.3s;
+}
+.neon-card:hover {
+  border-color: rgba(0,229,255,0.3);
+  box-shadow: 0 0 20px rgba(0,229,255,0.08), inset 0 0 20px rgba(0,229,255,0.03);
+}
+
+/* ── Animated Background Grid ────────────────────────────── */
+.neos-bg {
+  position: relative;
+}
+.neos-bg::before {
+  content: '';
+  position: fixed;
+  inset: 0;
+  z-index: -1;
+  background:
+    linear-gradient(180deg, #050a18 0%, #080e22 50%, #050a18 100%),
+    radial-gradient(ellipse at 20% 50%, rgba(0,229,255,0.04) 0%, transparent 50%),
+    radial-gradient(ellipse at 80% 50%, rgba(168,85,247,0.04) 0%, transparent 50%);
+  background-size: 100% 100%;
+}
+.neos-bg::after {
+  content: '';
+  position: fixed;
+  inset: 0;
+  z-index: -1;
+  background-image:
+    linear-gradient(rgba(0,229,255,0.03) 1px, transparent 1px),
+    linear-gradient(90deg, rgba(0,229,255,0.03) 1px, transparent 1px);
+  background-size: 60px 60px;
+  mask-image: radial-gradient(ellipse at center, rgba(0,0,0,0.4) 0%, transparent 70%);
+  -webkit-mask-image: radial-gradient(ellipse at center, rgba(0,0,0,0.4) 0%, transparent 70%);
+}
+
+/* ── Neon text glow ──────────────────────────────────────── */
+.neon-text {
+  text-shadow: 0 0 10px rgba(0,229,255,0.5), 0 0 20px rgba(0,229,255,0.3);
+}
+.neon-text-purple {
+  text-shadow: 0 0 10px rgba(168,85,247,0.5), 0 0 20px rgba(168,85,247,0.3);
+}
+
+/* ── Scrollbar Styling ───────────────────────────────────── */
+::-webkit-scrollbar {
+  width: 8px;
+  height: 8px;
+}
+::-webkit-scrollbar-track {
+  background: #050a18;
+}
+::-webkit-scrollbar-thumb {
+  background: #1a2744;
+  border-radius: 4px;
+}
+::-webkit-scrollbar-thumb:hover {
+  background: #243556;
+}
+
+/* ── ELO Rank Badge Colors (neon version) ────────────────── */
+.rank-master   { color: #c084fc; text-shadow: 0 0 8px rgba(192,132,252,0.4); }
+.rank-gold     { color: #fbbf24; text-shadow: 0 0 8px rgba(251,191,36,0.3); }
+.rank-silver   { color: #94a3b8; }
+.rank-bronze   { color: #d97706; }
+.rank-unranked { color: #6b7280; }
+
+/* ── Neon Divider ────────────────────────────────────────── */
+.neon-divider {
+  height: 1px;
+  background: linear-gradient(90deg, transparent, rgba(0,229,255,0.3), transparent);
+}
+
+/* ── Selection color ─────────────────────────────────────── */
+::selection {
+  background: rgba(0,229,255,0.25);
+  color: #e0f0ff;
+}
