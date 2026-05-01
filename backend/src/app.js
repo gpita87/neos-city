@@ -17,6 +17,7 @@ app.use(cors({
     process.env.FRONTEND_URL || 'http://localhost:5173',
     'https://liquipedia.net',   // needed for liquipedia_import_console.js
     'https://tonamel.com',      // needed for tonamel_import_console.js
+    'https://challonge.com',    // needed for harvest_console.js
   ]
 }));
 app.use(express.json());

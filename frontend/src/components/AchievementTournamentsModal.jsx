@@ -46,6 +46,84 @@ function SeriesBadge({ series }) {
   );
 }
 
+// How many unique opponents an achievement requires, derived from its ID.
+// Mirrors the META_TYPES.required field on the backend so we don't need an
+// extra round-trip to display "X of N defeated".
+const META_REQUIRED = {
+  eight_badges:   { required: 8, kind: 'Gym Leaders', verb: 'Defeated' },
+  elite_trainer:  { required: 4, kind: 'Elite Four',  verb: 'Defeated' },
+  rival_battle:   { required: 1, kind: 'Rival',       verb: 'Took a game from' },
+  smell_ya_later: { required: 1, kind: 'Rival',       verb: 'Defeated' },
+  foreshadowing:  { required: 1, kind: 'Champion',    verb: 'Took a game from' },
+  dark_horse:     { required: 1, kind: 'Champion',    verb: 'Defeated' },
+};
+
+function metaTypeFromId(id) {
+  if (!id) return null;
+  for (const key of Object.keys(META_REQUIRED)) {
+    if (id.startsWith(`${key}_`)) return key;
+  }
+  return null;
+}
+
+// Region tier baked into the achievement ID — last segment.
+function regionFromId(id) {
+  if (!id) return null;
+  const parts = String(id).split('_');
+  return parts[parts.length - 1];
+}
+
+const REGION_LABELS_LOCAL = {
+  kanto: 'Kanto', johto: 'Johto', hoenn: 'Hoenn', sinnoh: 'Sinnoh',
+  unova: 'Unova', kalos: 'Kalos', alola: 'Alola', galar: 'Galar', paldea: 'Paldea',
+};
+
+/**
+ * Header shown above the opponent list for meta achievements.
+ * Spells out the rule, the count, and progress toward (or past) unlock.
+ */
+function MetaExplainer({ achievement, count }) {
+  const metaKey = metaTypeFromId(achievement.id);
+  const meta = metaKey ? META_REQUIRED[metaKey] : null;
+  const region = regionFromId(achievement.id);
+  const regionName = REGION_LABELS_LOCAL[region] || region;
+
+  // Region tier of opponents that count: kanto means "any", everything else is "X+"
+  const tierPhrase = region === 'kanto'
+    ? `any ${meta?.kind || 'qualifying opponents'}`
+    : `${meta?.kind || 'qualifying opponents'} at ${regionName}+`;
+
+  const required = meta?.required ?? 1;
+  const unlocked = count >= required;
+
+  return (
+    <div className="bg-cyan-900/10 border border-cyan-800/30 rounded-lg p-3 mb-4">
+      <p className="text-xs text-slate-300 leading-relaxed">
+        <span className="text-cyan-300 font-medium">How this is earned:</span>{' '}
+        {meta?.verb || 'Faced'}{' '}
+        {required === 1 ? 'a ' : `${required} unique `}
+        {tierPhrase}{required === 1 ? '' : ''}.
+      </p>
+      <div className="mt-2 flex items-center gap-2">
+        <span className="text-[11px] text-slate-400 font-display tracking-wider">PROGRESS</span>
+        <span className={`text-[11px] font-display tracking-wider ${unlocked ? 'text-cyan-300' : 'text-slate-400'}`}>
+          {Math.min(count, required)} / {required} {unlocked && count > required && (
+            <span className="text-slate-500 normal-case tracking-normal">
+              ({count} on file)
+            </span>
+          )}
+        </span>
+        <div className="flex-1 h-1.5 bg-slate-800 rounded-full overflow-hidden">
+          <div
+            className={`h-full rounded-full transition-all ${unlocked ? 'bg-cyan-400' : 'bg-cyan-500/60'}`}
+            style={{ width: `${Math.min(100, (count / required) * 100)}%` }}
+          />
+        </div>
+      </div>
+    </div>
+  );
+}
+
 /**
  * Modal listing the tournaments that contributed to an achievement.
  *
@@ -82,15 +160,40 @@ export default function AchievementTournamentsModal({ achievement, playerId = nu
   const tournaments = data?.tournaments || [];
   const mode = data?.mode;
 
-  // For aggregate mode we want to group tournaments — show one row per
-  // (player + tournament) pair as returned by the backend.
-  // For player mode we want to dedupe consecutive duplicates from the
-  // achievement_defeated_opponents join (multiple opponents in same event).
+  // For meta achievements, the natural unit is the unique opponent — you
+  // earn 8 Badges by defeating eight different Gym Leaders, and the modal
+  // should reflect that. We pivot from tournament-per-row to opponent-per-row
+  // and list the tournaments where each qualifying interaction took place.
+  const isMeta = achievement.category === 'meta';
+
   let displayRows = tournaments;
-  if (mode === 'player') {
-    // For match/meta achievements we may have multiple rows per tournament
-    // (one per qualifying opponent). Group by tournament id and aggregate
-    // opponents.
+  let opponentGroups = null;
+
+  if (mode === 'player' && isMeta) {
+    // Build opponent → { id, name, username, tournaments[] } map
+    const byOpp = new Map();
+    for (const t of tournaments) {
+      const oid = t.opponent_id;
+      if (!oid) continue; // meta rows always carry an opponent
+      if (!byOpp.has(oid)) {
+        byOpp.set(oid, {
+          id: oid,
+          name: t.opponent_name,
+          username: t.opponent_username,
+          tournaments: [],
+        });
+      }
+      const grp = byOpp.get(oid);
+      // Avoid double-listing the same tournament for one opponent
+      if (t.id != null && !grp.tournaments.find(x => x.id === t.id && x.match_id === t.match_id)) {
+        grp.tournaments.push(t);
+      } else if (t.id == null) {
+        grp.tournaments.push(t);
+      }
+    }
+    opponentGroups = [...byOpp.values()];
+  } else if (mode === 'player') {
+    // Match-based + placement: group tournament rows, aggregate opponents inline
     const byId = new Map();
     for (const t of tournaments) {
       const key = t.id || `null_${t.match_id || Math.random()}`;
@@ -149,13 +252,94 @@ export default function AchievementTournamentsModal({ achievement, playerId = nu
           {!data && !error && (
             <p className="text-slate-500 text-sm">Loading...</p>
           )}
-          {data && displayRows.length === 0 && (
+
+          {/* ── Meta-achievement view (player mode): grouped by unique opponent ── */}
+          {data && mode === 'player' && isMeta && opponentGroups && (
+            <>
+              <MetaExplainer achievement={achievement} count={opponentGroups.length} />
+              {opponentGroups.length === 0 ? (
+                <p className="text-slate-500 text-sm">
+                  No qualifying opponents on file.
+                  This achievement may have been unlocked before opponent tracking was added.
+                </p>
+              ) : (
+                <ul className="space-y-2">
+                  {opponentGroups.map((opp, oidx) => (
+                    <li
+                      key={`opp_${opp.id ?? oidx}`}
+                      className="bg-white/5 border border-[#1a2744] rounded-lg p-3"
+                    >
+                      <div className="flex items-center gap-2 mb-1.5">
+                        <span className="shrink-0 w-7 h-7 rounded-full bg-cyan-500/15 border border-cyan-500/30 text-cyan-300 text-xs font-display flex items-center justify-center">
+                          {oidx + 1}
+                        </span>
+                        {opp.id ? (
+                          <Link
+                            to={`/players/${opp.id}`}
+                            onClick={onClose}
+                            className="text-sm font-medium text-white hover:text-cyan-400 truncate"
+                          >
+                            {opp.name || opp.username || `Player #${opp.id}`}
+                          </Link>
+                        ) : (
+                          <span className="text-sm text-slate-500 italic">Opponent unknown</span>
+                        )}
+                      </div>
+                      {opp.tournaments.length === 0 ? (
+                        <p className="text-[11px] text-slate-500 ml-9 italic">Tournament context unavailable.</p>
+                      ) : (
+                        <ul className="space-y-1 ml-9">
+                          {opp.tournaments.map((t, tidx) => (
+                            <li
+                              key={`opp_${opp.id}_t_${t.id ?? tidx}_${t.match_id ?? tidx}`}
+                              className="flex items-center gap-2 text-[11px] text-slate-400 flex-wrap"
+                            >
+                              <span className="text-slate-600">↳</span>
+                              {t.id ? (
+                                <Link
+                                  to={`/tournaments/${t.id}`}
+                                  onClick={onClose}
+                                  className="text-slate-300 hover:text-cyan-400 truncate"
+                                >
+                                  {t.name}
+                                </Link>
+                              ) : (
+                                <span className="text-slate-500 italic">Tournament unknown</span>
+                              )}
+                              {t.series && <SeriesBadge series={t.series} />}
+                              {t.completed_at && (
+                                <span className="text-slate-600">{formatDate(t.completed_at)}</span>
+                              )}
+                              {t.bracket_url && (
+                                <a
+                                  href={t.bracket_url}
+                                  target="_blank"
+                                  rel="noopener noreferrer"
+                                  className="text-cyan-400 hover:text-cyan-300 hover:underline"
+                                  title={`Open bracket on ${t.bracket_host || 'the original site'}`}
+                                >
+                                  🔗 {t.bracket_host || 'Bracket'}
+                                </a>
+                              )}
+                            </li>
+                          ))}
+                        </ul>
+                      )}
+                    </li>
+                  ))}
+                </ul>
+              )}
+            </>
+          )}
+
+          {/* ── Standard view (placement, match-based, aggregate) ── */}
+          {data && !(mode === 'player' && isMeta) && displayRows.length === 0 && (
             <p className="text-slate-500 text-sm">
               No contributing tournaments on file.
               {mode === 'player' && ' This achievement may have been unlocked before tournament tracking was added.'}
             </p>
           )}
-          {data && displayRows.length > 0 && (
+          {data && !(mode === 'player' && isMeta) && displayRows.length > 0 && (
             <ul className="space-y-2">
               {displayRows.map((t, idx) => (
                 <li
@@ -242,7 +426,12 @@ export default function AchievementTournamentsModal({ achievement, playerId = nu
         {/* Footer */}
         <div className="px-5 py-3 border-t border-[#1a2744] flex items-center justify-between text-[11px] text-slate-500">
           <span>
-            {data && displayRows.length > 0 && (
+            {data && mode === 'player' && isMeta && opponentGroups && opponentGroups.length > 0 && (
+              <>
+                {opponentGroups.length} {opponentGroups.length === 1 ? 'opponent' : 'unique opponents'}
+              </>
+            )}
+            {data && !(mode === 'player' && isMeta) && displayRows.length > 0 && (
               <>
                 {displayRows.length} {displayRows.length === 1 ? 'tournament' : 'tournaments'}
                 {mode === 'aggregate' && ' • across all holders'}

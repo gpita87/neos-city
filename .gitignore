@@ -65,7 +65,9 @@ Desktop.ini
 # (see AGENT_CONTEXT.md "tournaments.js was truncated mid-edit" note)
 # ========================================================================
 *.before_repair
+*.before_repair*
 *.before_iframe
+*.before_iframe*
 *.bak
 *.orig
 

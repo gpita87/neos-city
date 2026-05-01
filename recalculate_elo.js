@@ -530,9 +530,11 @@ const OFFLINE_WEIGHTS = {
       return dates[1] || dates[0] || null;
     }
 
-    // Match-based: rival_battle / smell_ya_later / foreshadowing / dark_horse
-    const matchPrefixes = ['rival_battle_', 'smell_ya_later_', 'foreshadowing_', 'dark_horse_'];
-    if (matchPrefixes.some(pre => achievementId.startsWith(pre))) {
+    // (Reserved for future count-scaled match achievements — currently empty.
+    //  When something new lives here, the date logic is "Nth contributor's
+    //  tournament date".)
+    const matchPrefixes = [];
+    if (matchPrefixes.length && matchPrefixes.some(pre => achievementId.startsWith(pre))) {
       if (!threshold) return lastTourneyDateByPlayer[playerId] || null;
       const dates = (contributors || [])
         .map(c => {
@@ -546,18 +548,43 @@ const OFFLINE_WEIGHTS = {
       return dates[threshold - 1] || dates[dates.length - 1] || lastTourneyDateByPlayer[playerId] || null;
     }
 
-    // Meta: eight_badges / elite_trainer — date of the Nth unique qualifying defeat
-    const metaPrefixes = ['eight_badges_', 'elite_trainer_'];
+    // Meta (opponent-tier-scaled) — every Pass-2 achievement now lives here:
+    //   • eight_badges / elite_trainer            — N=8 / 4 unique opponents defeated
+    //   • rival_battle / smell_ya_later           — N=1 qualifying Rival
+    //   • foreshadowing / dark_horse              — N=1 qualifying Champion
+    //
+    // Each contributor carries match_id (preferred — gives the precise
+    // tournament date). The opponent_id firstDefeats fallback covers
+    // match-mode metas (8 Badges, Elite Trainer, Smell Ya Later, Dark Horse).
+    // Game-mode metas (Rival Battle, Foreshadowing) can be earned in matches
+    // the player LOST, so the match_id path is the only reliable source.
+    const metaPrefixes = [
+      'eight_badges_', 'elite_trainer_',
+      'rival_battle_', 'smell_ya_later_',
+      'foreshadowing_', 'dark_horse_',
+    ];
     if (metaPrefixes.some(pre => achievementId.startsWith(pre))) {
       if (!threshold) return lastTourneyDateByPlayer[playerId] || null;
       const firstDefeats = firstDefeatByPlayer[playerId] || {};
       const dates = (contributors || [])
-        .map(c => firstDefeats[c.opponent_id])
+        .map(c => {
+          if (c.match_id) {
+            const m = matchById[c.match_id];
+            if (m) {
+              const t = tournamentById[m.tournament_id];
+              if (t && t.completed_at) return t.completed_at;
+            }
+          }
+          return firstDefeats[c.opponent_id] || null;
+        })
         .filter(Boolean)
         .sort();
-      // Required count is fixed per meta type (8 or 4), but we want the date the
-      // player FIRST hit that count — i.e. the Nth date.
-      const required = achievementId.startsWith('eight_badges_') ? 8 : 4;
+
+      let required = 1;
+      if      (achievementId.startsWith('eight_badges_'))    required = 8;
+      else if (achievementId.startsWith('elite_trainer_'))   required = 4;
+      // foreshadowing_ / dark_horse_ stay at 1
+
       return dates[required - 1] || dates[dates.length - 1] || lastTourneyDateByPlayer[playerId] || null;
     }
 
@@ -611,12 +638,21 @@ const OFFLINE_WEIGHTS = {
   const t1 = Date.now();
 
   // ── Clear old computed data ───────────────────────────────────────────
-  await Promise.all([
-    db.query(`DELETE FROM elo_history`),
-    db.query(`DELETE FROM achievement_defeated_opponents`),
-    db.query(`DELETE FROM player_achievements`),
-  ]);
-  console.log('   Cleared elo_history, player_achievements, achievement_defeated_opponents');
+  // Only elo_history is wiped here — ELO is fully recomputed from scratch
+  // every run, so leftover rows would double-count.
+  //
+  // player_achievements and achievement_defeated_opponents are NOT wiped:
+  // the INSERTs below use ON CONFLICT DO NOTHING, so existing rows keep
+  // their original first_seen_at (and original unlocked_at). This is what
+  // lets the Recent Achievements feed distinguish genuinely new unlocks
+  // from re-derivations of old ones — without preservation, every recalc
+  // would re-stamp every achievement as "just unlocked".
+  //
+  // Trade-off: if a tournament/placement is corrected such that a player
+  // should NO LONGER hold an achievement, the recalc won't auto-revoke it.
+  // Manual cleanup is required for those cases (rare).
+  await db.query(`DELETE FROM elo_history`);
+  console.log('   Cleared elo_history; achievements re-derived additively (existing unlocks keep their unlocked_at, new ones are inserted)');
 
   // ── Write ELO history (chunked to avoid param limit) ──────────────────
   const CHUNK = 5000; // ~5 params per row, Postgres limit is 65535 params
@@ -746,11 +782,6 @@ const OFFLINE_WEIGHTS = {
 
   await db.end?.();
 })().catch(err => {
-  console.error('\n❌  Fatal error:', err.message);
-  console.error(err.stack);
-  process.exit(1);
-});
-catch(err => {
   console.error('\n❌  Fatal error:', err.message);
   console.error(err.stack);
   process.exit(1);

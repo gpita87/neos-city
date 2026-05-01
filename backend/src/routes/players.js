@@ -130,7 +130,7 @@ router.get('/:id', async (req, res) => {
        WHERE (m.player1_id = $1 OR m.player2_id = $1) AND m.state = 'complete'
        GROUP BY opponent_id, opponent_name
        ORDER BY (COUNT(*)) DESC
-       LIMIT 10`,
+       LIMIT 20`,
       [player.id]
     );
 

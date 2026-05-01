@@ -129,14 +129,18 @@ describe('Achievement catalog', () => {
     assert.equal(multi.length, 1);
   });
 
-  it('has match-based achievements (4 types x 8 regions)', () => {
+  it('has no match-category achievements (everything moved to meta)', () => {
     const matchBased = ACHIEVEMENTS.filter(a => a.category === 'match');
-    assert.equal(matchBased.length, 4 * 8, `Expected 32 match-based, got ${matchBased.length}`);
+    // MATCH_TYPES is currently empty — every Pass-2 achievement scales by
+    // opponent region tier and lives under the meta category.
+    assert.equal(matchBased.length, 0, `Expected 0 match-based, got ${matchBased.length}`);
   });
 
-  it('has meta achievements (2 types x 8 regions)', () => {
+  it('has meta achievements: 6 types × one per region', () => {
     const meta = ACHIEVEMENTS.filter(a => a.category === 'meta');
-    assert.equal(meta.length, 2 * 8, `Expected 16 meta, got ${meta.length}`);
+    // 8 Badges, Elite Trainer, Rival Battle, Smell Ya Later, Foreshadowing, Dark Horse
+    assert.equal(meta.length, 6 * REGIONS.length,
+      `Expected ${6 * REGIONS.length} meta, got ${meta.length}`);
   });
 });
 
@@ -590,8 +594,11 @@ describe('checkAchievementsPass2', () => {
       assert.ok(ids.includes('foreshadowing_kanto'), 'should earn Foreshadowing Kanto');
     });
 
-    it('requires threshold count for higher region tiers', async () => {
-      // 3 matches against rivals (need 3 for Johto tier)
+    it('Smell Ya Later region tier is the opponents Rival region (not match count)', async () => {
+      // Three wins against three different KANTO-only Rivals.
+      // Under count-scaling, this used to unlock Johto. Under the new meta
+      // semantics, only Kanto Smell Ya Later fires because no opponent has a
+      // Rival achievement at Johto+ tier.
       const matches = [
         makeMatch({ id: 10, player1_id: 1, player2_id: 2, winner_id: 1, player1_score: 2, player2_score: 0 }),
         makeMatch({ id: 11, player1_id: 1, player2_id: 3, winner_id: 1, player1_score: 2, player2_score: 1 }),
@@ -606,9 +613,31 @@ describe('checkAchievementsPass2', () => {
       const result = await checkAchievementsPass2(1, db, []);
       const ids = achIds(result);
 
-      assert.ok(ids.includes('smell_ya_later_kanto'), 'should have Kanto (1+)');
-      assert.ok(ids.includes('smell_ya_later_johto'), 'should have Johto (3 wins vs rivals)');
-      assert.ok(!ids.includes('smell_ya_later_hoenn'), 'should NOT have Hoenn (needs 5)');
+      assert.ok(ids.includes('smell_ya_later_kanto'), 'Kanto fires — opponents are Kanto Rivals');
+      assert.ok(!ids.includes('smell_ya_later_johto'), 'Johto should NOT fire — no opponent at Johto+ Rival tier');
+      assert.ok(!ids.includes('smell_ya_later_hoenn'), 'Hoenn should NOT fire — no opponent at Hoenn+ Rival tier');
+    });
+
+    it('Smell Ya Later climbs as opponents Rival region rises', async () => {
+      // One opponent who has Rival achievement up to Sinnoh — beating them
+      // unlocks Smell Ya Later through Sinnoh in a single match.
+      const matches = [
+        makeMatch({ id: 20, player1_id: 1, player2_id: 7, winner_id: 1, player1_score: 2, player2_score: 0 }),
+      ];
+      const oppAch = [
+        { player_id: 7, achievement_id: 'global_rival_kanto' },
+        { player_id: 7, achievement_id: 'global_rival_johto' },
+        { player_id: 7, achievement_id: 'global_rival_hoenn' },
+        { player_id: 7, achievement_id: 'global_rival_sinnoh' },
+      ];
+      const db = makeMockDb(matches, oppAch);
+      const ids = achIds(await checkAchievementsPass2(1, db, []));
+
+      assert.ok(ids.includes('smell_ya_later_kanto'),  'Kanto fires');
+      assert.ok(ids.includes('smell_ya_later_johto'),  'Johto fires via Johto-tier Rival');
+      assert.ok(ids.includes('smell_ya_later_hoenn'),  'Hoenn fires via Hoenn-tier Rival');
+      assert.ok(ids.includes('smell_ya_later_sinnoh'), 'Sinnoh fires via Sinnoh-tier Rival');
+      assert.ok(!ids.includes('smell_ya_later_unova'), 'Unova should NOT fire — opponent is only Sinnoh-tier');
     });
 
     it('does not re-award already unlocked achievements', async () => {
@@ -645,7 +674,10 @@ describe('checkAchievementsPass2', () => {
       assert.equal(darkHorse.contributors[0].match_id, 42);
     });
 
-    it('tracks multiple contributors for higher tiers', async () => {
+    it('Smell Ya Later (now meta) keeps every qualifying Rival as a contributor', async () => {
+      // Three unique Rivals defeated. Smell Ya Later is meta with required=1,
+      // but like every other meta achievement it preserves ALL qualifying
+      // opponents so the modal can list every Rival you've beaten.
       const matches = [
         makeMatch({ id: 10, player1_id: 1, player2_id: 2, winner_id: 1, player1_score: 2, player2_score: 1 }),
         makeMatch({ id: 11, player1_id: 1, player2_id: 3, winner_id: 1, player1_score: 2, player2_score: 0 }),
@@ -659,19 +691,36 @@ describe('checkAchievementsPass2', () => {
       const db = makeMockDb(matches, oppAch);
       const result = await checkAchievementsPass2(1, db, []);
 
-      const johtoSmell = findAch(result, 'smell_ya_later_johto');
-      assert.ok(johtoSmell, 'should have smell_ya_later_johto');
-      // Johto threshold is 3, so should have 3 contributors
-      assert.equal(johtoSmell.contributors.length, 3, 'Johto tier should have 3 contributors');
+      const kantoSmell = findAch(result, 'smell_ya_later_kanto');
+      assert.ok(kantoSmell, 'should have smell_ya_later_kanto');
+      assert.equal(kantoSmell.contributors.length, 3, 'meta should preserve all qualifying opponents');
 
-      // Verify each contributor has match_id
-      for (const c of johtoSmell.contributors) {
+      const oppIds = new Set(kantoSmell.contributors.map(c => c.opponent_id));
+      assert.equal(oppIds.size, 3, 'each contributor should be a unique opponent');
+      for (const c of kantoSmell.contributors) {
         assert.ok(c.opponent_id, 'contributor should have opponent_id');
-        assert.ok(c.match_id, 'contributor should have match_id');
+        assert.ok(c.match_id, 'meta contributors should carry match_id');
       }
     });
 
-    it('Kanto tier slices to 1 contributor', async () => {
+    it('Rival Battle (game-mode meta) fires on a loss where the player took a game', async () => {
+      // Lost 1-2 to a Rival — took one game, should still earn Rival Battle
+      // but NOT Smell Ya Later (which requires the match win).
+      const matches = [
+        makeMatch({ id: 30, player1_id: 1, player2_id: 5, winner_id: 5, player1_score: 1, player2_score: 2 }),
+      ];
+      const oppAch = [{ player_id: 5, achievement_id: 'global_rival_kanto' }];
+      const db = makeMockDb(matches, oppAch);
+      const ids = achIds(await checkAchievementsPass2(1, db, []));
+
+      assert.ok(ids.includes('rival_battle_kanto'),    'rival_battle should fire — game taken from a Rival');
+      assert.ok(!ids.includes('smell_ya_later_kanto'), 'smell_ya_later should NOT fire — match was lost');
+    });
+
+    it('Dark Horse (now meta) keeps every qualifying Champion as a contributor', async () => {
+      // Two unique Champions defeated. Dark Horse is now a meta achievement
+      // with required=1, but like other metas it preserves ALL qualifying
+      // opponents so the modal can list every champion you've taken down.
       const matches = [
         makeMatch({ id: 10, player1_id: 1, player2_id: 2, winner_id: 1, player1_score: 2, player2_score: 0 }),
         makeMatch({ id: 11, player1_id: 1, player2_id: 3, winner_id: 1, player1_score: 2, player2_score: 0 }),
@@ -685,8 +734,12 @@ describe('checkAchievementsPass2', () => {
 
       const darkHorse = findAch(result, 'dark_horse_kanto');
       assert.ok(darkHorse, 'should have dark_horse_kanto');
-      // Kanto threshold is 1, so contributors should be sliced to 1
-      assert.equal(darkHorse.contributors.length, 1, 'Kanto should slice to 1 contributor');
+      assert.equal(darkHorse.contributors.length, 2, 'meta should preserve all qualifying opponents');
+      const oppIds = new Set(darkHorse.contributors.map(c => c.opponent_id));
+      assert.equal(oppIds.size, 2, 'each contributor should be a unique opponent');
+      for (const c of darkHorse.contributors) {
+        assert.ok(c.match_id, 'meta contributors should carry match_id for tournament linking');
+      }
     });
 
     it('tracks both game and match contributors independently', async () => {
@@ -758,6 +811,57 @@ describe('checkAchievementsPass2', () => {
       assert.ok(ids.includes('elite_trainer_kanto'), 'should earn Elite Trainer Kanto');
     });
 
+    it('Foreshadowing meta unlocks when a single Champion lets you take a game', async () => {
+      // Lost 1-2 to a Champion — took one game, should still earn Foreshadowing.
+      const matches = [
+        makeMatch({ id: 50, player1_id: 1, player2_id: 2, winner_id: 2, player1_score: 1, player2_score: 2 }),
+      ];
+      const oppAch = [{ player_id: 2, achievement_id: 'global_champion_kanto' }];
+      const db = makeMockDb(matches, oppAch);
+      const result = await checkAchievementsPass2(1, db, []);
+
+      const fs = findAch(result, 'foreshadowing_kanto');
+      assert.ok(fs, 'foreshadowing_kanto should fire on game taken from a Champion');
+      assert.equal(fs.contributors.length, 1);
+      assert.equal(fs.contributors[0].opponent_id, 2);
+      assert.equal(fs.contributors[0].match_id, 50);
+
+      // Dark Horse should NOT fire — player lost the match
+      assert.ok(!achIds(result).includes('dark_horse_kanto'),
+        'dark_horse should require winning the match, not just taking a game');
+    });
+
+    it('Foreshadowing/Dark Horse scale by Champion region tier, not by count', async () => {
+      // Player defeats opp 2 (Kanto Champion) and opp 3 (Sinnoh Champion)
+      const matches = [
+        makeMatch({ id: 60, player1_id: 1, player2_id: 2, winner_id: 1, player1_score: 2, player2_score: 0 }),
+        makeMatch({ id: 61, player1_id: 1, player2_id: 3, winner_id: 1, player1_score: 2, player2_score: 1 }),
+      ];
+      const oppAch = [
+        { player_id: 2, achievement_id: 'global_champion_kanto' },
+        // opp 3 has Champion at Kanto, Johto, Hoenn, Sinnoh tiers (auto-cascade)
+        { player_id: 3, achievement_id: 'global_champion_kanto' },
+        { player_id: 3, achievement_id: 'global_champion_johto' },
+        { player_id: 3, achievement_id: 'global_champion_hoenn' },
+        { player_id: 3, achievement_id: 'global_champion_sinnoh' },
+      ];
+      const db = makeMockDb(matches, oppAch);
+      const result = await checkAchievementsPass2(1, db, []);
+      const ids = achIds(result);
+
+      // Dark Horse: Kanto (any), Johto (Johto+), Hoenn (Hoenn+), Sinnoh (Sinnoh+) — all qualify via opp 3
+      assert.ok(ids.includes('dark_horse_kanto'),  'Kanto Dark Horse via either champion');
+      assert.ok(ids.includes('dark_horse_johto'),  'Johto Dark Horse via Sinnoh-tier champion');
+      assert.ok(ids.includes('dark_horse_hoenn'),  'Hoenn Dark Horse via Sinnoh-tier champion');
+      assert.ok(ids.includes('dark_horse_sinnoh'), 'Sinnoh Dark Horse via Sinnoh-tier champion');
+      assert.ok(!ids.includes('dark_horse_unova'), 'Unova Dark Horse needs an Unova-tier champion');
+
+      // Same for Foreshadowing — game-mode catches both wins (took >=1 game in each)
+      assert.ok(ids.includes('foreshadowing_kanto'));
+      assert.ok(ids.includes('foreshadowing_sinnoh'));
+      assert.ok(!ids.includes('foreshadowing_unova'));
+    });
+
     it('meta achievements respect region tier (Johto+ means kanto-only opponents dont count)', async () => {
       const matches = [];
       const oppAch = [];
@@ -797,10 +901,11 @@ describe('checkAchievementsPass2', () => {
       const uniqueOppIds = new Set(oppIds);
       assert.equal(uniqueOppIds.size, 8, 'all 8 contributors should be unique opponents');
 
-      // Meta contributors don't have match_id (it's about unique opponents, not specific matches)
+      // Meta contributors now carry match_id so the modal can link to the
+      // tournament where each badge was earned.
       for (const c of badges.contributors) {
         assert.ok(c.opponent_id, 'contributor should have opponent_id');
-        assert.equal(c.match_id, undefined, 'meta contributors should not have match_id');
+        assert.ok(c.match_id, 'meta contributors should carry match_id');
       }
     });
 
@@ -848,11 +953,14 @@ describe('checkAchievementsPass2', () => {
 
 describe('computeMetaProgress', () => {
 
-  function makeMockDb(defeats = [], oppAchievements = []) {
+  // computeMetaProgress now pulls full match rows so it can support both
+  // match-mode meta (defeated opponent) and game-mode meta (took a game).
+  // The mock here mirrors the matches-table shape it expects.
+  function makeMockDb(matches = [], oppAchievements = []) {
     return {
-      query: async (sql, params) => {
+      query: async (sql, _params) => {
         if (sql.includes('FROM matches')) {
-          return { rows: defeats };
+          return { rows: matches };
         }
         if (sql.includes('FROM player_achievements')) {
           return { rows: oppAchievements };
@@ -862,7 +970,16 @@ describe('computeMetaProgress', () => {
     };
   }
 
-  it('returns empty progress when no defeats', async () => {
+  // Helper: a match where player 1 beats `oppId` 2-0
+  function winOver(oppId) {
+    return { player1_id: 1, player2_id: oppId, winner_id: 1, player1_score: 2, player2_score: 0 };
+  }
+  // Helper: a match where player 1 LOSES to `oppId` 1-2 (took 1 game)
+  function lossTakingGame(oppId) {
+    return { player1_id: 1, player2_id: oppId, winner_id: oppId, player1_score: 1, player2_score: 2 };
+  }
+
+  it('returns empty progress when no matches', async () => {
     const db = makeMockDb([], []);
     const result = await computeMetaProgress(1, db, []);
     assert.deepEqual(result, {});
@@ -870,15 +987,12 @@ describe('computeMetaProgress', () => {
 
   it('returns progress with qualifying_opponents', async () => {
     // Player 1 defeated players 2 and 3, who are both Gym Leaders
-    const defeats = [
-      { opp_id: 2 },
-      { opp_id: 3 },
-    ];
+    const matches = [winOver(2), winOver(3)];
     const oppAch = [
       { player_id: 2, achievement_id: 'global_gym_leader_kanto' },
       { player_id: 3, achievement_id: 'global_gym_leader_kanto' },
     ];
-    const db = makeMockDb(defeats, oppAch);
+    const db = makeMockDb(matches, oppAch);
     const result = await computeMetaProgress(1, db, []);
 
     assert.ok(result['eight_badges_kanto'], 'should have progress for eight_badges_kanto');
@@ -891,12 +1005,27 @@ describe('computeMetaProgress', () => {
   });
 
   it('skips already unlocked achievements', async () => {
-    const defeats = [{ opp_id: 2 }];
+    const matches = [winOver(2)];
     const oppAch = [{ player_id: 2, achievement_id: 'global_gym_leader_kanto' }];
-    const db = makeMockDb(defeats, oppAch);
+    const db = makeMockDb(matches, oppAch);
     const result = await computeMetaProgress(1, db, ['eight_badges_kanto']);
 
     assert.ok(!result['eight_badges_kanto'], 'should not show progress for already unlocked');
+  });
+
+  it('counts game-mode meta (Foreshadowing) on losses where player took a game', async () => {
+    // Lost 1-2 to a Champion — qualifies for Foreshadowing but NOT Dark Horse.
+    const matches = [lossTakingGame(2)];
+    const oppAch = [{ player_id: 2, achievement_id: 'global_champion_kanto' }];
+    const db = makeMockDb(matches, oppAch);
+    const result = await computeMetaProgress(1, db, []);
+
+    assert.ok(result['foreshadowing_kanto'], 'foreshadowing should record progress');
+    assert.equal(result['foreshadowing_kanto'].current, 1);
+    assert.equal(result['foreshadowing_kanto'].required, 1);
+
+    // Dark Horse needs a match win, which didn't happen here
+    assert.ok(!result['dark_horse_kanto'], 'dark_horse should NOT have progress on a loss');
   });
 });
 
@@ -980,6 +1109,70 @@ describe('Region constants', () => {
   it('REGION_INDEX maps correctly', () => {
     assert.equal(REGION_INDEX.kanto, 0);
     assert.equal(REGION_INDEX.galar, 7);
+    assert.equal(REGION_INDEX.hoenn, 2);
+  });
+});
+    assert.equal(ach.region, 'kanto');
+  });
+
+  it('returns null for unknown ID', () => {
+    assert.equal(getAchievementById('nonexistent_xyz'), null);
+  });
+});
+
+// ═══════════════════════════════════════════════════════════════════════════════
+//  Region constants
+// ═══════════════════════════════════════════════════════════════════════════════
+
+describe('Region constants', () => {
+
+  it('has 8 regions in order', () => {
+    assert.equal(REGIONS.length, 8);
+    assert.equal(REGIONS[0].id, 'kanto');
+    assert.equal(REGIONS[7].id, 'galar');
+  });
+
+  it('thresholds are strictly increasing', () => {
+    for (let i = 1; i < REGIONS.length; i++) {
+      assert.ok(REGIONS[i].threshold > REGIONS[i - 1].threshold,
+        `${REGIONS[i].id} threshold (${REGIONS[i].threshold}) should be > ${REGIONS[i - 1].id} (${REGIONS[i - 1].threshold})`);
+    }
+  });
+
+  it('REGION_INDEX maps correctly', () => {
+    assert.equal(REGION_INDEX.kanto, 0);
+    assert.equal(REGION_INDEX.galar, 7);
+    assert.equal(REGION_INDEX.hoenn, 2);
+  });
+});
+
+describe('getAchievementById', () => {
+
+  it('returns the correct achievement', () => {
+    const ach = getAchievementById('global_champion_kanto');
+    assert.ok(ach);
+    assert.equal(ach.id, 'global_champion_kanto');
+    assert.equal(ach.tier, 'champion');
+    assert.equal(ach.region, 'kanto');
+  });
+
+  it('returns null for unknown ID', () => {
+    assert.equal(getAchievementById('nonexistent_xyz'), null);
+  });
+});
+
+describe('Region constants', () => {
+
+  it('thresholds are strictly increasing', () => {
+    for (let i = 1; i < REGIONS.length; i++) {
+      assert.ok(REGIONS[i].threshold > REGIONS[i - 1].threshold,
+        `${REGIONS[i].id} threshold (${REGIONS[i].threshold}) should be > ${REGIONS[i - 1].id} (${REGIONS[i - 1].threshold})`);
+    }
+  });
+
+  it('REGION_INDEX maps correctly', () => {
+    assert.equal(REGION_INDEX.kanto, 0);
+    assert.equal(REGION_INDEX[REGIONS[REGIONS.length - 1].id], REGIONS.length - 1);
     assert.equal(REGION_INDEX.hoenn, 2);
   });
 });

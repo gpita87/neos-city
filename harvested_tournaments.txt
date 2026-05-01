@@ -516,3 +516,24 @@ https://pokkenarena.challonge.com/PEXCS2_1
 https://pokkenarena.challonge.com/PEXC5
 https://pokkenarena.challonge.com/PEXC4
 https://pokkenarena.challonge.com/PEXC3
+# Appended via harvest_console.js on 2026-04-30 (organizer: rigz_)
+https://challonge.com/rigz_/rmo8g0d4
+https://challonge.com/rigz_/u3lwc9jq
+https://challonge.com/rigz_/mudihd2v
+https://challonge.com/rigz_/zjdwnmy8
+https://challonge.com/rigz_/6td2vo6m
+https://challonge.com/rigz_/nayuu8nk
+https://challonge.com/rigz_/ax7dpxbl
+# Appended via harvest_console.js on 2026-05-01 (organizer: community/PokkenFFC, validation: skipped)
+https://challonge.com/followers
+https://challonge.com/announcements
+https://challonge.com/events
+https://challonge.com/rankings
+https://challonge.com/templates
+https://challonge.com/partners
+https://challonge.com/organizedplay
+https://challonge.com/switch_locale
+https://challonge.com/translate
+https://challonge.com/terms_of_service
+https://challonge.com/privacy_policy
+https://challonge.com/bracket_generator

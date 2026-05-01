@@ -224,25 +224,45 @@ Backend uses `nodemon` for hot reload. Changes to `.js` files in `backend/src/` 
 
 ## ⚡ NEXT AGENT: What to Do First
 
-### Current state (as of Apr 30 2026 — recent achievements no longer surface undated unlocks)
+### Current state (as of Apr 30 2026 — Recent Achievements feed cleaned up)
 
 #### What just shipped this session
 
-The "Recent Achievements" feed on the home page used to surface old achievements as if they had just been unlocked today, every time `recalculate_elo.js` ran. Root cause: when no real tournament date could be derived for an unlock, the recalc INSERT used `COALESCE(u.d, NOW())` and stamped today's date.
+Two related fixes for the "Recent Achievements" feed on the home page.
 
-Three changes:
+**Bug 1 — undated unlocks surfaced as "just unlocked today".** When the recalc couldn't derive a real `unlocked_at` from a tournament date, it stamped `NOW()`.
 
-1. **Migration:** `backend/src/db/migrations/nullable_unlocked_at.sql` — drops `NOT NULL` on `player_achievements.unlocked_at` and one-shots an `UPDATE` that nulls fake-recent rows (rows where `unlocked_at` is within the last 7 days but the player has no `tournament_placement` on that calendar date — only NOW()-fallback dates fail that check). Idempotent.
+**Bug 2 — every recalc made every achievement look "recent".** The recalc was wiping `player_achievements` and reinserting them, so even old unlocks (e.g. TEC_XX's Kanto Trainer dated Apr 26) surfaced in the feed after each recalc.
 
-2. **`recalculate_elo.js`** — bulk INSERT now writes `u.d` directly, allowing NULL for undated unlocks. The `deriveUnlockedAt()` logic above it is unchanged.
+The fix has four parts:
 
-3. **`backend/src/routes/achievements.js`** — `GET /recent` now has `WHERE pa.unlocked_at IS NOT NULL`. The `/holders`, `/leaderboard`, and `/:id/tournaments` endpoints are untouched (player profiles still display undated achievements; `formatDate` shows `'—'`).
+1. **`backend/src/db/migrations/nullable_unlocked_at.sql`** — drops `NOT NULL` on `unlocked_at` and nulls fake-recent rows (rows where `unlocked_at` is within last 7 days but the player has no `tournament_placement` on that calendar date — the signature of a NOW() fallback). Idempotent.
 
-**Deploy:** `node run_migration.js backend/src/db/migrations/nullable_unlocked_at.sql`. Re-running the full recalc afterward is optional — the migration already cleans the existing fake-recent rows.
+2. **`backend/src/db/migrations/add_first_seen_at.sql`** — adds `first_seen_at TIMESTAMPTZ NOT NULL DEFAULT NOW()` to `player_achievements`, indexed for sorting. Backfills existing rows to `COALESCE(unlocked_at, '2000-01-01')` so they look "old". Idempotent (the backfill UPDATE is gated on `first_seen_at >= NOW() - INTERVAL '5 minutes'` so re-runs no-op).
 
-#### Heads-up — recalculate_elo.js was truncated mid-Edit and re-stitched
+3. **`recalculate_elo.js`** — two changes:
+   - The `DELETE FROM player_achievements` and `DELETE FROM achievement_defeated_opponents` lines are gone. The recalc is now ADDITIVE — INSERTs use `ON CONFLICT DO NOTHING`, so existing rows keep their `first_seen_at` and `unlocked_at`. Only `elo_history` still gets wiped (must be, ELO is recomputed from scratch).
+   - Achievement INSERT now writes `u.d` directly instead of `COALESCE(u.d, NOW())`, allowing NULL for undated unlocks.
+   - Trade-off: data corrections that should REVOKE an achievement won't auto-revoke. Rare; manual cleanup if it happens.
 
-Same Windows-mount truncation pattern as the prior `tournaments.js` incident. The `})().catch(err => { ... })` tail (lines 748–752) was lost in the buffered write, leaving the file unparseable. Repair appended via bash heredoc; final file is 752 lines and `node -c` clean. No backup of the truncated state was kept this time. The earlier recommendation in this doc — that a baseline git commit prevents this category of bug — still stands; the project did `git init` on 2026-04-30 (see `GIT_WORKFLOW.md`), so future truncations can be recovered with `git checkout -- <file>`.
+4. **`backend/src/routes/achievements.js`** — `GET /recent` filters on `pa.unlocked_at IS NOT NULL AND pa.first_seen_at >= NOW() - INTERVAL '30 days'` and orders by `first_seen_at DESC`. So only rows actually inserted in the last 30 days appear, and re-derivations of old unlocks stay invisible.
+
+Other endpoints (`/holders`, `/leaderboard`, `/:id/tournaments`) untouched. Player profiles still show all unlocked achievements; `formatDate('—')` handles NULL `unlocked_at`.
+
+**Deploy order:**
+```powershell
+cd C:\Users\pitag\Documents\neos-city
+node run_migration.js backend/src/db/migrations/nullable_unlocked_at.sql
+node run_migration.js backend/src/db/migrations/add_first_seen_at.sql
+# restart backend
+```
+No need to re-run `recalculate_elo.js` — the migrations clean up existing data. Future recalcs will be additive.
+
+#### Heads-up — recalculate_elo.js truncated TWICE this session, both repaired via bash
+
+Same Windows-mount truncation pattern as the prior `tournaments.js` incident, hit on consecutive Edits to the achievement INSERT block and the DELETE block. Each time the file lost the `})().catch(err => { ... })` tail (and once also the "Done" log block). Repaired by `head -n N`-truncating to a known-good line and appending the missing tail via heredoc. Final file is 761 lines, `node -c` clean, and `diff` against the last git blob (`836f4de:recalculate_elo.js`) shows ONLY the three intentional edits.
+
+The earlier recommendation in this doc — that committed git history is the only reliable recovery — held up: I diffed against the HEAD blob via Python+zlib (because `git` itself can't run from the Linux sandbox here due to a Windows-mount config-read error) and confirmed no drift. If you continue editing `recalculate_elo.js` in this session, watch for the same truncation pattern after every Edit.
 
 ---
 

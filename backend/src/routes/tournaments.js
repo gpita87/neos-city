@@ -479,6 +479,98 @@ router.post('/preview-dates', async (req, res) => {
   res.json({ count: results.length, results });
 });
 
+// POST /api/tournaments/append-harvest
+// Body: { urls: [...], organizer?: string }
+// Used by harvest_console.js (browser-pasted) when an organizer's profile is
+// 403-blocked from Node. The browser scrapes the URLs, the backend dedupes
+// against harvested_tournaments.txt + tournaments DB, validates each via the
+// Pokkén keyword list, and appends only the new validated URLs to the file.
+router.post('/append-harvest', async (req, res) => {
+  const fs   = require('fs');
+  const path = require('path');
+  const { urls = [], organizer = 'unknown', skip_validation = false } = req.body;
+
+  if (!Array.isArray(urls) || urls.length === 0) {
+    return res.status(400).json({ error: 'urls array is required' });
+  }
+
+  const harvestPath = path.join(__dirname, '../../../harvested_tournaments.txt');
+
+  // Existing harvested-file slugs
+  const fileLines = fs.existsSync(harvestPath)
+    ? fs.readFileSync(harvestPath, 'utf8').split('\n').map(l => l.trim()).filter(Boolean)
+    : [];
+  const fileSlugs = new Set(
+    fileLines
+      .filter(l => l.startsWith('http') && !l.includes('start.gg'))
+      .map(l => challonge.extractSlugFromUrl(l))
+      .filter(Boolean)
+  );
+
+  // Existing DB slugs
+  let dbSlugs = new Set();
+  try {
+    const { rows } = await db.query("SELECT challonge_id FROM tournaments WHERE challonge_id IS NOT NULL");
+    dbSlugs = new Set(rows.map(r => r.challonge_id));
+  } catch (err) {
+    console.warn(`append-harvest: DB lookup failed (${err.message})`);
+  }
+
+  const known = new Set([...fileSlugs, ...dbSlugs]);
+
+  // Map URLs -> slugs and filter to genuinely new ones
+  const candidates = urls
+    .map(u => ({ url: String(u).trim(), slug: challonge.extractSlugFromUrl(String(u).trim()) }))
+    .filter(c => c.slug && !known.has(c.slug));
+
+  if (candidates.length === 0) {
+    return res.json({
+      appended: 0,
+      skipped_known: urls.length,
+      message: 'all URLs already in file or DB',
+    });
+  }
+
+  // Validate against Pokkén keyword list (rejects non-Pokkén tournaments
+  // the organizer may also run on Challonge, e.g. SF6 / Tekken events).
+  // skip_validation:true bypasses the keyword check — used by community
+  // harvests where membership in a Pokkén-only community is itself the signal
+  // (the keyword list misses things like "FFC 253" that wise_ doesn't game-tag).
+  let toAppend;
+  if (skip_validation) {
+    toAppend = candidates;
+  } else {
+    const validatedSlugs = await challonge.validatePokkenSlugs(candidates.map(c => c.slug));
+    const validSet = new Set(validatedSlugs);
+    toAppend = candidates.filter(c => validSet.has(c.slug));
+  }
+
+  if (toAppend.length === 0) {
+    return res.json({
+      appended: 0,
+      skipped_known: urls.length - candidates.length,
+      rejected_non_pokken: candidates.length,
+    });
+  }
+
+  // Append to file
+  const fileContent = fs.existsSync(harvestPath) ? fs.readFileSync(harvestPath, 'utf8') : '';
+  const lines = [];
+  if (fileContent && !fileContent.endsWith('\n')) lines.push('');
+  const validationNote = skip_validation ? ', validation: skipped' : '';
+  lines.push(`# Appended via harvest_console.js on ${new Date().toISOString().slice(0, 10)} (organizer: ${organizer}${validationNote})`);
+  for (const { url } of toAppend) lines.push(url);
+  lines.push('');
+  fs.appendFileSync(harvestPath, lines.join('\n'));
+
+  res.json({
+    appended: toAppend.length,
+    skipped_known: urls.length - candidates.length,
+    rejected_non_pokken: candidates.length - toAppend.length,
+    new_slugs: toAppend.map(c => c.slug),
+  });
+});
+
 // ── Update a single player's stats after a tournament import ─────────────────
 async function updatePlayerStats(playerId, tournament, playerMap, matchList, tournamentWinnerId, totalParticipants) {
   const series = tournament.series;

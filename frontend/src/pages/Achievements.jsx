@@ -29,25 +29,27 @@ const REGION_COLORS = {
 // What each placement tier means — explained on the page so players don't have to guess
 const TIER_GLOSSARY = [
   { icon: '🏟️', name: 'Gym Leader', desc: 'Finished in the top 8 of a tournament.' },
-  { icon: '⭐', name: 'Elite Four', desc: 'Finished in the top 4 of a tournament.' },
+  { icon: '4️⃣', name: 'Elite Four', desc: 'Finished in the top 4 of a tournament.' },
   { icon: '🔥', name: 'Rival',      desc: 'Finished as the runner-up (2nd place) of a tournament.' },
   { icon: '👑', name: 'Champion',   desc: 'Won a tournament outright (1st place).' },
 ];
 
+// Every Pass-2 achievement is now meta — they all scale by OPPONENT REGION
+// TIER rather than raw match count. 8 Badges / Elite Trainer additionally
+// require N unique opponents; the rest unlock with a single qualifying foe.
 const META_GLOSSARY = [
-  { icon: '⚔️', name: 'Rival Battle!',  desc: 'Took at least one game from a Rival in any match.' },
-  { icon: '👋', name: 'Smell Ya Later!', desc: 'Won an entire match against a Rival.' },
-  { icon: '🔮', name: 'Foreshadowing',  desc: 'Took at least one game from a Champion in any match.' },
-  { icon: '🐴', name: 'Dark Horse',     desc: 'Won an entire match against a Champion.' },
-  { icon: '🎖️', name: '8 Badges!',     desc: 'Defeated 8 unique Gym Leaders (or higher).' },
-  { icon: '🏆', name: 'Elite Trainer',  desc: 'Defeated 4 unique Elite Four members (or higher).' },
+  { icon: '🎖️', name: '8 Badges!',      desc: 'Defeat 8 unique Gym Leaders. Region tier = minimum opponent region (Johto means 8 Gym Leaders at Johto+).' },
+  { icon: '🏆', name: 'Elite Trainer',   desc: 'Defeat 4 unique Elite Four members. Region tier = minimum opponent region.' },
+  { icon: '⚔️', name: 'Rival Battle!',   desc: 'Take a game from a Rival at the corresponding region tier or higher.' },
+  { icon: '👋', name: 'Smell Ya Later!', desc: 'Win a match against a Rival at the corresponding region tier or higher.' },
+  { icon: '🔮', name: 'Foreshadowing',   desc: 'Take a game from a Champion at the corresponding region tier or higher.' },
+  { icon: '🐴', name: 'Dark Horse',      desc: 'Win a match against a Champion at the corresponding region tier or higher.' },
 ];
 
 const CATEGORY_SECTIONS = [
   { key: 'placement',     label: '🏟️ Placement',     desc: 'Top 8 · Top 4 · Runner-up · Champion' },
   { key: 'participation', label: '🎮 Participation',  desc: 'Tournament entries' },
-  { key: 'match',         label: '⚔️ Match',          desc: 'Feats against Rivals and Champions' },
-  { key: 'meta',          label: '🎖️ Meta',           desc: 'Defeat players with achievements' },
+  { key: 'meta',          label: '🎖️ Meta',           desc: 'Earned against players who hold tiered placement achievements' },
   { key: 'special',       label: '🌐 Special',        desc: 'Unique accomplishments' },
   { key: 'series_ffc',    label: '✊ Ferrum Fist Challenge' },
   { key: 'series_rtg_na', label: '🛣️ Road to Greatness NA' },
@@ -211,10 +213,12 @@ export default function Achievements() {
         </div>
 
         <div>
-          <h3 className="text-xs uppercase tracking-wider text-slate-500 mb-2">Match &amp; meta achievements</h3>
+          <h3 className="text-xs uppercase tracking-wider text-slate-500 mb-2">Meta achievements (opponent-tier-scaled)</h3>
           <p className="text-[11px] text-slate-500 mb-2">
-            These are earned by playing <em>against</em> Rivals and Champions — meaning players who already
-            hold the corresponding placement achievement.
+            Earned by defeating (or trading games with) players who hold high-tier placement
+            achievements. The region tier on the badge is the <em>minimum</em> opponent region
+            that counts — so Hoenn Dark Horse needs you to beat a Hoenn-tier Champion or higher,
+            and Galar Smell Ya Later needs you to beat a Galar-tier Rival.
           </p>
           <div className="grid grid-cols-1 sm:grid-cols-2 gap-2">
             {META_GLOSSARY.map(t => (

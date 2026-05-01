@@ -42,8 +42,6 @@ export default function App() {
             <NavItem to="/tournaments">Tournaments</NavItem>
             <NavItem to="/calendar">Calendar</NavItem>
             <NavItem to="/achievements">Achievements</NavItem>
-            <NavItem to="/live">Live Match</NavItem>
-            <NavItem to="/organizers">Organizers</NavItem>
           </nav>
         </div>
         {/* Neon line under nav */}

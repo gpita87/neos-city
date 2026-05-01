@@ -22,17 +22,42 @@ const SERIES_META = {
 
 const meta = (series) => SERIES_META[series] || SERIES_META.other;
 
+/* ── User timezone (computed once on load) ───────────────────────────── */
+const USER_TZ = (() => {
+  try { return Intl.DateTimeFormat().resolvedOptions().timeZone || 'UTC'; }
+  catch { return 'UTC'; }
+})();
+const TZ_ABBR = (() => {
+  try {
+    const parts = new Intl.DateTimeFormat([], { timeZone: USER_TZ, timeZoneName: 'short' })
+      .formatToParts(new Date());
+    return parts.find(p => p.type === 'timeZoneName')?.value || 'local';
+  } catch { return 'local'; }
+})();
+
 /* ── Recurring schedule patterns ───────────────────────────────────── *
- * dayOfWeek: 0=Sun … 6=Sat
+ * dayOfWeek: 0=Sun … 6=Sat (informational; the anchorDate's UTC weekday
+ *   is what actually drives the cadence)
  * weekInterval: 1=weekly, 2=biweekly, 4=monthly-ish
- * hour/minute: start time in UTC (placeholder — timezone TBD)
- * anchorDate: a known past occurrence to align biweekly cadence       */
+ * hour/minute: start time in UTC. anchorDate + (hour, minute) defines
+ *   the actual UTC moment of one occurrence.
+ * anchorDate: a known past occurrence to align cadence
+ *
+ * TODO (DST honesty): hour/minute is stored as a raw UTC value, which is
+ * only correct when the organizer fixes their event in UTC (e.g. TCC fires
+ * at 15:00 UTC year-round → 7am PST winter, 8am PDT summer). For series
+ * where the organizer keeps a constant local wall-clock time, the UTC hour
+ * shifts twice a year and these schedules will drift across DST transitions.
+ * To handle correctly: store { time: 'HH:mm', tz: 'America/Los_Angeles' }
+ * per series and compute the UTC moment per occurrence with Intl APIs.
+ */
 const SERIES_SCHEDULES = [
-  { series: 'ffc',        dayOfWeek: 6, weekInterval: 2, hour: 21, minute: 0,  anchorDate: '2026-03-14' },
+  // FFC: Sundays at 11am PDT (18:00 UTC during DST)
+  { series: 'ffc',        dayOfWeek: 0, weekInterval: 2, hour: 18, minute: 0,  anchorDate: '2026-04-26' },
   { series: 'rtg_na',     dayOfWeek: 6, weekInterval: 2, hour: 20, minute: 0,  anchorDate: '2026-03-07' },
-  { series: 'rtg_eu',     dayOfWeek: 6, weekInterval: 2, hour: 17, minute: 0,  anchorDate: '2026-03-21' },
   { series: 'dcm',        dayOfWeek: 6, weekInterval: 4, hour: 20, minute: 0,  anchorDate: '2026-03-07' },
-  { series: 'tcc',        dayOfWeek: 6, weekInterval: 2, hour: 17, minute: 0,  anchorDate: '2026-03-14' },
+  // TCC: biweekly Saturday at 8am PDT / 7am PST (15:00 UTC year-round). Confirmed dates: 2-14 (7am PST), 2-28 (7am PST), 3-14 (8am PDT), 3-28 (8am PDT)
+  { series: 'tcc',        dayOfWeek: 6, weekInterval: 2, hour: 15, minute: 0,  anchorDate: '2026-03-28' },
   { series: 'nezumi',     dayOfWeek: 0, weekInterval: 4, hour: 12, minute: 0,  anchorDate: '2026-03-01' },
 ];
 
@@ -71,37 +96,37 @@ function isPast(d) {
   return d < today;
 }
 
-/** Generate future placeholder dates for a recurring series within a range */
+/** Generate future placeholder dates for a recurring series within a range.
+ *  Anchors on the actual UTC moment so each occurrence is placed on the
+ *  user's *local* date with the user's *local* hour/minute. */
 function generateRecurring(schedule, rangeStart, rangeEnd, existingDates) {
   const results = [];
-  const anchor = new Date(schedule.anchorDate + 'T00:00:00');
-  // Walk forward/backward from anchor in weekInterval steps to cover the range
+  const [ay, am, ad] = schedule.anchorDate.split('-').map(Number);
+  const anchorUtcMs = Date.UTC(ay, am - 1, ad, schedule.hour, schedule.minute);
   const msPerWeek = 7 * 24 * 60 * 60 * 1000;
   const intervalMs = schedule.weekInterval * msPerWeek;
 
-  // Find the first occurrence at or after rangeStart
-  let diff = rangeStart.getTime() - anchor.getTime();
-  let stepsFromAnchor = Math.floor(diff / intervalMs);
-  let candidate = new Date(anchor.getTime() + stepsFromAnchor * intervalMs);
+  const startMs = rangeStart.getTime();
+  const endMs = rangeEnd.getTime() + 24 * 60 * 60 * 1000; // include the last day fully
+  const stepsFromAnchor = Math.floor((startMs - anchorUtcMs) / intervalMs);
+  const firstCandidateMs = anchorUtcMs + stepsFromAnchor * intervalMs;
 
-  // Generate occurrences within range
-  for (let i = 0; i < 20; i++) {
-    const d = new Date(candidate.getTime() + i * intervalMs);
-    if (d > rangeEnd) break;
-    if (d < rangeStart) continue;
-    // Only generate future placeholders — skip if we already have a real event on that day
-    const key = dateKey(d);
-    if (!isPast(d) && !existingDates.has(key)) {
-      results.push({
-        id: `placeholder_${schedule.series}_${key}`,
-        name: `${meta(schedule.series).label} (Scheduled)`,
-        series: schedule.series,
-        date: d,
-        hour: schedule.hour,
-        minute: schedule.minute,
-        isPlaceholder: true,
-      });
-    }
+  for (let i = 0; i < 30; i++) {
+    const ms = firstCandidateMs + i * intervalMs;
+    if (ms > endMs) break;
+    const d = new Date(ms);
+    const key = dateKey(d); // local date
+    if (isPast(d)) continue;
+    if (existingDates.has(key)) continue;
+    results.push({
+      id: `placeholder_${schedule.series}_${key}`,
+      name: `${meta(schedule.series).label} (Scheduled)`,
+      series: schedule.series,
+      date: d,
+      hour: d.getHours(),       // local hour for this user
+      minute: d.getMinutes(),   // local minute
+      isPlaceholder: true,
+    });
   }
   return results;
 }
@@ -120,7 +145,7 @@ function EventPill({ event, compact = false }) {
         ${!event.isPlaceholder ? 'hover:brightness-125 cursor-pointer' : 'cursor-default'}
         transition-all
       `}
-      title={`${event.name}${event.hour != null ? ` — ${String(event.hour).padStart(2,'0')}:${String(event.minute ?? 0).padStart(2,'0')} UTC` : ''}`}
+      title={`${event.name}${event.hour != null ? ` — ${String(event.hour).padStart(2,'0')}:${String(event.minute ?? 0).padStart(2,'0')} ${TZ_ABBR}` : ''}`}
     >
       <span className={`w-2 h-2 rounded-full flex-shrink-0 ${m.color}`} />
       {compact
@@ -234,8 +259,13 @@ function WeekView({ events, currentDate }) {
     byDate[k].push(e);
   }
 
-  // Time slots from 10:00 to 23:00 UTC (covers most tournament times)
-  const hours = Array.from({ length: 14 }, (_, i) => i + 10);
+  // Time slots: cover all event hours visible this week, plus a default
+  // 8am–10pm window so the grid never collapses to an empty rail.
+  const eventHours = events.filter(e => e.hour != null).map(e => e.hour);
+  const minHour = Math.max(0, Math.min(8, ...eventHours));
+  const maxHour = Math.min(23, Math.max(22, ...eventHours));
+  const hours = [];
+  for (let h = minHour; h <= maxHour; h++) hours.push(h);
 
   return (
     <div className="border border-[#1a2744] rounded-xl overflow-hidden overflow-x-auto">
@@ -363,18 +393,22 @@ export default function Calendar() {
 
   // Convert tournaments to calendar events + generate recurring placeholders
   const calendarEvents = useMemo(() => {
-    // Real events from DB
+    // Real events from DB. Detect "all-day" events (rows imported with date
+    // only, defaulting to 00:00 UTC) by checking the underlying UTC moment.
+    // Otherwise emit hour/minute in the user's local timezone — Date methods
+    // (getHours / getDate) already respect the browser TZ.
     const realEvents = tournaments
       .filter(t => t.completed_at || t.started_at)
       .map(t => {
         const d = new Date(t.completed_at || t.started_at);
+        const hasTime = d.getUTCHours() !== 0 || d.getUTCMinutes() !== 0;
         return {
           id: t.id,
           name: t.name,
           series: t.series || 'other',
           date: d,
-          hour: d.getUTCHours() !== 0 ? d.getUTCHours() : null,
-          minute: d.getUTCMinutes() !== 0 ? d.getUTCMinutes() : null,
+          hour: hasTime ? d.getHours() : null,
+          minute: hasTime ? d.getMinutes() : null,
           isPlaceholder: false,
           isOffline: t.is_offline,
           participantsCount: t.participants_count,
@@ -519,7 +553,7 @@ export default function Calendar() {
 
       {/* Timezone note */}
       <p className="text-xs text-slate-600 text-center">
-        Times shown in UTC. Timezone-aware display coming soon.
+        Times shown in {TZ_ABBR} ({USER_TZ}).
       </p>
     </div>
   );

@@ -6,7 +6,12 @@
  * Scopes:           Global + 8 online series
  *
  * Pass 1 — stat-based:  placement, participation, multi-series
- * Pass 2 — query-based:  match-based (Rival Battle, Dark Horse, …) and meta (8 Badges, Elite Trainer)
+ * Pass 2 — query-based:  meta (8 Badges, Elite Trainer, Rival Battle, Smell Ya Later,
+ *                        Foreshadowing, Dark Horse) — every Pass-2 achievement now
+ *                        scales by OPPONENT REGION TIER, not by raw match count.
+ *                        MATCH_TYPES is retained as an empty array for export
+ *                        compatibility; future count-scaled achievements would
+ *                        slot in there.
  */
 
 // ─── Series IDs ──────────────────────────────────────────────────────────────
@@ -122,7 +127,7 @@ function regionsAtOrAbove(regionId) {
 
 const PLACEMENT_TIERS = [
   { id: 'gym_leader', name: 'Gym Leader', icon: '🏟️', statSuffix: 'top8',      globalStat: 'top8_finishes',      desc: 'top 8' },
-  { id: 'elite_four', name: 'Elite Four', icon: '⭐',  statSuffix: 'top4',      globalStat: 'top4_finishes',      desc: 'top 4' },
+  { id: 'elite_four', name: 'Elite Four', icon: '4️⃣',  statSuffix: 'top4',      globalStat: 'top4_finishes',      desc: 'top 4' },
   { id: 'rival',      name: 'Rival',      icon: '🔥',  statSuffix: 'runner_up', globalStat: 'runner_up_finishes', desc: 'runner-up' },
   { id: 'champion',   name: 'Champion',   icon: '👑',  statSuffix: 'wins',      globalStat: 'tournament_wins',    desc: 'champion' },
 ];
@@ -143,16 +148,29 @@ const SCOPES = [
   ...ONLINE_SERIES,
 ];
 
-const MATCH_TYPES = [
-  { id: 'rival_battle',   name: 'Rival Battle!',  icon: '⚔️',  targetTier: 'rival',    mode: 'game',  desc: 'Take a game from a Rival' },
-  { id: 'smell_ya_later', name: 'Smell Ya Later!', icon: '👋',  targetTier: 'rival',    mode: 'match', desc: 'Win a match against a Rival' },
-  { id: 'foreshadowing',  name: 'Foreshadowing',   icon: '🔮',  targetTier: 'champion', mode: 'game',  desc: 'Take a game from a Champion' },
-  { id: 'dark_horse',     name: 'Dark Horse',      icon: '🐴',  targetTier: 'champion', mode: 'match', desc: 'Win a match against a Champion' },
-];
+// Reserved for future count-scaled achievements. Currently empty: the rival
+// pair (Rival Battle / Smell Ya Later) used to live here but moved to
+// META_TYPES so the entire Pass-2 catalog scales the same way (by opponent
+// region tier, not by match count).
+const MATCH_TYPES = [];
 
+// Meta achievements scale by OPPONENT REGION TIER. Region threshold determines
+// the minimum opponent region required to count. `required` is the number of
+// distinct qualifying opponents needed to unlock the achievement.
+//
+//   • 8 Badges / Elite Trainer            — N unique Gym Leaders / Elite Four defeated.
+//   • Rival Battle / Smell Ya Later       — one qualifying Rival at region tier+.
+//   • Foreshadowing / Dark Horse          — one qualifying Champion at region tier+.
+//
+// `mode` distinguishes "took at least one game" (game) from "won the match"
+// (match). 8 Badges / Elite Trainer use match-mode by historical convention.
 const META_TYPES = [
-  { id: 'eight_badges',  name: '8 Badges!',     icon: '🎖️', targetTier: 'gym_leader', required: 8, desc: 'Defeat 8 unique Gym Leaders' },
-  { id: 'elite_trainer', name: 'Elite Trainer',  icon: '🏆',  targetTier: 'elite_four', required: 4, desc: 'Defeat 4 unique Elite Four members' },
+  { id: 'eight_badges',   name: '8 Badges!',      icon: '🎖️', targetTier: 'gym_leader', required: 8, mode: 'match', desc: 'Defeat 8 unique Gym Leaders' },
+  { id: 'elite_trainer',  name: 'Elite Trainer',   icon: '🏆', targetTier: 'elite_four', required: 4, mode: 'match', desc: 'Defeat 4 unique Elite Four members' },
+  { id: 'rival_battle',   name: 'Rival Battle!',   icon: '⚔️', targetTier: 'rival',      required: 1, mode: 'game',  desc: 'Take a game from a Rival' },
+  { id: 'smell_ya_later', name: 'Smell Ya Later!', icon: '👋', targetTier: 'rival',      required: 1, mode: 'match', desc: 'Win a match against a Rival' },
+  { id: 'foreshadowing',  name: 'Foreshadowing',   icon: '🔮', targetTier: 'champion',   required: 1, mode: 'game',  desc: 'Take a game from a Champion' },
+  { id: 'dark_horse',     name: 'Dark Horse',      icon: '🐴', targetTier: 'champion',   required: 1, mode: 'match', desc: 'Win a match against a Champion' },
 ];
 
 // ─── Build the full catalog ──────────────────────────────────────────────────
@@ -324,20 +342,6 @@ function checkAchievementsPass2Pure(playerId, playerMatches, globalOppAchMap, al
   // Build local oppAchMap (only opponents of this player)
   const oppAchMap = globalOppAchMap;
 
-  /** Does this opponent hold any achievement whose ID ends with `_{tier}_{region}` for any valid region? */
-  function oppHasTier(oppId, tierStr) {
-    const achs = oppAchMap[oppId];
-    if (!achs) return false;
-    for (const a of achs) {
-      if (a.includes(`_${tierStr}_`)) return true;
-      // Also check ending (for IDs where tier_region is the suffix)
-      for (const r of REGIONS) {
-        if (a.endsWith(`_${tierStr}_${r.id}`)) return true;
-      }
-    }
-    return false;
-  }
-
   /** Does opponent hold a specific tier at minRegion or higher? */
   function oppHasTierAtRegion(oppId, tierStr, minRegionId) {
     const achs = oppAchMap[oppId];
@@ -351,102 +355,57 @@ function checkAchievementsPass2Pure(playerId, playerMatches, globalOppAchMap, al
     return false;
   }
 
-  // ── Match-based achievements ────────────────────────────────────────────
-
-  // Count occurrences per match type AND track contributing opponent+match pairs
-  const matchCounts = {
-    rival_game: 0,
-    rival_match: 0,
-    champion_game: 0,
-    champion_match: 0,
-  };
-  const matchContributors = {
-    rival_game: [],
-    rival_match: [],
-    champion_game: [],
-    champion_match: [],
-  };
+  // ── Build per-opponent earliest-match maps ─────────────────────────────────
+  //
+  // For each meta achievement we only care about UNIQUE opponents. These two
+  // maps record the earliest match in which each opponent qualified — game
+  // mode (we took >= 1 game) vs match mode (we won the entire match). The
+  // match_id rides along so the modal can deep-link the user straight to the
+  // bracket where each badge was earned.
+  const earliestGameByOpp = new Map();   // we took >= 1 game off opp
+  const earliestWinByOpp  = new Map();   // we won the entire match
 
   for (const m of matches) {
     const opp = m.player1_id === playerId ? m.player2_id : m.player1_id;
+    if (!opp) continue;
     const myScore = m.player1_id === playerId ? m.player1_score : m.player2_score;
     const iWon = m.winner_id === playerId;
 
-    // Check if opponent has Rival or Champion tier
-    const oppIsRival    = oppHasTier(opp, 'rival');
-    const oppIsChampion = oppHasTier(opp, 'champion');
-
-    if (oppIsRival) {
-      if (myScore >= 1) {
-        matchCounts.rival_game++;
-        matchContributors.rival_game.push({ opponent_id: opp, match_id: m.id });
-      }
-      if (iWon) {
-        matchCounts.rival_match++;
-        matchContributors.rival_match.push({ opponent_id: opp, match_id: m.id });
-      }
+    if (myScore >= 1 && !earliestGameByOpp.has(opp)) {
+      earliestGameByOpp.set(opp, { opponent_id: opp, match_id: m.id });
     }
-    if (oppIsChampion) {
-      if (myScore >= 1) {
-        matchCounts.champion_game++;
-        matchContributors.champion_game.push({ opponent_id: opp, match_id: m.id });
-      }
-      if (iWon) {
-        matchCounts.champion_match++;
-        matchContributors.champion_match.push({ opponent_id: opp, match_id: m.id });
-      }
+    if (iWon && !earliestWinByOpp.has(opp)) {
+      earliestWinByOpp.set(opp, { opponent_id: opp, match_id: m.id });
     }
   }
 
-  const matchTypeCountMap = {
-    rival_battle:   matchCounts.rival_game,
-    smell_ya_later: matchCounts.rival_match,
-    foreshadowing:  matchCounts.champion_game,
-    dark_horse:     matchCounts.champion_match,
-  };
-
-  const matchTypeContributorMap = {
-    rival_battle:   matchContributors.rival_game,
-    smell_ya_later: matchContributors.rival_match,
-    foreshadowing:  matchContributors.champion_game,
-    dark_horse:     matchContributors.champion_match,
-  };
-
+  // ── (Optional) count-scaled match achievements ─────────────────────────────
+  // MATCH_TYPES is currently empty — every Pass-2 achievement is now meta.
+  // The loop is left in place in case a future achievement needs to scale by
+  // raw match count again (e.g. "win 50 matches against anyone").
   for (const mt of MATCH_TYPES) {
-    const count = matchTypeCountMap[mt.id] || 0;
-    for (const region of REGIONS) {
-      const achId = `${mt.id}_${region.id}`;
-      if (!already.has(achId) && count >= region.threshold) {
-        // Include all qualifying contributors up to the threshold count
-        const contributors = (matchTypeContributorMap[mt.id] || [])
-          .slice(0, region.threshold);
-        newAch.push({ id: achId, contributors });
-      }
-    }
+    void mt; // no-op — see comment above
   }
 
-  // ── Meta-achievements ──────────────────────────────────────────────────
-
-  // Unique opponents this player has DEFEATED (won the match)
-  const defeatedSet = new Set();
-  for (const m of matches) {
-    if (m.winner_id === playerId) {
-      const opp = m.player1_id === playerId ? m.player2_id : m.player1_id;
-      if (opp) defeatedSet.add(opp);
-    }
-  }
-  const defeatedIds = [...defeatedSet];
-
+  // ── Meta achievements (all of them — see META_TYPES) ───────────────────────
+  //
+  // For each meta type we walk the appropriate per-opponent map and collect
+  // every unique opponent at the region's target tier or higher. The
+  // achievement unlocks once the unique-opponent count meets `required`. We
+  // keep ALL qualifying contributors (not just `required`) so the modal can
+  // show ongoing progress past the unlock — same behavior as before, but now
+  // with match_id attached for tournament linking.
   for (const meta of META_TYPES) {
+    const oppMatchMap = meta.mode === 'game' ? earliestGameByOpp : earliestWinByOpp;
+
     for (const region of REGIONS) {
       const achId = `${meta.id}_${region.id}`;
       if (already.has(achId)) continue;
 
-      // Collect defeated opponents who have the target tier at this region or higher
       const qualifyingOpponents = [];
-      for (const oppId of defeatedIds) {
+      for (const [oppId, info] of oppMatchMap) {
         if (oppHasTierAtRegion(oppId, meta.targetTier, region.id)) {
-          qualifyingOpponents.push({ opponent_id: oppId });
+          qualifyingOpponents.push({ opponent_id: oppId, match_id: info.match_id });
         }
       }
 
@@ -512,22 +471,36 @@ async function computeMetaProgress(playerId, db, alreadyUnlocked = []) {
   const already = new Set(alreadyUnlocked);
   const progress = {};
 
-  // Get all opponents this player has defeated
-  const { rows: defeats } = await db.query(`
-    SELECT DISTINCT
-      CASE WHEN player1_id = $1 THEN player2_id ELSE player1_id END AS opp_id
+  // Pull every completed match this player was in. We need both the matches
+  // they WON (for match-mode meta: 8 Badges, Elite Trainer, Dark Horse) and
+  // the matches where they took at least one game (for game-mode meta:
+  // Foreshadowing). A single SELECT here is cheaper than two round-trips.
+  const { rows: matches } = await db.query(`
+    SELECT player1_id, player2_id, winner_id, player1_score, player2_score
     FROM matches
-    WHERE winner_id = $1
+    WHERE (player1_id = $1 OR player2_id = $1)
+      AND winner_id IS NOT NULL
   `, [playerId]);
-  const defeatedIds = defeats.map(r => r.opp_id).filter(Boolean);
-  if (defeatedIds.length === 0) return progress;
 
-  // Get defeated opponents' achievements
+  const tookGameFromIds = new Set();
+  const defeatedIds = new Set();
+  for (const m of matches) {
+    const opp = m.player1_id === playerId ? m.player2_id : m.player1_id;
+    if (!opp) continue;
+    const myScore = m.player1_id === playerId ? m.player1_score : m.player2_score;
+    if (myScore >= 1) tookGameFromIds.add(opp);
+    if (m.winner_id === playerId) defeatedIds.add(opp);
+  }
+
+  const allOppIds = new Set([...tookGameFromIds, ...defeatedIds]);
+  if (allOppIds.size === 0) return progress;
+
+  // Get achievements for every opponent we'll need to consider
   const { rows: oppAchRows } = await db.query(`
     SELECT player_id, achievement_id
     FROM player_achievements
     WHERE player_id = ANY($1::int[])
-  `, [defeatedIds]);
+  `, [[...allOppIds]]);
 
   const oppAchMap = {};
   for (const r of oppAchRows) {
@@ -536,6 +509,8 @@ async function computeMetaProgress(playerId, db, alreadyUnlocked = []) {
   }
 
   for (const meta of META_TYPES) {
+    const oppSet = meta.mode === 'game' ? tookGameFromIds : defeatedIds;
+
     for (const region of REGIONS) {
       const achId = `${meta.id}_${region.id}`;
       if (already.has(achId)) continue;
@@ -543,7 +518,7 @@ async function computeMetaProgress(playerId, db, alreadyUnlocked = []) {
       const validRegions = regionsAtOrAbove(region.id);
       let qualifying = 0;
       const qualifyingOppIds = [];
-      for (const oppId of defeatedIds) {
+      for (const oppId of oppSet) {
         const achs = oppAchMap[oppId];
         if (!achs) continue;
         let found = false;

@@ -53,16 +53,28 @@ router.get('/', (req, res) => {
   })));
 });
 
-// GET /api/achievements/recent — most recently unlocked achievements across all players
-// Includes tournament_id metadata when available.
-// Excludes rows with NULL unlocked_at: those are achievements where no real
-// tournament date could be derived (e.g. old tournaments without dates),
-// and we'd rather hide them than have them surface as "just unlocked today".
+// GET /api/achievements/recent — achievements unlocked at recent tournaments.
+//
+// Sorts and filters by `unlocked_at` (the tournament date). This means
+// "recent" tracks the in-game event, not when the row landed in the DB. If a
+// recalc re-derives or newly discovers an old unlock (e.g. a Pass 2
+// match-based achievement from a 2016 tournament), it stays out of the feed
+// because its `unlocked_at` is old — even though `first_seen_at` is now.
+//
+// Filters:
+//   - unlocked_at IS NOT NULL: hide undated unlocks (no real tournament
+//     date), so they don't pretend to be "just unlocked today".
+//   - unlocked_at within the last 30 days: only show genuinely recent
+//     tournament events.
+//
+// Tiebreaker is `first_seen_at DESC` so multiple unlocks on the same
+// tournament day get a stable, newest-first ordering.
 router.get('/recent', async (req, res) => {
   try {
     const limit = Math.min(parseInt(req.query.limit) || 20, 50);
     const { rows } = await db.query(`
       SELECT pa.player_id, pa.achievement_id, pa.unlocked_at, pa.tournament_id,
+             pa.first_seen_at,
              p.display_name AS player_name,
              a.name AS achievement_name, a.icon, a.description,
              t.name AS tournament_name
@@ -71,7 +83,8 @@ router.get('/recent', async (req, res) => {
       JOIN achievements a ON a.id = pa.achievement_id
       LEFT JOIN tournaments t ON t.id = pa.tournament_id
       WHERE pa.unlocked_at IS NOT NULL
-      ORDER BY pa.unlocked_at DESC
+        AND pa.unlocked_at >= NOW() - INTERVAL '30 days'
+      ORDER BY pa.unlocked_at DESC, pa.first_seen_at DESC
       LIMIT $1
     `, [limit]);
     res.json(rows);

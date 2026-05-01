@@ -1,7 +1,7 @@
 import { useEffect, useState } from 'react';
 import { useParams, Link } from 'react-router-dom';
 import { getPlayer } from '../lib/api';
-import { winRate, formatDate } from '../lib/utils';
+import { formatDate } from '../lib/utils';
 import AchievementTournamentsModal from '../components/AchievementTournamentsModal';
 import AchievementIcon, { REGION_NUMERALS } from '../components/AchievementIcon';
 
@@ -59,7 +59,7 @@ function RegionTierDisplay({ highestRegions }) {
   if (!highestRegions) return null;
   const tiers = [
     { key: 'gym_leader', icon: '🏟️', name: 'Gym Leader' },
-    { key: 'elite_four', icon: '⭐', name: 'Elite Four' },
+    { key: 'elite_four', icon: '4️⃣', name: 'Elite Four' },
     { key: 'rival',      icon: '🔥', name: 'Rival' },
     { key: 'champion',   icon: '👑', name: 'Champion' },
   ];
@@ -119,12 +119,10 @@ export default function PlayerProfile() {
       </div>
 
       {/* Stats row */}
-      <div className="grid grid-cols-2 md:grid-cols-4 gap-4">
+      <div className="grid grid-cols-2 gap-4">
         {[
-          { label: 'Win Rate', value: winRate(player.total_match_wins, player.total_match_losses) },
           { label: 'Match Wins', value: player.total_match_wins },
           { label: 'Events', value: player.tournaments_entered },
-          { label: 'Best Streak', value: `${player.longest_win_streak}W` },
         ].map(s => (
           <div key={s.label} className="bg-[#0c1425] border border-[#1a2744] rounded-xl p-4 text-center">
             <p className="text-2xl font-bold text-white">{s.value}</p>
@@ -251,7 +249,13 @@ export default function PlayerProfile() {
                   // Parse the achievement name from the ID
                   const parts = achId.split('_');
                   const region = parts[parts.length - 1];
-                  const type = achId.includes('eight_badges') ? '8 Badges!' : 'Elite Trainer';
+                  const type = achId.startsWith('eight_badges_')   ? '8 Badges!'
+                             : achId.startsWith('elite_trainer_')  ? 'Elite Trainer'
+                             : achId.startsWith('rival_battle_')   ? 'Rival Battle!'
+                             : achId.startsWith('smell_ya_later_') ? 'Smell Ya Later!'
+                             : achId.startsWith('foreshadowing_')  ? 'Foreshadowing'
+                             : achId.startsWith('dark_horse_')     ? 'Dark Horse'
+                             : achId;
                   const pct = Math.round((current / required) * 100);
                   const regionLabel = REGION_LABELS[region] || region;
 
@@ -282,7 +286,15 @@ export default function PlayerProfile() {
       <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
         {/* Head to Head */}
         <div className="bg-[#0c1425] border border-[#1a2744] rounded-xl p-5">
-          <h2 className="font-display text-sm tracking-widest text-cyan-400 mb-4">HEAD TO HEAD</h2>
+          <h2 className="font-display text-sm tracking-widest text-cyan-400 mb-4 flex items-center gap-2">
+            HEAD TO HEAD
+            <span
+              className="inline-flex items-center justify-center w-4 h-4 rounded-full bg-slate-700 text-slate-300 text-[10px] font-sans cursor-help"
+              title="Top 20 most-played opponents across all completed matches. Sorted by total matches played together (highest first)."
+            >
+              ?
+            </span>
+          </h2>
           <div className="space-y-2">
             {player.h2h?.length === 0 && (
               <p className="text-slate-500 text-sm">No head-to-head data yet.</p>
