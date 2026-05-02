@@ -58,7 +58,8 @@ const SERIES_SCHEDULES = [
   { series: 'dcm',        dayOfWeek: 6, weekInterval: 4, hour: 20, minute: 0,  anchorDate: '2026-03-07' },
   // TCC: biweekly Saturday at 8am PDT / 7am PST (15:00 UTC year-round). Confirmed dates: 2-14 (7am PST), 2-28 (7am PST), 3-14 (8am PDT), 3-28 (8am PDT)
   { series: 'tcc',        dayOfWeek: 6, weekInterval: 2, hour: 15, minute: 0,  anchorDate: '2026-03-28' },
-  { series: 'nezumi',     dayOfWeek: 0, weekInterval: 4, hour: 12, minute: 0,  anchorDate: '2026-03-01' },
+  // Nezumi (Mouse Cup): 3rd Saturday of each month at 8pm JST (= 11:00 UTC year-round, since JP doesn't observe DST). That's 4am PDT / 3am PST. Confirmed dates: 2/21, 3/21, 4/18.
+  { series: 'nezumi',     kind: 'monthlyNth', nth: 3, dayOfWeek: 6, hour: 11, minute: 0,  anchorDate: '2026-04-18' },
 ];
 
 /* ── Helpers ────────────────────────────────────────────────────────── */
@@ -96,28 +97,32 @@ function isPast(d) {
   return d < today;
 }
 
+/** Day-of-month (1-31) of the Nth occurrence of dayOfWeek in a given UTC
+ *  year/month. Returns null if the month doesn't have N occurrences. */
+function nthWeekdayOfMonthUtc(year, month, n, dayOfWeek) {
+  const firstDow = new Date(Date.UTC(year, month, 1)).getUTCDay();
+  const offset = (dayOfWeek - firstDow + 7) % 7;
+  const day = 1 + offset + (n - 1) * 7;
+  const lastOfMonth = new Date(Date.UTC(year, month + 1, 0)).getUTCDate();
+  return day > lastOfMonth ? null : day;
+}
+
 /** Generate future placeholder dates for a recurring series within a range.
  *  Anchors on the actual UTC moment so each occurrence is placed on the
- *  user's *local* date with the user's *local* hour/minute. */
+ *  user's *local* date with the user's *local* hour/minute.
+ *  Supports two cadences: weekly-interval (default) and { kind: 'monthlyNth' }
+ *  which fires on the Nth dayOfWeek (UTC) of each month. */
 function generateRecurring(schedule, rangeStart, rangeEnd, existingDates) {
   const results = [];
-  const [ay, am, ad] = schedule.anchorDate.split('-').map(Number);
-  const anchorUtcMs = Date.UTC(ay, am - 1, ad, schedule.hour, schedule.minute);
-  const msPerWeek = 7 * 24 * 60 * 60 * 1000;
-  const intervalMs = schedule.weekInterval * msPerWeek;
-
   const startMs = rangeStart.getTime();
-  const endMs = rangeEnd.getTime() + 24 * 60 * 60 * 1000; // include the last day fully
-  const stepsFromAnchor = Math.floor((startMs - anchorUtcMs) / intervalMs);
-  const firstCandidateMs = anchorUtcMs + stepsFromAnchor * intervalMs;
+  const endMs = rangeEnd.getTime() + 24 * 60 * 60 * 1000; // include last day fully
 
-  for (let i = 0; i < 30; i++) {
-    const ms = firstCandidateMs + i * intervalMs;
-    if (ms > endMs) break;
+  const pushOccurrence = (ms) => {
+    if (ms < startMs || ms > endMs) return;
     const d = new Date(ms);
-    const key = dateKey(d); // local date
-    if (isPast(d)) continue;
-    if (existingDates.has(key)) continue;
+    const key = dateKey(d);
+    if (isPast(d)) return;
+    if (existingDates.has(key)) return;
     results.push({
       id: `placeholder_${schedule.series}_${key}`,
       name: `${meta(schedule.series).label} (Scheduled)`,
@@ -127,6 +132,38 @@ function generateRecurring(schedule, rangeStart, rangeEnd, existingDates) {
       minute: d.getMinutes(),   // local minute
       isPlaceholder: true,
     });
+  };
+
+  if (schedule.kind === 'monthlyNth') {
+    // Walk months overlapping the range (in UTC) and emit the Nth weekday.
+    const startD = new Date(startMs);
+    const endD = new Date(endMs);
+    let y = startD.getUTCFullYear();
+    let m = startD.getUTCMonth();
+    const endY = endD.getUTCFullYear();
+    const endM = endD.getUTCMonth();
+    while (y < endY || (y === endY && m <= endM)) {
+      const day = nthWeekdayOfMonthUtc(y, m, schedule.nth, schedule.dayOfWeek);
+      if (day != null) {
+        pushOccurrence(Date.UTC(y, m, day, schedule.hour, schedule.minute));
+      }
+      m++;
+      if (m > 11) { m = 0; y++; }
+    }
+    return results;
+  }
+
+  // Default: weekly-interval cadence
+  const [ay, am, ad] = schedule.anchorDate.split('-').map(Number);
+  const anchorUtcMs = Date.UTC(ay, am - 1, ad, schedule.hour, schedule.minute);
+  const msPerWeek = 7 * 24 * 60 * 60 * 1000;
+  const intervalMs = schedule.weekInterval * msPerWeek;
+  const stepsFromAnchor = Math.floor((startMs - anchorUtcMs) / intervalMs);
+  const firstCandidateMs = anchorUtcMs + stepsFromAnchor * intervalMs;
+  for (let i = 0; i < 30; i++) {
+    const ms = firstCandidateMs + i * intervalMs;
+    if (ms > endMs) break;
+    pushOccurrence(ms);
   }
   return results;
 }
