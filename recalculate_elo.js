@@ -466,14 +466,23 @@ const OFFLINE_WEIGHTS = {
 
   // Sort each player's placements by tournament completed_at ASC (online only —
   // achievements are online-only). Pre-attach the tournament row for cheap lookup.
+  //
+  // We require completed_at to be non-null. A NULL completed_at (sometimes
+  // produced by importer edge cases on round-robin or never-finished Challonge
+  // events) used to anchor filtered[0] in deriveUnlockedAt — `null || ''`
+  // sorts before any real date — which made the truthiness fallback chain
+  // return the player's most-recent placement date as the "unlock" date for
+  // every threshold. Filtering them out here means an undated placement
+  // simply doesn't count toward the chronology; the achievement gets dated
+  // from the player's earliest *dated* qualifying placement instead.
   const placementsByPlayerSorted = {};
   for (const pid of Object.keys(placementsByPlayer)) {
     placementsByPlayerSorted[pid] = placementsByPlayer[pid]
       .map(pl => ({ ...pl, _t: tournamentById[pl.tournament_id] }))
-      .filter(pl => pl._t && !pl._t.is_offline)
+      .filter(pl => pl._t && !pl._t.is_offline && pl._t.completed_at)
       .sort((a, b) => {
-        const da = a._t.completed_at || '';
-        const db_ = b._t.completed_at || '';
+        const da = a._t.completed_at;
+        const db_ = b._t.completed_at;
         return da < db_ ? -1 : da > db_ ? 1 : a._t.id - b._t.id;
       });
   }
@@ -490,17 +499,20 @@ const OFFLINE_WEIGHTS = {
   const matchById = {};
   for (const m of dbMatches) matchById[m.id] = m;
 
-  // For meta achievements: the date player X first defeated opponent Y
+  // For meta achievements: the date player X first defeated opponent Y.
+  // Same NULL-date guard as placementsByPlayerSorted above — a match attached
+  // to a tournament with no completed_at can't tell us when the defeat
+  // happened, so it's dropped rather than allowed to anchor the timeline.
   const firstDefeatByPlayer = {};
   for (const pid of Object.keys(wonMatchesByPlayer)) {
     const map = {};
     const matches = wonMatchesByPlayer[pid]
       .filter(m => m.winner_id === Number(pid))
       .map(m => ({ m, t: tournamentById[m.tournament_id] }))
-      .filter(x => x.t)
+      .filter(x => x.t && x.t.completed_at)
       .sort((a, b) => {
-        const da = a.t.completed_at || '';
-        const db_ = b.t.completed_at || '';
+        const da = a.t.completed_at;
+        const db_ = b.t.completed_at;
         return da < db_ ? -1 : da > db_ ? 1 : a.m.id - b.m.id;
       });
     for (const { m, t } of matches) {
@@ -642,17 +654,22 @@ const OFFLINE_WEIGHTS = {
   // every run, so leftover rows would double-count.
   //
   // player_achievements and achievement_defeated_opponents are NOT wiped:
-  // the INSERTs below use ON CONFLICT DO NOTHING, so existing rows keep
-  // their original first_seen_at (and original unlocked_at). This is what
-  // lets the Recent Achievements feed distinguish genuinely new unlocks
-  // from re-derivations of old ones — without preservation, every recalc
-  // would re-stamp every achievement as "just unlocked".
+  // the INSERTs below use ON CONFLICT (player_id, achievement_id) DO UPDATE
+  // SET unlocked_at = COALESCE(EXCLUDED.unlocked_at, existing). This means:
+  //   - first_seen_at is preserved on existing rows (we never write to it
+  //     in the conflict path), so the "first time we ever saw this unlock"
+  //     timestamp stays stable across recalcs.
+  //   - unlocked_at IS refreshed to the freshly-derived date, so stale
+  //     dates from earlier buggy recalcs (e.g. NOW()-stamped rows from
+  //     before deriveUnlockedAt existed) get corrected on the next run.
+  //   - COALESCE protects a known-good unlocked_at from being clobbered by
+  //     NULL when deriveUnlockedAt couldn't resolve a date this run.
   //
   // Trade-off: if a tournament/placement is corrected such that a player
   // should NO LONGER hold an achievement, the recalc won't auto-revoke it.
   // Manual cleanup is required for those cases (rare).
   await db.query(`DELETE FROM elo_history`);
-  console.log('   Cleared elo_history; achievements re-derived additively (existing unlocks keep their unlocked_at, new ones are inserted)');
+  console.log('   Cleared elo_history; achievements upserted (first_seen_at preserved, unlocked_at refreshed from deriveUnlockedAt)');
 
   // ── Write ELO history (chunked to avoid param limit) ──────────────────
   const CHUNK = 5000; // ~5 params per row, Postgres limit is 65535 params
@@ -742,7 +759,8 @@ const OFFLINE_WEIGHTS = {
         `INSERT INTO player_achievements (player_id, achievement_id, unlocked_at)
          SELECT u.pid, u.aid, u.d
          FROM unnest($1::int[], $2::text[], $3::timestamptz[]) AS u(pid, aid, d)
-         ON CONFLICT DO NOTHING`,
+         ON CONFLICT (player_id, achievement_id) DO UPDATE
+         SET unlocked_at = COALESCE(EXCLUDED.unlocked_at, player_achievements.unlocked_at)`,
         [pids, aids, dates]
       );
     }
@@ -769,6 +787,7 @@ const OFFLINE_WEIGHTS = {
 
   const elapsed = ((Date.now() - t1) / 1000).toFixed(1);
   console.log(`   All writes completed in ${elapsed}s`);
+
 
   // ── Done ─────────────────────────────────────────────────────────────
   console.log('\n═══════════════════════════════════════════════════════════');

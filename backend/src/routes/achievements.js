@@ -53,19 +53,14 @@ router.get('/', (req, res) => {
   })));
 });
 
-// GET /api/achievements/recent — achievements unlocked at recent tournaments.
+// GET /api/achievements/recent — most-recently-unlocked achievements.
 //
-// Sorts and filters by `unlocked_at` (the tournament date). This means
-// "recent" tracks the in-game event, not when the row landed in the DB. If a
-// recalc re-derives or newly discovers an old unlock (e.g. a Pass 2
-// match-based achievement from a 2016 tournament), it stays out of the feed
-// because its `unlocked_at` is old — even though `first_seen_at` is now.
-//
-// Filters:
-//   - unlocked_at IS NOT NULL: hide undated unlocks (no real tournament
-//     date), so they don't pretend to be "just unlocked today".
-//   - unlocked_at within the last 30 days: only show genuinely recent
-//     tournament events.
+// Sorts by `unlocked_at` (the tournament date the threshold was crossed) so
+// "recent" tracks the in-game event, not when the row landed in the DB. The
+// only filter is `unlocked_at IS NOT NULL` — we hide undated unlocks so they
+// don't pretend to be "just unlocked today". There is no time window: the
+// feed is simply the top N most-recent dated unlocks, even if the newest
+// is months old.
 //
 // Tiebreaker is `first_seen_at DESC` so multiple unlocks on the same
 // tournament day get a stable, newest-first ordering.
@@ -83,7 +78,6 @@ router.get('/recent', async (req, res) => {
       JOIN achievements a ON a.id = pa.achievement_id
       LEFT JOIN tournaments t ON t.id = pa.tournament_id
       WHERE pa.unlocked_at IS NOT NULL
-        AND pa.unlocked_at >= NOW() - INTERVAL '30 days'
       ORDER BY pa.unlocked_at DESC, pa.first_seen_at DESC
       LIMIT $1
     `, [limit]);

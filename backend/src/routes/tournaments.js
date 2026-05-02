@@ -154,6 +154,24 @@ async function importOne(challonge_id) {
     const tournamentName = t.name || t.tournament?.name || challonge_id;
     const series = detectSeries(challonge_id, tournamentName);
 
+    // ── Stub guard ─────────────────────────────────────────────────────────
+    // Refuse to import tournaments that haven't actually run yet. We've had
+    // never-started Challonge brackets (e.g. "GinIsLate", multiple "RTGEU72"
+    // attempts) accumulate as DB stubs, then poison achievement-date math
+    // because they had NULL completed_at. The reliable truth-test for "did
+    // this happen" is "are there any completed matches" — Challonge keeps
+    // tournaments in state=pending until the organizer finalizes, so the
+    // tournament-level state alone isn't trustworthy.
+    const matchListPreview = matchesData.data || matchesData.matches || matchesData;
+    const completedMatchCount = matchListPreview.filter(m => {
+      const attrs = m.attributes || m.match || m;
+      return attrs.state === 'complete';
+    }).length;
+    if (completedMatchCount === 0) {
+      console.log(`   ⏭️  Skipped "${tournamentName}" (${challonge_id}): no completed matches yet`);
+      return { skipped: true, reason: 'no_completed_matches', name: tournamentName, challonge_id };
+    }
+
     // ── Upsert tournament ──────────────────────────────────────────────────
     const { rows: [tournament] } = await db.query(
       `INSERT INTO tournaments
@@ -404,8 +422,12 @@ router.post('/batch-import', async (req, res) => {
     }
     try {
       const result = await importOne(slug);
-      results.imported.push({ slug, name: result?.name || slug });
-      console.log(`✅ Batch imported: ${slug}`);
+      if (result?.skipped) {
+        results.skipped.push({ slug, reason: result.reason || 'skipped', name: result.name });
+      } else {
+        results.imported.push({ slug, name: result?.tournament || result?.name || slug });
+        console.log(`✅ Batch imported: ${slug}`);
+      }
     } catch (err) {
       console.error(`❌ Batch import failed for ${slug}:`, err.message);
       results.errors.push({ slug, error: err.message });
