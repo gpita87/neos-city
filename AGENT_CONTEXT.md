@@ -266,6 +266,41 @@ Backend uses `nodemon` for hot reload. Changes to `.js` files in `backend/src/` 
 
 ## ⚡ NEXT AGENT: What to Do First
 
+### Current state (as of May 2 2026 — meta achievement modal redesign)
+
+#### What just shipped this session
+
+A targeted fix for the meta-achievement modal. Two bugs were entangled: meta achievements opened from a player profile rendered via the wrong code path AND the contributor table held stale rows from earlier qualifier logic. Symptom: opening Kalos Dark Horse on `/players/:id` listed opponents who weren't Kalos+ Champions; opening Kalos Elite Trainer said "No contributing tournaments on file."
+
+Four parts:
+
+1. **`frontend/src/pages/PlayerProfile.jsx`** — the `setOpenAchievement` call dropped `category`. Added it back. The modal's `isMeta = achievement.category === 'meta'` check now actually fires for meta achievements opened from a player profile, instead of silently falling through to the placement view.
+
+2. **`backend/src/routes/achievements.js`** — the meta branch of `GET /:id/tournaments` now returns a structured `meta` payload alongside the legacy `tournaments` array. Per opponent: their qualifying tier+region (highest match for the achievement's target tier), their `highest_regions` across all four placement tiers, and the qualifying match (tournament/score/bracket link). Stale opponents — those who no longer hold a qualifying achievement — are filtered out at query time, so even uncleaned DB data doesn't surface in the UI. `meta.stale_filtered` counts how many were hidden.
+
+3. **`backend/src/db/migrations/cleanup_stale_meta_contributors.sql`** — one-shot cleanup that DELETEs rows from `achievement_defeated_opponents` whose opponent doesn't currently hold a qualifying tier+region achievement. Uses `regexp_replace` + `split_part` to decompose the achievement_id (avoids LIKE/`_` wildcard pitfalls). Idempotent. Belt-and-braces with the query-time filter in (2).
+
+4. **`frontend/src/components/AchievementTournamentsModal.jsx`** — meta view rebuilt to consume `data.meta.opponents`. Each opponent row shows: index → name → big "👑 Kalos Champion" qualifying chip; full highest-region pills (gym leader / elite four / rival / champion) underneath; the qualifying match below that with score, series badge, bracket link. New `MetaExplainer` reads from `data.meta` instead of parsing the achievement ID locally, so the verb / kind / region phrasing comes from one source of truth on the backend. Aggregate mode and non-meta achievements continue to use the existing `tournaments[]` rendering path.
+
+**Deploy order:**
+```powershell
+cd C:\Users\pitag\Documents\neos-city
+node run_migration.js backend/src/db/migrations/cleanup_stale_meta_contributors.sql
+node run_migration.js backend/src/db/migrations/backfill_meta_match_ids.sql
+# restart backend (npm run dev)
+# frontend hot-reload should pick up automatically
+```
+
+The first migration drops stale opponents (the dark_horse_kalos contributor entries the user flagged disappear). The second fills in NULL match_id values so the modal can link the qualifying match for each opponent — Elite Trainer was a clear offender, every opponent rendered "Match context unavailable" because match_id was never written for those rows. Both migrations are idempotent.
+
+Going forward `recalculate_elo.js` upserts contributor rows with `ON CONFLICT (player_id, achievement_id, opponent_id) DO UPDATE SET match_id = COALESCE(...)` so NULL match_ids self-heal on subsequent recalcs without overwriting good data.
+
+Optional follow-up: open Pitaguy's profile, click `Kalos Dark Horse` and `Kalos Elite Trainer`. Dark Horse should list only Kalos+ Champion opponents with the qualifying match linked; Elite Trainer should now show the qualifying match per opponent instead of "Match context unavailable."
+
+#### Known gap: aggregate (no-player) view
+
+When the modal is opened from `/achievements` (no `player_id`), meta achievements still use the legacy `tournaments[]` path. The aggregate query joins `pa.tournament_id` directly, so each row is "player X unlocked this achievement at tournament Y" — opponent-level enrichment isn't relevant there. If we ever want a "show me everyone who qualifies and how" aggregate view, that's a separate, larger query and modal layout.
+
 ### Current state (as of Apr 30 2026 — Recent Achievements feed cleaned up)
 
 #### What just shipped this session

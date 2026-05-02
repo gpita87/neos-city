@@ -46,63 +46,57 @@ function SeriesBadge({ series }) {
   );
 }
 
-// How many unique opponents an achievement requires, derived from its ID.
-// Mirrors the META_TYPES.required field on the backend so we don't need an
-// extra round-trip to display "X of N defeated".
-const META_REQUIRED = {
-  eight_badges:   { required: 8, kind: 'Gym Leaders', verb: 'Defeated' },
-  elite_trainer:  { required: 4, kind: 'Elite Four',  verb: 'Defeated' },
-  rival_battle:   { required: 1, kind: 'Rival',       verb: 'Took a game from' },
-  smell_ya_later: { required: 1, kind: 'Rival',       verb: 'Defeated' },
-  foreshadowing:  { required: 1, kind: 'Champion',    verb: 'Took a game from' },
-  dark_horse:     { required: 1, kind: 'Champion',    verb: 'Defeated' },
-};
-
-function metaTypeFromId(id) {
-  if (!id) return null;
-  for (const key of Object.keys(META_REQUIRED)) {
-    if (id.startsWith(`${key}_`)) return key;
-  }
-  return null;
-}
-
-// Region tier baked into the achievement ID — last segment.
-function regionFromId(id) {
-  if (!id) return null;
-  const parts = String(id).split('_');
-  return parts[parts.length - 1];
-}
-
 const REGION_LABELS_LOCAL = {
   kanto: 'Kanto', johto: 'Johto', hoenn: 'Hoenn', sinnoh: 'Sinnoh',
   unova: 'Unova', kalos: 'Kalos', alola: 'Alola', galar: 'Galar', paldea: 'Paldea',
 };
 
+// Region tier colors for the qualifying-tier chip and the highest-region
+// chips. Mirrors PlayerProfile's REGION_COLORS but kept local so the modal
+// stays self-contained.
+const REGION_CHIP_COLORS = {
+  kanto:  'bg-red-900/30 text-red-300 border-red-800/40',
+  johto:  'bg-purple-900/30 text-purple-300 border-purple-800/40',
+  hoenn:  'bg-emerald-900/30 text-emerald-300 border-emerald-800/40',
+  sinnoh: 'bg-blue-900/30 text-blue-300 border-blue-800/40',
+  unova:  'bg-slate-700/40 text-slate-200 border-slate-600/50',
+  kalos:  'bg-sky-900/30 text-sky-300 border-sky-800/40',
+  alola:  'bg-orange-900/30 text-orange-300 border-orange-800/40',
+  galar:  'bg-pink-900/30 text-pink-300 border-pink-800/40',
+  paldea: 'bg-fuchsia-900/30 text-fuchsia-300 border-fuchsia-800/40',
+};
+
+const TIER_DISPLAY = [
+  { key: 'gym_leader', icon: '🏟️', name: 'Gym Leader' },
+  { key: 'elite_four', icon: '4️⃣', name: 'Elite Four' },
+  { key: 'rival',      icon: '🔥', name: 'Rival' },
+  { key: 'champion',   icon: '👑', name: 'Champion' },
+];
+
 /**
- * Header shown above the opponent list for meta achievements.
- * Spells out the rule, the count, and progress toward (or past) unlock.
+ * Header shown above the opponent list for meta achievements. Driven by the
+ * backend's `meta` payload, which spells out the verb, kind, region, and
+ * required count. Falls back to neutral phrasing if the payload is partial.
  */
-function MetaExplainer({ achievement, count }) {
-  const metaKey = metaTypeFromId(achievement.id);
-  const meta = metaKey ? META_REQUIRED[metaKey] : null;
-  const region = regionFromId(achievement.id);
-  const regionName = REGION_LABELS_LOCAL[region] || region;
-
-  // Region tier of opponents that count: kanto means "any", everything else is "X+"
-  const tierPhrase = region === 'kanto'
-    ? `any ${meta?.kind || 'qualifying opponents'}`
-    : `${meta?.kind || 'qualifying opponents'} at ${regionName}+`;
-
+function MetaExplainer({ meta, count }) {
   const required = meta?.required ?? 1;
   const unlocked = count >= required;
+  const regionName = meta?.region_name || '';
+  const kindLabel = meta?.kind_label || 'qualifying opponents';
+  const verb = meta?.verb || 'Faced';
+
+  // "any Gym Leader" for Kanto-tier achievements, otherwise "Gym Leaders at Kalos+".
+  const tierPhrase = meta?.region === 'kanto'
+    ? `any ${kindLabel.replace(/s$/, '')}`
+    : `${kindLabel} at ${regionName}+`;
 
   return (
     <div className="bg-cyan-900/10 border border-cyan-800/30 rounded-lg p-3 mb-4">
       <p className="text-xs text-slate-300 leading-relaxed">
         <span className="text-cyan-300 font-medium">How this is earned:</span>{' '}
-        {meta?.verb || 'Faced'}{' '}
+        {verb}{' '}
         {required === 1 ? 'a ' : `${required} unique `}
-        {tierPhrase}{required === 1 ? '' : ''}.
+        {tierPhrase}.
       </p>
       <div className="mt-2 flex items-center gap-2">
         <span className="text-[11px] text-slate-400 font-display tracking-wider">PROGRESS</span>
@@ -120,7 +114,58 @@ function MetaExplainer({ achievement, count }) {
           />
         </div>
       </div>
+      {meta?.stale_filtered > 0 && (
+        <p className="mt-2 text-[10px] text-slate-500 italic">
+          {meta.stale_filtered} historical contributor row{meta.stale_filtered === 1 ? '' : 's'} hidden — opponent no longer qualifies at this tier.
+        </p>
+      )}
     </div>
+  );
+}
+
+/**
+ * Pills showing an opponent's highest region across all 4 placement tiers.
+ * Hides tiers the opponent hasn't reached.
+ */
+function HighestRegionsRow({ highestRegions }) {
+  if (!highestRegions) return null;
+  const visible = TIER_DISPLAY.filter(t => highestRegions[t.key]);
+  if (visible.length === 0) return null;
+  return (
+    <div className="flex flex-wrap gap-1.5 mt-1.5">
+      {visible.map(t => {
+        const region = highestRegions[t.key];
+        const color = REGION_CHIP_COLORS[region] || 'bg-white/5 text-slate-400 border-slate-700/40';
+        return (
+          <span
+            key={t.key}
+            className={`inline-flex items-center gap-1 px-1.5 py-0.5 rounded border text-[10px] ${color}`}
+            title={`${REGION_LABELS_LOCAL[region] || region} ${t.name}`}
+          >
+            <span>{t.icon}</span>
+            <span>{REGION_LABELS_LOCAL[region] || region}</span>
+          </span>
+        );
+      })}
+    </div>
+  );
+}
+
+/**
+ * Big chip showing why an opponent qualifies for the current achievement —
+ * e.g. "👑 Kalos Champion". Coloured by the qualifying region tier.
+ */
+function QualifyingBadge({ qualifying }) {
+  if (!qualifying) return null;
+  const color = REGION_CHIP_COLORS[qualifying.region] || 'bg-white/5 text-slate-400 border-slate-700/40';
+  return (
+    <span
+      className={`inline-flex items-center gap-1.5 px-2 py-0.5 rounded-md border text-[11px] font-medium ${color}`}
+      title={`Qualifies because they hold ${qualifying.region_name} ${qualifying.tier_name}`}
+    >
+      <span>{qualifying.tier_icon || '👑'}</span>
+      <span>{qualifying.region_name} {qualifying.tier_name}</span>
+    </span>
   );
 }
 
@@ -159,40 +204,19 @@ export default function AchievementTournamentsModal({ achievement, playerId = nu
 
   const tournaments = data?.tournaments || [];
   const mode = data?.mode;
+  const meta = data?.meta || null;
 
   // For meta achievements, the natural unit is the unique opponent — you
   // earn 8 Badges by defeating eight different Gym Leaders, and the modal
-  // should reflect that. We pivot from tournament-per-row to opponent-per-row
-  // and list the tournaments where each qualifying interaction took place.
+  // should reflect that. The backend now returns a structured `meta` payload
+  // for meta achievements in player mode; older responses (or aggregate
+  // mode) still go through the legacy `tournaments[]` path.
   const isMeta = achievement.category === 'meta';
+  const useMetaView = mode === 'player' && isMeta && meta && Array.isArray(meta.opponents);
 
   let displayRows = tournaments;
-  let opponentGroups = null;
 
-  if (mode === 'player' && isMeta) {
-    // Build opponent → { id, name, username, tournaments[] } map
-    const byOpp = new Map();
-    for (const t of tournaments) {
-      const oid = t.opponent_id;
-      if (!oid) continue; // meta rows always carry an opponent
-      if (!byOpp.has(oid)) {
-        byOpp.set(oid, {
-          id: oid,
-          name: t.opponent_name,
-          username: t.opponent_username,
-          tournaments: [],
-        });
-      }
-      const grp = byOpp.get(oid);
-      // Avoid double-listing the same tournament for one opponent
-      if (t.id != null && !grp.tournaments.find(x => x.id === t.id && x.match_id === t.match_id)) {
-        grp.tournaments.push(t);
-      } else if (t.id == null) {
-        grp.tournaments.push(t);
-      }
-    }
-    opponentGroups = [...byOpp.values()];
-  } else if (mode === 'player') {
+  if (mode === 'player' && !useMetaView) {
     // Match-based + placement: group tournament rows, aggregate opponents inline
     const byId = new Map();
     for (const t of tournaments) {
@@ -254,92 +278,110 @@ export default function AchievementTournamentsModal({ achievement, playerId = nu
           )}
 
           {/* ── Meta-achievement view (player mode): grouped by unique opponent ── */}
-          {data && mode === 'player' && isMeta && opponentGroups && (
+          {data && useMetaView && (
             <>
-              <MetaExplainer achievement={achievement} count={opponentGroups.length} />
-              {opponentGroups.length === 0 ? (
+              <MetaExplainer meta={meta} count={meta.opponents.length} />
+              {meta.opponents.length === 0 ? (
                 <p className="text-slate-500 text-sm">
                   No qualifying opponents on file.
-                  This achievement may have been unlocked before opponent tracking was added.
+                  This achievement may have been unlocked before opponent tracking was added,
+                  or earlier contributors no longer hold a qualifying tier.
                 </p>
               ) : (
                 <ul className="space-y-2">
-                  {opponentGroups.map((opp, oidx) => (
-                    <li
-                      key={`opp_${opp.id ?? oidx}`}
-                      className="bg-white/5 border border-[#1a2744] rounded-lg p-3"
-                    >
-                      <div className="flex items-center gap-2 mb-1.5">
-                        <span className="shrink-0 w-7 h-7 rounded-full bg-cyan-500/15 border border-cyan-500/30 text-cyan-300 text-xs font-display flex items-center justify-center">
-                          {oidx + 1}
-                        </span>
-                        {opp.id ? (
-                          <Link
-                            to={`/players/${opp.id}`}
-                            onClick={onClose}
-                            className="text-sm font-medium text-white hover:text-cyan-400 truncate"
-                          >
-                            {opp.name || opp.username || `Player #${opp.id}`}
-                          </Link>
-                        ) : (
-                          <span className="text-sm text-slate-500 italic">Opponent unknown</span>
-                        )}
-                      </div>
-                      {opp.tournaments.length === 0 ? (
-                        <p className="text-[11px] text-slate-500 ml-9 italic">Tournament context unavailable.</p>
-                      ) : (
-                        <ul className="space-y-1 ml-9">
-                          {opp.tournaments.map((t, tidx) => (
-                            <li
-                              key={`opp_${opp.id}_t_${t.id ?? tidx}_${t.match_id ?? tidx}`}
-                              className="flex items-center gap-2 text-[11px] text-slate-400 flex-wrap"
+                  {meta.opponents.map((opp, oidx) => {
+                    const t = opp.match?.tournament;
+                    const score = opp.match
+                      ? (opp.match.player1_id === playerId
+                          ? `${opp.match.player1_score}–${opp.match.player2_score}`
+                          : `${opp.match.player2_score}–${opp.match.player1_score}`)
+                      : null;
+                    return (
+                      <li
+                        key={`opp_${opp.opponent_id ?? oidx}`}
+                        className="bg-white/5 border border-[#1a2744] rounded-lg p-3"
+                      >
+                        {/* Row 1: index, name, qualifying badge */}
+                        <div className="flex items-center gap-2 flex-wrap">
+                          <span className="shrink-0 w-7 h-7 rounded-full bg-cyan-500/15 border border-cyan-500/30 text-cyan-300 text-xs font-display flex items-center justify-center">
+                            {oidx + 1}
+                          </span>
+                          {opp.opponent_id ? (
+                            <Link
+                              to={`/players/${opp.opponent_id}`}
+                              onClick={onClose}
+                              className="text-sm font-medium text-white hover:text-cyan-400 truncate"
                             >
-                              <span className="text-slate-600">↳</span>
-                              {t.id ? (
-                                <Link
-                                  to={`/tournaments/${t.id}`}
-                                  onClick={onClose}
-                                  className="text-slate-300 hover:text-cyan-400 truncate"
-                                >
-                                  {t.name}
-                                </Link>
-                              ) : (
-                                <span className="text-slate-500 italic">Tournament unknown</span>
-                              )}
-                              {t.series && <SeriesBadge series={t.series} />}
-                              {t.completed_at && (
-                                <span className="text-slate-600">{formatDate(t.completed_at)}</span>
-                              )}
-                              {t.bracket_url && (
-                                <a
-                                  href={t.bracket_url}
-                                  target="_blank"
-                                  rel="noopener noreferrer"
-                                  className="text-cyan-400 hover:text-cyan-300 hover:underline"
-                                  title={`Open bracket on ${t.bracket_host || 'the original site'}`}
-                                >
-                                  🔗 {t.bracket_host || 'Bracket'}
-                                </a>
-                              )}
-                            </li>
-                          ))}
-                        </ul>
-                      )}
-                    </li>
-                  ))}
+                              {opp.opponent_name || opp.opponent_username || `Player #${opp.opponent_id}`}
+                            </Link>
+                          ) : (
+                            <span className="text-sm text-slate-500 italic">Opponent unknown</span>
+                          )}
+                          <QualifyingBadge qualifying={opp.qualifying} />
+                        </div>
+
+                        {/* Row 2: full highest-region pills (context) */}
+                        <div className="ml-9">
+                          <HighestRegionsRow highestRegions={opp.highest_regions} />
+                        </div>
+
+                        {/* Row 3: where this qualifying win/game happened */}
+                        {opp.match ? (
+                          <div className="ml-9 mt-2 flex items-center gap-2 text-[11px] text-slate-400 flex-wrap">
+                            <span className="text-slate-600">↳</span>
+                            {t?.id ? (
+                              <Link
+                                to={`/tournaments/${t.id}`}
+                                onClick={onClose}
+                                className="text-slate-300 hover:text-cyan-400 truncate"
+                              >
+                                {t.name}
+                              </Link>
+                            ) : (
+                              <span className="text-slate-500 italic">Tournament unknown</span>
+                            )}
+                            {t?.series && <SeriesBadge series={t.series} />}
+                            {t?.completed_at && (
+                              <span className="text-slate-600">{formatDate(t.completed_at)}</span>
+                            )}
+                            {score && (
+                              <span className="text-slate-500 font-display">
+                                {score}
+                              </span>
+                            )}
+                            {t?.bracket_url && (
+                              <a
+                                href={t.bracket_url}
+                                target="_blank"
+                                rel="noopener noreferrer"
+                                className="text-cyan-400 hover:text-cyan-300 hover:underline"
+                                title={`Open bracket on ${t.bracket_host || 'the original site'}`}
+                              >
+                                🔗 {t.bracket_host || 'Bracket'}
+                              </a>
+                            )}
+                          </div>
+                        ) : (
+                          <p className="ml-9 mt-2 text-[11px] text-slate-500 italic">
+                            Match context unavailable.
+                          </p>
+                        )}
+                      </li>
+                    );
+                  })}
                 </ul>
               )}
             </>
           )}
 
           {/* ── Standard view (placement, match-based, aggregate) ── */}
-          {data && !(mode === 'player' && isMeta) && displayRows.length === 0 && (
+          {data && !useMetaView && displayRows.length === 0 && (
             <p className="text-slate-500 text-sm">
               No contributing tournaments on file.
               {mode === 'player' && ' This achievement may have been unlocked before tournament tracking was added.'}
             </p>
           )}
-          {data && !(mode === 'player' && isMeta) && displayRows.length > 0 && (
+          {data && !useMetaView && displayRows.length > 0 && (
             <ul className="space-y-2">
               {displayRows.map((t, idx) => (
                 <li
@@ -426,12 +468,12 @@ export default function AchievementTournamentsModal({ achievement, playerId = nu
         {/* Footer */}
         <div className="px-5 py-3 border-t border-[#1a2744] flex items-center justify-between text-[11px] text-slate-500">
           <span>
-            {data && mode === 'player' && isMeta && opponentGroups && opponentGroups.length > 0 && (
+            {data && useMetaView && meta.opponents.length > 0 && (
               <>
-                {opponentGroups.length} {opponentGroups.length === 1 ? 'opponent' : 'unique opponents'}
+                {meta.opponents.length} {meta.opponents.length === 1 ? 'opponent' : 'unique opponents'}
               </>
             )}
-            {data && !(mode === 'player' && isMeta) && displayRows.length > 0 && (
+            {data && !useMetaView && displayRows.length > 0 && (
               <>
                 {displayRows.length} {displayRows.length === 1 ? 'tournament' : 'tournaments'}
                 {mode === 'aggregate' && ' • across all holders'}

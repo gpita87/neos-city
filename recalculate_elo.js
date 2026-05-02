@@ -776,9 +776,15 @@ const OFFLINE_WEIGHTS = {
       const oids = chunk.map(r => r.opponent_id);
       const mids = chunk.map(r => r.match_id);
       await db.query(
+        // Upsert with COALESCE-protected match_id: if an existing row was
+        // written by an older recalc with NULL match_id, this run fills it
+        // in. Existing non-null match_ids are never overwritten. Without
+        // this, NULL match_id rows stay frozen and the modal can't link the
+        // qualifying match.
         `INSERT INTO achievement_defeated_opponents (player_id, achievement_id, opponent_id, match_id)
          SELECT unnest($1::int[]), unnest($2::text[]), unnest($3::int[]), unnest($4::int[])
-         ON CONFLICT DO NOTHING`,
+         ON CONFLICT (player_id, achievement_id, opponent_id) DO UPDATE
+           SET match_id = COALESCE(achievement_defeated_opponents.match_id, EXCLUDED.match_id)`,
         [pids, aids, oids, mids]
       );
     }

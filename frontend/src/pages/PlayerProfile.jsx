@@ -215,6 +215,7 @@ export default function PlayerProfile() {
                     name: a.name,
                     description: a.description,
                     icon: a.icon,
+                    category: a.category,
                   })}
                   className="flex items-center gap-3 p-2 rounded-lg bg-white/5 hover:bg-white/10 group relative text-left transition-colors"
                   title="Click to see contributing tournaments"

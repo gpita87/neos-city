@@ -1,6 +1,15 @@
 const express = require('express');
 const router = express.Router();
-const { ACHIEVEMENTS, ACHIEVEMENT_MAP, REGIONS, PLACEMENT_TIERS, highestRegions } = require('../services/achievements');
+const {
+  ACHIEVEMENTS,
+  ACHIEVEMENT_MAP,
+  REGIONS,
+  REGION_INDEX,
+  PLACEMENT_TIERS,
+  META_TYPES,
+  regionsAtOrAbove,
+  highestRegions,
+} = require('../services/achievements');
 const db = require('../db');
 
 // ─── Helpers ─────────────────────────────────────────────────────────────────
@@ -244,26 +253,194 @@ router.get('/:id/tournaments', async (req, res) => {
         tier === 'foreshadowing'  || tier === 'dark_horse' ||
         tier === 'eight_badges'   || tier === 'elite_trainer'
       ) {
-        const { rows } = await db.query(`
-          SELECT ${T_COLS},
-                 ado.match_id, ado.opponent_id,
-                 opp.display_name      AS opponent_name,
+        // 1. Pull every contributor row on file for this (player, achievement).
+        //    These were written during recalc when the opponent qualified, but
+        //    can become stale if logic / opponent state changed since (the
+        //    additive recalc never deletes them). We re-validate below.
+        const { rows: contribRows } = await db.query(`
+          SELECT ado.opponent_id, ado.match_id,
+                 opp.display_name       AS opponent_name,
                  opp.challonge_username AS opponent_username,
-                 m.player1_score, m.player2_score, m.player1_id, m.player2_id, m.winner_id
+                 opp.region             AS opponent_region
           FROM achievement_defeated_opponents ado
-          LEFT JOIN matches m       ON m.id = ado.match_id
-          LEFT JOIN tournaments t   ON t.id = m.tournament_id
-          LEFT JOIN players opp     ON opp.id = ado.opponent_id
+          LEFT JOIN players opp ON opp.id = ado.opponent_id
           WHERE ado.player_id = $1 AND ado.achievement_id = $2
-          ORDER BY t.completed_at ASC NULLS LAST, ado.opponent_id ASC
+          ORDER BY ado.opponent_id ASC
         `, [playerId, ach.id]);
 
-        // For meta achievements (one row per unique opponent, no specific
-        // match), some rows may be missing tournament context — keep them
-        // anyway so the modal can still surface the opponent.
-        tournaments = rows
-          .filter(r => r.id != null) // only rows where a tournament joined
-          .map(decorateTournament);
+        // 2. Pull match + tournament context for each match_id.
+        const matchIds = contribRows.map(r => r.match_id).filter(id => id != null);
+        const matchMap = new Map();
+        if (matchIds.length > 0) {
+          const { rows: matchRows } = await db.query(`
+            SELECT m.id AS match_id,
+                   m.player1_id, m.player2_id, m.winner_id,
+                   m.player1_score, m.player2_score,
+                   ${T_COLS}
+            FROM matches m
+            LEFT JOIN tournaments t ON t.id = m.tournament_id
+            WHERE m.id = ANY($1::int[])
+          `, [matchIds]);
+          for (const r of matchRows) matchMap.set(r.match_id, r);
+        }
+
+        // 3. Pull every achievement held by these opponents — used to (a)
+        //    confirm they currently qualify and (b) compute their highest
+        //    region tier per placement tier for display.
+        const oppIds = [...new Set(contribRows.map(r => r.opponent_id))];
+        const oppAchMap = new Map();
+        if (oppIds.length > 0) {
+          const { rows: oppAchRows } = await db.query(`
+            SELECT player_id, achievement_id
+            FROM player_achievements
+            WHERE player_id = ANY($1::int[])
+          `, [oppIds]);
+          for (const r of oppAchRows) {
+            if (!oppAchMap.has(r.player_id)) oppAchMap.set(r.player_id, []);
+            oppAchMap.get(r.player_id).push(r.achievement_id);
+          }
+        }
+
+        // 4. Build the meta payload — one entry per *qualifying* opponent.
+        //    Stale opponents (no current achievement at the target tier and
+        //    region) are dropped. Each opponent carries their highest
+        //    qualifying region (most impressive label) and their full
+        //    highest-region map across all 4 placement tiers.
+        const metaTypeId = ach.tier;
+        const metaType = META_TYPES.find(m => m.id === metaTypeId);
+        const targetTier = metaType?.targetTier;
+        const targetTierMeta = PLACEMENT_TIERS.find(t => t.id === targetTier);
+        const minRegion = ach.region;
+        const validRegionIds = regionsAtOrAbove(minRegion);
+        const validRegionSet = new Set(validRegionIds);
+
+        // De-dupe by opponent — recalc stores the earliest qualifying match,
+        // so usually one row per opp, but be defensive.
+        const seenOpps = new Set();
+        const opponents = [];
+
+        for (const cr of contribRows) {
+          if (seenOpps.has(cr.opponent_id)) continue;
+          seenOpps.add(cr.opponent_id);
+
+          const oppAchs = oppAchMap.get(cr.opponent_id) || [];
+
+          // Find the highest region this opponent currently holds at the
+          // target tier. We walk REGIONS top-down so we naturally land on
+          // the most impressive qualifying tier.
+          let qualifyingRegionId = null;
+          for (let i = REGIONS.length - 1; i >= 0; i--) {
+            const region = REGIONS[i];
+            if (!validRegionSet.has(region.id)) continue;
+            const expected = `global_${targetTier}_${region.id}`;
+            if (oppAchs.includes(expected)) {
+              qualifyingRegionId = region.id;
+              break;
+            }
+          }
+
+          // Stale row: skip it. The opponent no longer holds an achievement
+          // at the required tier+region.
+          if (!qualifyingRegionId) continue;
+
+          const qualifyingRegion = REGIONS.find(r => r.id === qualifyingRegionId);
+          const oppHighest = highestRegions(oppAchs);
+
+          // Match context (may be null for legacy contributor rows with no
+          // match_id, or rows whose match was deleted).
+          //
+          // The matchRow SELECT aliases m.id AS match_id and pulls `${T_COLS}`
+          // unaliased — so `id` in this row is actually the tournament id
+          // (from t.id) and `match_id` is the match id.
+          let matchPayload = null;
+          if (cr.match_id != null && matchMap.has(cr.match_id)) {
+            const r = matchMap.get(cr.match_id);
+            const tournamentRow = decorateTournament({
+              id: r.id, // t.id from T_COLS
+              name: r.name,
+              series: r.series,
+              completed_at: r.completed_at,
+              participants_count: r.participants_count,
+              is_offline: r.is_offline,
+              source: r.source,
+              challonge_url: r.challonge_url,
+              startgg_slug: r.startgg_slug,
+              tonamel_id: r.tonamel_id,
+              liquipedia_url: r.liquipedia_url,
+            });
+            matchPayload = {
+              match_id: cr.match_id,
+              player1_id: r.player1_id,
+              player2_id: r.player2_id,
+              winner_id: r.winner_id,
+              player1_score: r.player1_score,
+              player2_score: r.player2_score,
+              tournament: tournamentRow,
+            };
+          }
+
+          opponents.push({
+            opponent_id: cr.opponent_id,
+            opponent_name: cr.opponent_name,
+            opponent_username: cr.opponent_username,
+            opponent_region: cr.opponent_region,
+            qualifying: {
+              tier: targetTier,
+              tier_name: targetTierMeta?.name || targetTier,
+              tier_icon: targetTierMeta?.icon || '',
+              region: qualifyingRegionId,
+              region_name: qualifyingRegion?.name || qualifyingRegionId,
+              region_numeral: qualifyingRegion?.numeral || '',
+              achievement_id: `global_${targetTier}_${qualifyingRegionId}`,
+            },
+            highest_regions: oppHighest,
+            match: matchPayload,
+          });
+        }
+
+        // Sort by qualifying region rank (highest first), then by opponent name.
+        opponents.sort((a, b) => {
+          const ra = REGION_INDEX[a.qualifying.region] ?? -1;
+          const rb = REGION_INDEX[b.qualifying.region] ?? -1;
+          if (rb !== ra) return rb - ra;
+          return (a.opponent_name || '').localeCompare(b.opponent_name || '');
+        });
+
+        // Stash on the response — not the legacy `tournaments` array.
+        // The modal recognises `meta` and switches to the opponent-grouped
+        // layout. We still emit `tournaments: []` so the response shape
+        // stays predictable.
+        return res.json({
+          achievement: {
+            id: ach.id,
+            name: ach.name,
+            description: ach.description,
+            icon: ach.icon,
+            category: ach.category,
+            scope: ach.scope,
+            tier: ach.tier,
+            region: ach.region,
+          },
+          mode: 'player',
+          player_id: playerId,
+          meta: {
+            target_tier: targetTier,
+            target_tier_name: targetTierMeta?.name || targetTier,
+            target_tier_icon: targetTierMeta?.icon || '',
+            region: minRegion,
+            region_name: REGIONS.find(r => r.id === minRegion)?.name || minRegion,
+            region_numeral: REGIONS.find(r => r.id === minRegion)?.numeral || '',
+            required: metaType?.required ?? 1,
+            mode: metaType?.mode || 'match',
+            verb: metaType?.mode === 'match' ? 'Defeated' : 'Took a game from',
+            kind_label: targetTierMeta?.name
+              ? `${targetTierMeta.name}${(metaType?.required ?? 1) > 1 ? 's' : ''}`
+              : 'qualifying opponents',
+            opponents,
+            stale_filtered: contribRows.length - opponents.length,
+          },
+          tournaments: [],
+        });
       }
 
       // ── Special: World Traveler (multi_series) — one per distinct series ──
