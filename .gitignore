@@ -89,3 +89,11 @@ backups/
 .cache/
 .tmp/
 tmp/
+
+# ========================================================================
+# Per-worktree ephemeral files (see AGENT_CONTEXT.md "Multi-agent worktree workflow")
+# WORKTREE_SUMMARY.md is the per-agent writeup. It exists only inside
+# worktrees spawned by spawn-worktree.js and is read by merge-worktree.js
+# at merge time. It should never land in main's history.
+# ========================================================================
+WORKTREE_SUMMARY.md

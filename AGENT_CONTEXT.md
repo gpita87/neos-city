@@ -19,6 +19,48 @@ This file captures decisions, constraints, and community knowledge that aren't o
 
 ---
 
+## Multi-agent worktree workflow
+
+**The problem this solves.** Running two agents against the same working directory at once has caused repeated mid-edit truncation — files losing their tail, then surgical repairs producing duplicate-tail follow-ons. The diagnosed cause is shared Windows-mount I/O between sandboxes (mount-layer write buffering, NTFS metadata contention, Defender real-time scanning), not file-level contention. So the mitigation is: **don't run two agents against the same on-disk path**. Each parallel agent gets its own worktree.
+
+**Setup at the start of a parallel session.** From the main worktree:
+
+```powershell
+cd C:\Users\pitag\Documents\neos-city
+node spawn-worktree.js <agent-name>
+```
+
+This creates branch `agent/<agent-name>` off `main`, materializes a worktree at `C:\Users\pitag\Documents\neos-city-worktrees\<agent-name>`, runs `npm install` in /, /backend, and /frontend, and writes a `WORKTREE_SUMMARY.md` template. The script prints the worktree path — mount THAT folder in the new Cowork session, not the main directory.
+
+**Rules when you (the agent) are running inside a worktree.** Detect with `git rev-parse --show-toplevel`. If the result is anything under `neos-city-worktrees/`, you are in a worktree, and:
+
+- **Commit your work to your own branch** (`agent/<name>`). Never push, never merge into main yourself — Gabriel reviews the SUMMARY and runs `merge-worktree.js`.
+- **Keep `WORKTREE_SUMMARY.md` up to date** as you go. It's what Gabriel reads before merging. Sections: Goal, Changes, How to verify, Known gaps.
+- **Do NOT run the dev server** (`npm run dev` in `backend/` or `frontend/`). Ports 3001 and 5173 are bound by whichever worktree is the "live" one — usually main. If you need to test something live, ask Gabriel to do it from main, or describe what to spot-check in the SUMMARY.
+- **Do NOT run migrations, `recalculate_elo.js`, `pull_new.js`, `seed_*.js`, or anything that mutates the Supabase DB.** The DB is shared across all worktrees — there is no "branch isolation" for state. Flag DB-mutating work in the SUMMARY's "How to verify" section so Gabriel can run it after the merge.
+- **Static analysis only:** `node -c <file>` for syntax, `node --check` for parsing, reading code, writing code. Anything that hits the network or the DB belongs on the main worktree.
+
+**Merging back.** When the worktree is ready, Gabriel runs (from the main directory):
+
+```powershell
+node merge-worktree.js <agent-name>
+```
+
+That script verifies both sides are clean, prints the SUMMARY (which is gitignored, so it never lands in main's history), shows `git diff --stat`, optionally the full diff, then on confirmation runs `git merge --squash`. The changes appear STAGED in main's working tree so Gabriel can review them in IntelliJ before committing. The script does NOT commit, does NOT remove the worktree, and does NOT delete the branch — it prints the cleanup commands for Gabriel to run after he's satisfied with the merge:
+
+```powershell
+git commit -m "Merge agent/<agent-name>"
+git push
+git worktree remove ..\neos-city-worktrees\<agent-name> --force
+git branch -D agent/<agent-name>
+```
+
+To abandon the merge instead, `git reset --hard HEAD` un-stages everything; the worktree and branch are still around to retry.
+
+**If something goes wrong.** Worktrees are cheap. If a worktree is in a confused state, `git worktree remove --force <path>` followed by `git branch -D agent/<name>` resets cleanly — the main repo and other worktrees are untouched. The mitigation pattern recommended elsewhere in this file (`git checkout -- <file>` for truncation recovery) still applies inside a worktree.
+
+---
+
 ## What This App Is
 
 A community hub for **Pokkén Tournament** (a Pokémon fighting game). It pulls tournament data from Challonge, assigns ratings and achievements to players, and tracks career stats. The intended audience is the competitive Pokkén community — players who know each other, care about records, and have been competing for years.
