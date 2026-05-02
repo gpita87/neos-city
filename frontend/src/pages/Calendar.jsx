@@ -22,6 +22,23 @@ const SERIES_META = {
 
 const meta = (series) => SERIES_META[series] || SERIES_META.other;
 
+/* ── Per-series landing pages (organizer tournament listings) ──────── *
+ * Used for upcoming/scheduled placeholder events. Clicking a placeholder
+ * pill opens the organizer's tournaments page in a new tab, where players
+ * can find the registration link for the next event. */
+const SERIES_LANDING_URL = {
+  ffc:            'https://challonge.com/lv-LV/communities/PokkenFFC/tournaments',
+  rtg_na:         'https://challonge.com/users/rigz_/tournaments',
+  dcm:            'https://challonge.com/users/devlinhartfgc/tournaments',
+  tcc:            'https://challonge.com/lv-LV/users/auradiance/tournaments',
+  eotr:           'https://challonge.com/users/rigz_/tournaments',
+  nezumi:         'https://tonamel.com/organization/OhUc2?game=pokken',
+  nezumi_rookies: 'https://tonamel.com/organization/OhUc2?game=pokken',
+  // Heaven's Arena lives in Discord — invite link works for everyone,
+  // including players not yet in the server.
+  ha:             'https://discord.gg/2vKGgyWh',
+};
+
 /* ── User timezone (computed once on load) ───────────────────────────── */
 const USER_TZ = (() => {
   try { return Intl.DateTimeFormat().resolvedOptions().timeZone || 'UTC'; }
@@ -60,6 +77,8 @@ const SERIES_SCHEDULES = [
   { series: 'tcc',        dayOfWeek: 6, weekInterval: 2, hour: 15, minute: 0,  anchorDate: '2026-03-28' },
   // Nezumi (Mouse Cup): 3rd Saturday of each month at 8pm JST (= 11:00 UTC year-round, since JP doesn't observe DST). That's 4am PDT / 3am PST. Confirmed dates: 2/21, 3/21, 4/18.
   { series: 'nezumi',     kind: 'monthlyNth', nth: 3, dayOfWeek: 6, hour: 11, minute: 0,  anchorDate: '2026-04-18' },
+  // Heaven's Arena: Tuesdays at 4pm PDT (23:00 UTC during DST). Per the DST TODO above, the UTC hour will need a -1 shift in standard time if HA stays at 4pm wall-clock PT year-round.
+  { series: 'ha',         dayOfWeek: 2, weekInterval: 1, hour: 23, minute: 0,  anchorDate: '2026-05-05' },
 ];
 
 /* ── Helpers ────────────────────────────────────────────────────────── */
@@ -171,6 +190,12 @@ function generateRecurring(schedule, rangeStart, rangeEnd, existingDates) {
 /* ── Event pill component ──────────────────────────────────────────── */
 function EventPill({ event, compact = false }) {
   const m = meta(event.series);
+  const landingUrl = SERIES_LANDING_URL[event.series];
+  const isClickable = !event.isPlaceholder || !!landingUrl;
+  const baseTitle = `${event.name}${event.hour != null ? ` — ${String(event.hour).padStart(2,'0')}:${String(event.minute ?? 0).padStart(2,'0')} ${TZ_ABBR}` : ''}`;
+  const pillTitle = event.isPlaceholder && landingUrl
+    ? `${baseTitle} — opens organizer page`
+    : baseTitle;
   const inner = (
     <div
       className={`
@@ -179,10 +204,10 @@ function EventPill({ event, compact = false }) {
           ? `border border-dashed ${m.border} ${m.text} bg-transparent opacity-70`
           : `${m.color}/20 ${m.text} border ${m.border}/40`
         }
-        ${!event.isPlaceholder ? 'hover:brightness-125 cursor-pointer' : 'cursor-default'}
+        ${isClickable ? 'hover:brightness-125 cursor-pointer' : 'cursor-default'}
         transition-all
       `}
-      title={`${event.name}${event.hour != null ? ` — ${String(event.hour).padStart(2,'0')}:${String(event.minute ?? 0).padStart(2,'0')} ${TZ_ABBR}` : ''}`}
+      title={pillTitle}
     >
       <span className={`w-2 h-2 rounded-full flex-shrink-0 ${m.color}`} />
       {compact
@@ -199,6 +224,19 @@ function EventPill({ event, compact = false }) {
 
   if (!event.isPlaceholder && event.id && !String(event.id).startsWith('placeholder')) {
     return <Link to={`/tournaments/${event.id}`} className="block">{inner}</Link>;
+  }
+  if (event.isPlaceholder && landingUrl) {
+    return (
+      <a
+        href={landingUrl}
+        target="_blank"
+        rel="noopener noreferrer"
+        className="block"
+        onClick={(e) => e.stopPropagation()}
+      >
+        {inner}
+      </a>
+    );
   }
   return inner;
 }
@@ -534,7 +572,7 @@ export default function Calendar() {
       {/* Title */}
       <div>
         <h1 className="font-display text-2xl tracking-widest text-cyan-400 mb-1">CALENDAR</h1>
-        <p className="text-sm text-slate-500">Past events link to results. Dashed outlines are upcoming scheduled events.</p>
+        <p className="text-sm text-slate-500">Past events link to results. Dashed outlines are upcoming scheduled events — click to open the organizer's tournament page.</p>
       </div>
 
       {/* Controls bar */}
