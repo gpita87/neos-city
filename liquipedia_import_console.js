@@ -8,22 +8,49 @@
  *    (e.g. https://liquipedia.net/fighters/Pokkén_Tournament/Tournaments)
  * 3. Open DevTools → Console tab (F12)
  * 4. Paste this entire script and press Enter
- * 5. Watch the console output — takes ~3-5 minutes for all 76 events
+ * 5. Watch the console output — takes ~5-10 minutes for all 76 events
  *
  * HOW IT WORKS
  * ────────────
- * The script fetches each bracket page HTML using same-origin fetch() — no
- * tab navigation needed. It parses the bracket DOM, derives placements, and
- * POSTs match data to the Neos City backend at localhost:3001.
+ * For each event in EVENT_URLS the script makes TWO same-origin fetches and
+ * sends TWO POSTs to the Neos City backend:
  *
- * Safe to re-run — already-imported brackets are skipped (by liquipedia_url).
- * Events without a bracket page (no .brkts-match elements) are silently skipped.
+ *   1. main event page (e.g. .../Frosty_Faustings/PokkenDX)
+ *        ↳ parse the Prize Pool / placements table on the page
+ *        ↳ POST /api/tournaments/import-liquipedia-placements
+ *          → canonical placements with proper tied ranks (5–6, 9–12, ...)
+ *
+ *   2. bracket sub-page (.../Frosty_Faustings/PokkenDX/Bracket)
+ *        ↳ parse the .brkts-match / .bracket-game elements
+ *        ↳ POST /api/tournaments/import-liquipedia-bracket
+ *          → match list (drives ELO + Pass-2 achievements)
+ *
+ * The two endpoints both DELETE-then-INSERT the affected rows, so this is
+ * idempotent — re-running cleanly overwrites whatever was there before.
+ *
+ * Why both passes are needed: the bracket parser was producing distinct
+ * ranks for players who actually tied in the bracket (because the legacy
+ * parser only stamps sequential DOM-order rounds, and the new parser was
+ * falling back to that same DOM-order weight scheme). The Prize Pool table
+ * on each main page is the canonical source for placements *with ties*; we
+ * grab placements from there and let the bracket parser focus on what it's
+ * good at, which is the match list.
+ *
+ * Safe to re-run. FORCE_REIMPORT below toggles the bracket-side skip-cache.
+ * Placements always run regardless — the placements endpoint is fast and
+ * the table doesn't change once a tournament is over.
  */
 
 (async () => {
 
 const BACKEND = 'http://localhost:3001';
 const DELAY_MS = 800; // polite pause between Liquipedia fetches
+
+// Set to true to re-import every event even if its liquipedia_url is already
+// in the DB. Use this after running reset_bracket_placements.js (which wipes
+// rank>2 placements but leaves the tournaments themselves in place — without
+// FORCE_REIMPORT every event would be skipped on the second run).
+const FORCE_REIMPORT = true;
 
 // ── All 76 Pokken event base URLs discovered from Liquipedia ─────────────────
 const EVENT_URLS = [
@@ -341,6 +368,231 @@ function parseBracket(doc) {
   return parsedMatches;
 }
 
+// ── Place-string parsing ─────────────────────────────────────────────────────
+//
+// Liquipedia's placements column uses a small set of forms:
+//   "1st", "2nd", "3rd"                    → single rank
+//   "5th-6th", "9th-12th", "17th-24th"     → range; players in this row tie
+//   "5th — 6th" (em-dash variant)          → same as above
+// We always take the LOWEST rank in the range as the canonical placement,
+// matching how tournament_placements.final_rank is stored elsewhere (top4
+// counts everyone with final_rank ≤ 4, top8 counts ≤ 8, etc.). The detail
+// page just renders "5th" for players tied at 5–6, which is fine.
+function parsePlaceString(s) {
+  if (!s) return null;
+  // Strip "place" suffix words and trailing punctuation, normalise dashes
+  const cleaned = s
+    .replace(/–|—/g, '-')        // en-dash / em-dash → hyphen
+    .replace(/place$/i, '')
+    .replace(/[:.]+$/g, '')
+    .trim();
+  const m = cleaned.match(/(\d+)/);
+  if (!m) return null;
+  const n = parseInt(m[1], 10);
+  if (!Number.isFinite(n) || n < 1) return null;
+  return n;
+}
+
+// ── Player-name extraction from a placements-table cell ──────────────────────
+//
+// The participant cell on Liquipedia's prizepool table mixes flag <span>s,
+// pencil "edit" links for redlinked players, "Place N to M" expander
+// affordances (same-page anchors that toggle hidden tiers), and the actual
+// name link/text. Strategy:
+//   1. Walk all <a> children, take the ones whose text looks like a name.
+//   2. If no usable links (text-only entries), fall back to textContent.
+//
+// Filtering rules — every one of these has bitten us in practice on this DB:
+//   • Flag-only links (single-char text, e.g. emoji flag)
+//   • Redlink "edit" affordances ("[edit]" appears as link text "edit")
+//   • Page-anchor expanders — Liquipedia renders a "place 9 to 24" link with
+//     href="...#" that toggles hidden tiers via JS. The link sits ABOVE the
+//     real placement rows, so filtering by text alone catches it; we also
+//     reject any href that's a bare same-page anchor as belt-and-braces.
+//   • The "place N to M" text variants Liquipedia actually uses include
+//     non-breaking space (U+00A0) between "place" and the number, which is
+//     why we use \s+ rather than a literal space in the test.
+//   • TBD / TBA / TBC placeholders.
+function extractPlayerNames(cell) {
+  if (!cell) return [];
+  const out = [];
+
+  for (const a of cell.querySelectorAll('a')) {
+    const txt = (a.textContent || '').replace(/ /g, ' ').trim();
+    if (!txt) continue;
+    if (txt.length < 2) continue;                          // flag-only links
+    if (/^edit$/i.test(txt)) continue;
+    if (/^place\s+\d+(\s+to\s+\d+)?\s*$/i.test(txt)) continue; // expander link
+    const href = a.getAttribute('href') || '';
+    if (href === '#' || /#$/.test(href)) continue;         // same-page anchor
+    out.push(txt);
+  }
+
+  if (out.length === 0) {
+    const raw = (cell.textContent || '').replace(/ /g, ' ').trim();
+    for (const part of raw.split(/[,;\n]+/)) {
+      const p = part.trim();
+      if (!p) continue;
+      if (/^TB[ADC]$/i.test(p)) continue;
+      if (/^place\s+\d+(\s+to\s+\d+)?\s*$/i.test(p)) continue;
+      out.push(p);
+    }
+  }
+
+  // Drop duplicates (flag link + name link sometimes both yield the name)
+  // and drop any placeholders that slipped through.
+  return [...new Set(out)].filter(n =>
+    n && !/^TB[ADC]$/i.test(n) && !/^place\s+\d+/i.test(n)
+  );
+}
+
+// ── Locate the prize-pool / placements table on a tournament page ──────────
+//
+// Liquipedia changed templates over the years; we try the most reliable
+// matchers first and fall through to a heuristic only as a last resort.
+//   1. Modern: .prizepooltable / .csstable-widget grid (post-2020 events)
+//   2. Wikitable: <table class="wikitable"> with a placement-shaped first cell
+//   3. Heuristic: any container holding "1st" + "2nd" siblings
+// Returns { rows: [[placeText, participantCell], ...], strategy: <name> }.
+// Strategies that yield <2 rows are rejected so the heuristic doesn't fire
+// on infobox stubs that happen to contain the word "1st".
+function findPlacementRows(doc) {
+  // Strategy 1 — modern prizepool widget
+  //
+  // ACTUAL per-row layout on contemporary Liquipedia tournament pages
+  // (verified May 2026 against FF XVIII / Vortex_Gallery 2026):
+  //   <div class="csstable-widget-row">
+  //     <div class="csstable-widget-cell prizepooltable-place">5th-6th</div>
+  //     <div class="csstable-widget-cell">$0</div>
+  //     <div class="csstable-widget-cell">-</div>
+  //     <div class="csstable-widget-cell">                          ← player 1
+  //       <div class="block-players-wrapper">
+  //         <div class="block-player has-team">
+  //           <span class="flag">…</span>
+  //           <span class="name name"><a href="/fighters/Mins">Mins</a></span>
+  //         </div>
+  //         <span class="race"><img alt="…" /></span>      ← character icon
+  //       </div>
+  //     </div>
+  //     <div class="csstable-widget-cell">                          ← player 2
+  //       <div class="block-players-wrapper">…<a href="/fighters/Rina_the_Stampede">…</a>…</div>
+  //     </div>
+  //     ... one extra .csstable-widget-cell per tied player
+  //   </div>
+  //
+  // So tied tiers are encoded as N+3 top-level cells on a single row, NOT one
+  // wrapper cell with N players inside. Cell counts observed:
+  //   solo (1st-4th): 4 cells   → 1 player
+  //   2-way tie:      5 cells   → 2 players
+  //   4-way tie:      7 cells   → 4 players
+  //   8-way tie:     11 cells   → 8 players
+  //
+  // Earlier comment claimed the structure was "one cell wrapping every player"
+  // and the fix was `cells[cells.length-1]`. That comment was wrong; picking
+  // the last cell still loses every tied player except one (the last). The
+  // correct fix is to gather every cell on the row that contains a
+  // `.block-player` and feed all of them through extractPlayerNames.
+  const modern = doc.querySelector('.prizepooltable, .csstable-widget');
+  if (modern) {
+    const rows = modern.querySelectorAll('.csstable-widget-row, .prizepoolrowcontent, tr');
+    const out = [];
+    for (const row of rows) {
+      if (row.matches('.prizepoolrowtitle, thead tr')) continue;
+      const cells = row.querySelectorAll(':scope > .csstable-widget-cell, :scope > td, :scope > .prizepoolrowcontent > div');
+      if (cells.length < 2) continue;
+      const placeCell = row.querySelector('.placement-text, [class*="placement"]') || cells[0];
+      const placeText = (placeCell?.textContent || '').trim();
+      if (!placeText) continue;
+      // Gather EVERY cell on the row that contains a player block — tied tiers
+      // render each player as a separate top-level .csstable-widget-cell, so
+      // we'd lose all but one if we only looked at cells[length-1]. Wrap the
+      // collected cells into a synthetic <div> so the existing extractor API
+      // (which takes a single cell) keeps working: it'll see every <a> in one
+      // querySelectorAll('a') sweep. Falls back to the last cell for legacy
+      // tables that don't use .block-player wrappers.
+      const cellsArr = Array.from(cells);
+      const playerCells = cellsArr.filter(c => c.querySelector('.block-player, .block-players-wrapper'));
+      let participantCell;
+      if (playerCells.length === 0) {
+        participantCell = cells[cells.length - 1];
+      } else if (playerCells.length === 1) {
+        participantCell = playerCells[0];
+      } else {
+        participantCell = doc.createElement('div');
+        for (const c of playerCells) participantCell.appendChild(c.cloneNode(true));
+      }
+      out.push([placeText, participantCell]);
+    }
+    if (out.length >= 2) return { rows: out, strategy: 'modern' };
+  }
+
+  // Strategy 2 — generic wikitable (older pages)
+  for (const tbl of doc.querySelectorAll('table.wikitable, table.wikitable-striped')) {
+    const out = [];
+    for (const tr of tbl.querySelectorAll('tbody > tr, tr')) {
+      const cells = tr.querySelectorAll('td, th');
+      if (cells.length < 2) continue;
+      const placeText = (cells[0].textContent || '').trim();
+      if (!parsePlaceString(placeText)) continue;
+      // Pick the cell most likely to hold names — last cell with link/letters
+      let participantCell = null;
+      for (let k = cells.length - 1; k >= 1; k--) {
+        const c = cells[k];
+        if (c.querySelector('a') || /[A-Za-z]/.test(c.textContent)) {
+          participantCell = c;
+          break;
+        }
+      }
+      if (!participantCell) participantCell = cells[cells.length - 1];
+      out.push([placeText, participantCell]);
+    }
+    if (out.length >= 2) return { rows: out, strategy: 'wikitable' };
+  }
+
+  // Strategy 3 — heuristic walk (rarely used)
+  const candidates = [...doc.querySelectorAll('div, tr')]
+    .filter(el => /^\s*1st\b/i.test(el.textContent || '')
+                && /2nd\b/i.test(el.parentNode?.textContent || ''));
+  if (candidates.length > 0) {
+    const parent = candidates[0].parentNode;
+    const rows = [];
+    for (const child of parent.children) {
+      const txt = (child.textContent || '').trim();
+      const place = parsePlaceString(txt.split(/\s/)[0]);
+      if (!place) continue;
+      rows.push([txt.split(/\s/)[0], child]);
+    }
+    if (rows.length >= 2) return { rows, strategy: 'heuristic' };
+  }
+
+  return { rows: [], strategy: 'none' };
+}
+
+// ── Reduce raw [placeText, cell] rows into [{rank, players}] groups ────────
+//
+// Two normalisations:
+//   1. One row with multiple participants in a single cell (e.g. "5th-6th"
+//      with two names in one td)         → one group with players: [a, b]
+//   2. Multiple consecutive rows with the same parsed rank
+//      (each row carries one participant)  → fold them into one group
+function reducePlacements(rawRows) {
+  const out = [];
+  for (const [placeText, cell] of rawRows) {
+    const rank = parsePlaceString(placeText);
+    if (!rank) continue;
+    const players = extractPlayerNames(cell);
+    if (players.length === 0) continue;
+
+    const last = out[out.length - 1];
+    if (last && last.rank === rank) {
+      for (const p of players) if (!last.players.includes(p)) last.players.push(p);
+    } else {
+      out.push({ rank, players: [...new Set(players)] });
+    }
+  }
+  return out;
+}
+
 // ── Extract tournament metadata from a fetched doc ───────────────────────────
 function extractMeta(doc, bracketUrl) {
   // Title (strip ": Bracket" suffix)
@@ -375,7 +627,7 @@ function extractMeta(doc, bracketUrl) {
 const sleep = (ms) => new Promise(r => setTimeout(r, ms));
 
 // ── Health check ─────────────────────────────────────────────────────────────
-console.log('🏆 Neos City — Liquipedia Bracket Importer');
+console.log('🏆 Neos City — Liquipedia Importer (matches + canonical placements)');
 console.log(`📡 Backend: ${BACKEND}`);
 console.log(`📋 Events to check: ${EVENT_URLS.length}`);
 console.log('');
@@ -391,6 +643,11 @@ try {
 }
 
 // ── Check which liquipedia_urls are already imported ─────────────────────────
+//
+// Drives the FORCE_REIMPORT skip path for the BRACKET fetch only. Placements
+// always run, regardless of whether the bracket has been imported before —
+// the placements table is small, the request is cheap, and re-running it is
+// the only way to fix events that landed under the old broken bracket parser.
 let alreadyImported = new Set();
 try {
   const resp = await fetch(`${BACKEND}/api/tournaments?is_offline=true`);
@@ -400,40 +657,106 @@ try {
 } catch (e) { /* ignore */ }
 
 // ── Main loop ─────────────────────────────────────────────────────────────────
-let imported = 0, skipped = 0, noBracket = 0, errors = 0;
+//
+// For each event we fetch BOTH the main page and the /Bracket sub-page. The
+// main page carries the canonical Prize Pool / placements table (with proper
+// ties); /Bracket carries the match data we need for ELO and Pass-2
+// achievements. The two POSTs are independent on the backend — bracket POST
+// writes matches + provisional placements, placements POST overwrites those
+// with the canonical ranks. Running both per event is what gives us correct
+// data on re-imports.
+let bracketImported = 0, bracketSkipped = 0, bracketMissing = 0, bracketErrors = 0;
+let placementsImported = 0, placementsMissing = 0, placementsErrors = 0;
 
 for (let i = 0; i < EVENT_URLS.length; i++) {
-  const eventUrl  = EVENT_URLS[i];
+  const eventUrl   = EVENT_URLS[i];
   const bracketUrl = eventUrl + '/Bracket';
 
-  // Derive the slug the backend will use
+  // Slug the backend uses to look up the tournament. Same normalisation in
+  // liquipediaUrlToSlug on the backend — keeping these in sync matters so a
+  // re-run hits the same row.
   const slug = bracketUrl
     .replace(/^https?:\/\/liquipedia\.net\/fighters\//i, '')
     .replace(/\/Bracket\/?$/i, '')
     .toLowerCase();
 
-  if (alreadyImported.has(slug)) {
-    skipped++;
-    continue;
+  console.log(`\n[${i + 1}/${EVENT_URLS.length}] ${slug}`);
+
+  // ── Pass 1: main page → placements table ──────────────────────────────────
+  let mainMeta = null;
+  try {
+    await sleep(DELAY_MS);
+    const resp = await fetch(eventUrl);
+    if (!resp.ok) {
+      console.log(`  ⏭️  Main page HTTP ${resp.status}, skipping placements`);
+      placementsMissing++;
+    } else {
+      const html = await resp.text();
+      const doc  = new DOMParser().parseFromString(html, 'text/html');
+      mainMeta = extractMeta(doc, eventUrl);
+
+      const { rows: rawRows, strategy } = findPlacementRows(doc);
+      const placements = reducePlacements(rawRows);
+
+      if (placements.length === 0) {
+        console.log(`  ⏭️  No placements table found on main page`);
+        placementsMissing++;
+      } else {
+        const summary = placements.slice(0, 4).map(g => `${g.rank}=${g.players.length}p`).join(', ');
+        console.log(`  📋 placements [${strategy}]: ${placements.length} groups (${summary}${placements.length > 4 ? ', ...' : ''})`);
+
+        const postResp = await fetch(`${BACKEND}/api/tournaments/import-liquipedia-placements`, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            eventUrl,
+            name:               mainMeta.name,
+            date:               mainMeta.date,
+            location:           null,
+            prize_pool:         mainMeta.prize_pool,
+            participants_count: mainMeta.participants_count,
+            placements,
+          }),
+        });
+
+        if (!postResp.ok) {
+          const err = await postResp.json().catch(() => ({}));
+          console.error(`  ❌ Placements backend error: ${err.error || postResp.status}`);
+          placementsErrors++;
+        } else {
+          const result = await postResp.json();
+          console.log(`  ✅ ${result.placements_inserted} placements written`);
+          placementsImported++;
+        }
+      }
+    }
+  } catch (e) {
+    console.error(`  ❌ Placements fetch error: ${e.message}`);
+    placementsErrors++;
   }
 
-  // process?.stdout?.write not available in browser — use console.log only
-  console.log(`[${i+1}/${EVENT_URLS.length}] Fetching ${slug}...`);
+  // ── Pass 2: /Bracket sub-page → matches ───────────────────────────────────
+  // Skip cache only applies to the bracket pass. Placements ran above, which
+  // is the part that was previously broken — it's the side we want to refresh
+  // unconditionally on every run.
+  if (alreadyImported.has(slug) && !FORCE_REIMPORT) {
+    bracketSkipped++;
+    console.log(`  ⏩ Bracket already in DB — skipping match fetch`);
+    continue;
+  }
 
   try {
     await sleep(DELAY_MS);
     const resp = await fetch(bracketUrl);
-
     if (!resp.ok) {
-      console.log(`  ⏭️  No page (HTTP ${resp.status})`);
-      noBracket++;
+      console.log(`  ⏭️  Bracket HTTP ${resp.status}, no match data`);
+      bracketMissing++;
       continue;
     }
 
     const html = await resp.text();
     const doc  = new DOMParser().parseFromString(html, 'text/html');
 
-    // Try new-style bracket first, fall back to legacy (.bracket-game) template
     let matches = parseBracket(doc);
     let parserUsed = 'new';
     if (matches.length === 0) {
@@ -443,51 +766,59 @@ for (let i = 0; i < EVENT_URLS.length; i++) {
 
     if (matches.length === 0) {
       console.log(`  ⏭️  No bracket matches found`);
-      noBracket++;
+      bracketMissing++;
       continue;
     }
 
-    const meta = extractMeta(doc, bracketUrl);
-    console.log(`  🔍 ${matches.length} matches found [${parserUsed}] → "${meta.name || slug}" (${meta.date || 'no date'})`);
+    // Reuse the metadata grabbed off the main page when available; the
+    // bracket sub-page often has thinner infobox content (no prize pool,
+    // no entrant count). Only fall back to the bracket doc if the main
+    // fetch failed.
+    const bracketMeta = mainMeta || extractMeta(doc, bracketUrl);
+    console.log(`  ⚔️  bracket [${parserUsed}]: ${matches.length} matches → "${bracketMeta.name || slug}" (${bracketMeta.date || 'no date'})`);
 
     const postResp = await fetch(`${BACKEND}/api/tournaments/import-liquipedia-bracket`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({
         bracketUrl,
-        name:               meta.name,
-        date:               meta.date,
-        location:           null,           // not easily parseable from bracket page
-        prize_pool:         meta.prize_pool,
-        participants_count: meta.participants_count,
+        name:               bracketMeta.name,
+        date:               bracketMeta.date,
+        location:           null,
+        prize_pool:         bracketMeta.prize_pool,
+        participants_count: bracketMeta.participants_count,
         matches,
       }),
     });
 
     if (!postResp.ok) {
       const err = await postResp.json().catch(() => ({}));
-      console.error(`  ❌ Backend error: ${err.error || postResp.status}`);
-      errors++;
+      console.error(`  ❌ Bracket backend error: ${err.error || postResp.status}`);
+      bracketErrors++;
       continue;
     }
 
     const result = await postResp.json();
-    console.log(`  ✅ Imported: ${result.matches_imported} matches`);
-    imported++;
-    alreadyImported.add(slug); // prevent duplicate within same run
-
+    console.log(`  ✅ ${result.matches_imported} matches written`);
+    bracketImported++;
+    alreadyImported.add(slug); // suppress duplicates within this run
   } catch (e) {
-    console.error(`  ❌ Error: ${e.message}`);
-    errors++;
+    console.error(`  ❌ Bracket fetch error: ${e.message}`);
+    bracketErrors++;
   }
 }
 
 console.log('\n──────────────────────────────────────');
-console.log(`✅ Imported:    ${imported} brackets`);
-console.log(`⏭️  No bracket:  ${noBracket} events (results-only pages)`);
-console.log(`⏩ Skipped:     ${skipped} (already in DB)`);
-console.log(`❌ Errors:      ${errors}`);
+console.log('Placements (canonical, from main page)');
+console.log(`  ✅ Imported:    ${placementsImported}`);
+console.log(`  ⏭️  No table:    ${placementsMissing}`);
+console.log(`  ❌ Errors:      ${placementsErrors}`);
+console.log('Brackets (matches, from /Bracket sub-page)');
+console.log(`  ✅ Imported:    ${bracketImported}`);
+console.log(`  ⏭️  No bracket:  ${bracketMissing}`);
+console.log(`  ⏩ Skipped:     ${bracketSkipped} (already in DB; set FORCE_REIMPORT = true to refresh)`);
+console.log(`  ❌ Errors:      ${bracketErrors}`);
 console.log('');
-console.log('Run node recalculate_elo.js when done to reorder ELO chronologically.');
+console.log('Run `node recalculate_elo.js` when done so achievements + ELO pick up the canonical placements.');
 
 })();

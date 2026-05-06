@@ -266,6 +266,95 @@ Backend uses `nodemon` for hot reload. Changes to `.js` files in `backend/src/` 
 
 ## ⚡ NEXT AGENT: What to Do First
 
+### Current state (as of May 4 2026 — offline placements: parser still dropping tied players, HANDOFF)
+
+#### Symptom
+
+Tournament 554 (Vortex Gallery at Frosty Faustings XVIII) has 24 entrants. Liquipedia's canonical Prize Pool table ties them as 1, 2, 3, 4, 5–6, 7–8, 9–12, 13–16, 17–24. After running the new placements importer (added this session), the DB has 9 rows for the tournament — one per tier, each with a single player — instead of the expected 24 with proper ties:
+
+```
+rank  1  Jukem               ← correct
+rank  2  Shadowcat           ← correct
+rank  3  Jin                 ← correct
+rank  4  Kamaal              ← correct
+rank  5  Virtigris           ← missing pitaguy
+rank  7  Super EpicGuy       ← missing NxD
+rank  9  Oreo                ← missing Mins, Rina the Stampede, Alpha
+rank 13  Oltownbonkrs        ← missing Wes, Son_Dula, Zenkuri
+rank 17  ProdiiJey           ← missing Stars, Santa, GARZON, The Librarian, Juice, Blueshift, Smoothie
+```
+
+The leaked `place 9 to 24` expander row from the first iteration is gone — the regex/anchor filter took care of it. What remains is that every tied tier ends up with exactly one survivor, and not consistently the alphabetically first one. We don't yet know which row of Liquipedia's HTML the parser is actually picking up for those tiers.
+
+#### What's wired up vs broken
+
+Working:
+- `importOneLiquipediaBracket` deletes existing placements before INSERT (no more duplicate rank-1/2 from old buggy parses).
+- `reset_bracket_placements.js` wipes ALL ranks (rank-1/2 included).
+- New backend route `POST /api/tournaments/import-liquipedia-placements` and exported `importOneLiquipediaPlacements` (find-or-create tournament, upsert players with alias resolution, DELETE-then-INSERT placements, refresh per-player offline tier stats).
+- New `liquipedia_import_console.js` flow: per event it fetches BOTH the main page (placements table) AND `/Bracket` (matches), POSTs to both endpoints. Skip cache only applies to the bracket pass.
+- New `reapply_placements_from_matches.js`: derives placements from the matches table when the import path can't be re-run. Caveat below.
+- New `diagnose_tournament.js`: prints tournament row + placements + match summary for one tournament. Use this every time you change something to see actual DB state.
+
+Broken / lossy:
+- The placements scraper in `liquipedia_import_console.js` (`findPlacementRows` / `extractPlayerNames` / `reducePlacements`) returns one player per tied tier and we don't know why. The two failure modes I worked through this session were the `place 9 to 24` expander leak (fixed) and `querySelector('.csstable-widget-cell-content')` returning only the first wrapper (changed to `cells[cells.length - 1]`). Neither change fully solved it.
+- `reapply_placements_from_matches.js` runs the v2 algorithm against the matches table and produces distinct ranks for everyone — it can't reconstruct ties because the legacy bracket parser flattened the bracket structure into sequential round numbers (every match has `bracket_section='winners'`, `round = 1..N` in DOM order). The matches table is genuinely lossy here. Don't expect this script to give canonical placements for legacy-parsed events; it's a fallback.
+- `careerPoints()` in `backend/src/routes/tournaments.js:32` only awards 3 pts to ranks 5–8 when `rank/total <= 0.125` (so only in 64+ entrant brackets). For a 24-player event, 5–8 fall through to "attended = 1". Doc says "1st=10, 2nd=7, top4=5, top8=3, attended=1" without scaling. Untouched this session — might be intentional, ask before "fixing".
+
+#### Why I'm flagging this as a circle
+
+I changed two things that should have moved the needle (anchor filter + last-cell pick) and the symptom is the same shape (one player per tier) with a different "winner" each time, suggesting the parser's row-selection is wrong, not just the cell-selection. Without DOM access (Liquipedia is on the fetch-block list — see the `web_fetch` failure earlier in this thread's history), I'm guessing at the structure.
+
+#### Concrete next steps for whoever picks this up
+
+1. Get the actual HTML. Ask Gabriel to paste the outerHTML of the `.csstable-widget` block from `https://liquipedia.net/fighters/Vortex_Gallery/2026/Frosty_Faustings/PokkenDX` — specifically one tied tier (e.g. `9th-12th`). Or have him add a `console.log(modern.outerHTML.substring(0, 5000))` to `findPlacementRows` and re-run with one event. The selector strategy currently assumes one of two structures; the real DOM may be neither.
+2. Once the DOM is known, the simpler patch may be to switch from fetched HTML + DOMParser to navigating the live tab. If the page renders tied tiers via JS into the live DOM (and Liquipedia uses lazy expanders for `9 to 24`), `fetch()` of the page source won't have what we need. The fix is either (a) navigate the tab to each event URL and read `document` directly, or (b) call Liquipedia's MediaWiki API (`https://liquipedia.net/fighters/api.php?action=parse&page=...&prop=text`) which renders the page server-side.
+3. Hardcoded fallback. `offline_import.js` already has authoritative winner/runner_up per event. Extending its records with a `placements: [{rank, players}]` array and routing that through `importOneLiquipediaPlacements` from the Node.js side eliminates the parser entirely. Tedious for 76 events, but reliable, and makes the "one tournament page is wrong" issue trivially fixable in code review without a live browser. Best for events where the table format is unusual or pre-2020 wiki markup.
+4. Verbose-debug pass. Before next iteration, add a per-tier `console.log` inside `reducePlacements` printing `(rank, players.length, players)` so the next person can immediately see whether the parser is producing one row per tier with N players, or N rows per tier with one player each. The right fix for those two cases is different and we currently can't tell which it is.
+5. After the parser actually works on FF XVIII, re-run `node reset_bracket_placements.js && node offline_import.js`, then paste the console importer with `FORCE_REIMPORT = true`, then `node recalculate_elo.js`. Spot-check via `node diagnose_tournament.js 554`.
+
+#### Files touched this session
+
+- `backend/src/routes/tournaments.js` — DELETE-before-INSERT in `importOneLiquipediaBracket`; new `importOneLiquipediaPlacements` + `POST /api/tournaments/import-liquipedia-placements`.
+- `liquipedia_import_console.js` — added placements scraper (parsePlaceString, extractPlayerNames, findPlacementRows, reducePlacements); main loop now does main-page + /Bracket fetches per event and POSTs to both endpoints.
+- `liquipedia_placements_console.js` — standalone placements-only console script created mid-session before merging into the main one. Redundant; safe to delete with `Remove-Item C:\Users\pitag\Documents\neos-city\liquipedia_placements_console.js`.
+- `reset_bracket_placements.js` — wipes all ranks (not just > 2); doc + console output rewritten to reflect the new workflow.
+- `reapply_placements_from_matches.js` — new repair script that derives placements from the matches table. Useful when the import flow can't be re-run, but produces distinct ranks (no ties) for legacy-parsed brackets.
+- `diagnose_tournament.js` — read-only diagnostic helper. Use whenever you're sanity-checking a single tournament's DB state.
+
+---
+
+### Current state (as of May 4 2026 — duplicate offline placements fix)
+
+#### What just shipped this session
+
+Frosty Faustings XVIII (and presumably the other 15 bracket-imported offline events) was rendering with two players at rank 1 (Jukem + Twixxie) and two at rank 2 (Shadowcat + slippingbug). Root cause: the original `reset_bracket_placements.js` preserved rank ≤ 2 on the assumption those rows came from `offline_import.js`, but the buggy pre-v2 bracket parser had ALSO written its own rank-1/rank-2 rows for *different* `player_id`s on the same tournaments. The `(tournament_id, player_id)` upsert had no way to clean those up, so post-reset events kept the duplicates.
+
+Two changes:
+
+1. **`backend/src/routes/tournaments.js`** — `importOneLiquipediaBracket` now `DELETE FROM tournament_placements WHERE tournament_id = $1` immediately before the placement INSERT loop. Bracket data covers every entrant (we just upserted players for every name in `matches[]`), so the delete + insert is a complete repopulation. Future bracket re-imports are now self-cleaning regardless of what was in the table before.
+
+2. **`reset_bracket_placements.js`** — wipes ALL placements on candidate tournaments (rank 1 and 2 included). Header comment, console output, and post-script instructions all updated to reflect the new workflow.
+
+**Run this to actually fix the live data:**
+
+```powershell
+cd C:\Users\pitag\Documents\neos-city
+node reset_bracket_placements.js          # wipes placements for the ~16 bracket-imported offline events
+node offline_import.js                    # restores canonical winner/runner-up for every offline event
+# then in Chrome on liquipedia.net:
+# paste liquipedia_import_console.js with FORCE_REIMPORT = true
+node recalculate_elo.js                   # picks up the corrected placements
+```
+
+Spot-check after: `/tournaments/<id>` for Frosty Faustings XVIII should show one rank-1 (Jukem), one rank-2 (Shadowcat), and the rest of the 24-player bracket distributed across ranks 3–24 with no duplicates.
+
+#### Known unrelated quirk worth flagging
+
+`careerPoints()` (`tournaments.js:32`) gives top-8 finishers 3 pts only when `rank/total <= 0.125`, i.e. only for brackets ≥ 64 entrants. In a 24-person event, ranks 5–8 fall through to the "attended = 1" bucket. AGENT_CONTEXT documents the system as "1st=10, 2nd=7, top4=5, top8=3, attended=1" without the size scaling, so the implementation and the doc disagree. Not touched in this session — flagging in case it's intentional or in case Gabriel wants the literal top-8-rank rule.
+
+---
+
 ### Current state (as of May 2 2026 — meta achievement modal redesign)
 
 #### What just shipped this session
