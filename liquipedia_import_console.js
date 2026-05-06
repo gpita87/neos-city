@@ -652,7 +652,9 @@ let alreadyImported = new Set();
 try {
   const resp = await fetch(`${BACKEND}/api/tournaments?is_offline=true`);
   const rows = await resp.json();
-  alreadyImported = new Set(rows.map(r => r.liquipedia_url).filter(Boolean));
+  // Stored URLs may be lowercased (legacy) or canonical-case (post-fix); normalize
+  // for the FORCE_REIMPORT skip check so casing differences don't cause re-fetches.
+  alreadyImported = new Set(rows.map(r => r.liquipedia_url).filter(Boolean).map(s => s.toLowerCase()));
   console.log(`ℹ️  Already imported: ${alreadyImported.size} brackets\n`);
 } catch (e) { /* ignore */ }
 
@@ -674,11 +676,11 @@ for (let i = 0; i < EVENT_URLS.length; i++) {
 
   // Slug the backend uses to look up the tournament. Same normalisation in
   // liquipediaUrlToSlug on the backend — keeping these in sync matters so a
-  // re-run hits the same row.
+  // re-run hits the same row. Case is preserved (Liquipedia is case-sensitive
+  // when used as a URL); the alreadyImported lookup below normalises both sides.
   const slug = bracketUrl
     .replace(/^https?:\/\/liquipedia\.net\/fighters\//i, '')
-    .replace(/\/Bracket\/?$/i, '')
-    .toLowerCase();
+    .replace(/\/Bracket\/?$/i, '');
 
   console.log(`\n[${i + 1}/${EVENT_URLS.length}] ${slug}`);
 
@@ -739,7 +741,7 @@ for (let i = 0; i < EVENT_URLS.length; i++) {
   // Skip cache only applies to the bracket pass. Placements ran above, which
   // is the part that was previously broken — it's the side we want to refresh
   // unconditionally on every run.
-  if (alreadyImported.has(slug) && !FORCE_REIMPORT) {
+  if (alreadyImported.has(slug.toLowerCase()) && !FORCE_REIMPORT) {
     bracketSkipped++;
     console.log(`  ⏩ Bracket already in DB — skipping match fetch`);
     continue;
