@@ -1,5 +1,5 @@
 import { useEffect, useState } from 'react';
-import { Link } from 'react-router-dom';
+import { Link, useNavigate } from 'react-router-dom';
 import { getTournaments, importTournament } from '../lib/api';
 import { formatDate } from '../lib/utils';
 
@@ -329,6 +329,7 @@ function OfflineTableFull({ tournaments, loading }) {
 
 function OfflineRow({ tournament: t }) {
   const [placements, setPlacements] = useState(null);
+  const navigate = useNavigate();
 
   useEffect(() => {
     // Fetch the tournament detail to get 1st/2nd place names
@@ -343,8 +344,11 @@ function OfflineRow({ tournament: t }) {
   }, [t.id]);
 
   return (
-    <tr className="border-b border-[#1a2744] last:border-0 hover:bg-white/5 transition-colors">
-      <td className="px-4 py-3 font-medium text-white">{t.name}</td>
+    <tr
+      onClick={() => navigate(`/tournaments/${t.id}`)}
+      className="border-b border-[#1a2744] last:border-0 hover:bg-white/5 transition-colors cursor-pointer"
+    >
+      <td className="px-4 py-3 font-medium text-white hover:text-cyan-300">{t.name}</td>
       <td className="px-4 py-3 text-slate-400">{t.location || '—'}</td>
       <td className="px-4 py-3 text-right text-yellow-400 font-medium">
         {t.prize_pool || '—'}
