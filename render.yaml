@@ -1,0 +1,49 @@
+# Render blueprint — checked in so deploy config lives in git, not the dashboard.
+# Region note: pick `ohio` or `virginia` to match the Supabase pooler hostname
+# (aws-1-us-east-1.pooler.supabase.com). A west-coast backend → us-east DB adds
+# ~70ms per query and several routes issue multiple queries per request.
+services:
+  - type: web
+    name: neos-city-api
+    runtime: node
+    plan: starter           # $7/mo, no cold starts
+    region: ohio            # or virginia — must be us-east to match Supabase
+    rootDir: backend
+    buildCommand: npm install
+    startCommand: npm start
+    healthCheckPath: /api/health
+    envVars:
+      - key: NODE_ENV
+        value: production
+      - key: FRONTEND_URL
+        sync: false         # set in dashboard to https://neos-city-web.onrender.com
+      - key: ADMIN_TOKEN
+        sync: false         # generate with `openssl rand -hex 32`
+      - key: DATABASE_URL
+        sync: false         # Supabase Session pooler connection string
+      - key: CHALLONGE_V1_KEY
+        sync: false
+      - key: CHALLONGE_CLIENT_ID
+        sync: false
+      - key: CHALLONGE_CLIENT_SECRET
+        sync: false
+      - key: STARTGG_TOKEN
+        sync: false
+      - key: JWT_SECRET
+        sync: false         # leftover from .env.example, unused today
+
+  - type: web
+    name: neos-city-web
+    runtime: static
+    rootDir: frontend
+    buildCommand: npm install && npm run build
+    staticPublishPath: ./dist
+    envVars:
+      - key: VITE_API_URL
+        sync: false         # set to https://neos-city-api.onrender.com in dashboard
+    routes:
+      # SPA fallback: every path serves index.html so react-router deep links
+      # (/players/123, /tournaments/4, etc.) survive a hard refresh.
+      - type: rewrite
+        source: /*
+        destination: /index.html
