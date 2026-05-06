@@ -10,7 +10,7 @@ This file captures decisions, constraints, and community knowledge that aren't o
 
 **Project directory:** `C:\Users\pitag\Documents\neos-city`
 - Start Claude Code from this directory (`cd` here first, or pass `--cwd`). All file edits happen here.
-- For parallel work, see the **Multi-agent worktree workflow** section below — each parallel session starts from its own worktree path, not the main directory.
+- For parallel work, see the **Multi-agent worktree workflow** section below — each parallel session starts from its own worktree path, not the main directory. The supported flow is `node spawn-worktree.js <name>` → work in `neos-city-worktrees/<name>/`. **Do not** treat Claude Code's auto-created `.claude/worktrees/<slug>/` directories as a long-term home for your work — they're ephemeral and gitignored.
 
 **Version control:** the project is under git (set up 2026-04-30 — see `GIT_WORKFLOW.md`). Before any non-trivial multi-file edit, ask Gabriel to commit so `git diff` is meaningful. Never commit `backend/.env` or anything matching the `.gitignore` patterns. If a credential accidentally lands in a commit, rotate it immediately — see GIT_WORKFLOW.md "Recovery" section.
 
@@ -23,7 +23,20 @@ This file captures decisions, constraints, and community knowledge that aren't o
 
 ## Multi-agent worktree workflow
 
-**The problem this solves.** Running two agents against the same working directory at once has caused repeated mid-edit truncation — files losing their tail, then surgical repairs producing duplicate-tail follow-ons. The diagnosed cause is shared Windows-mount I/O between sandboxes (mount-layer write buffering, NTFS metadata contention, Defender real-time scanning), not file-level contention. So the mitigation is: **don't run two agents against the same on-disk path**. Each parallel agent gets its own worktree.
+**Default: work on `main`.** Edit files directly in the main worktree (`C:\Users\pitag\Documents\neos-city`). Spin up an agent worktree ONLY when `main` has pending uncommitted changes you don't want to disturb — e.g. Gabriel is mid-edit, or a previous agent's work hasn't been committed yet. First thing to do at session start: run `git status` from the main directory. If the tree is clean, work there. If it's dirty, follow the worktree flow below so the in-progress changes stay isolated from your edits.
+
+**The problem worktrees solve.** Running two agents against the same working directory at once has caused repeated mid-edit truncation — files losing their tail, then surgical repairs producing duplicate-tail follow-ons. The diagnosed cause is shared Windows-mount I/O between sandboxes (mount-layer write buffering, NTFS metadata contention, Defender real-time scanning), not file-level contention. So when isolation is needed, the rule is: **don't run two agents against the same on-disk path**. Each agent that needs isolation gets its own worktree.
+
+**Two kinds of worktree exist on this machine — only one is supported for real work.**
+
+| Path                                  | Created by                                  | Purpose                          | Use for handoff work? |
+|---------------------------------------|---------------------------------------------|----------------------------------|------------------------|
+| `neos-city-worktrees/<name>`          | `node spawn-worktree.js <name>` (Gabriel)   | The supported parallel-agent flow | **YES — this is the default** |
+| `.claude/worktrees/<random-slug>`     | Claude Code harness, automatic per session  | Ephemeral session sandbox        | **NO** |
+
+`.claude/worktrees/` is gitignored (`192a102`) and the harness creates one per Claude Code invocation when isolation is on. Treat any work that lands in there as **disposable**: don't write `WORKTREE_SUMMARY.md`, deploy plans, or other "next agent reads this" docs into a `.claude/worktrees/<slug>/`, because the slug is unguessable, the directory may be cleaned up by Claude Code, and Gabriel has no `merge-worktree.js`-equivalent for it. If you discover you're sitting in `.claude/worktrees/...` and the work is non-trivial, either commit and push your branch (so the changes survive the worktree's deletion) or ask Gabriel to spawn a real worktree via `spawn-worktree.js` and start the work there.
+
+The rest of this section describes the supported flow.
 
 **Setup at the start of a parallel session.** From the main worktree:
 
@@ -58,6 +71,10 @@ git branch -D agent/<agent-name>
 ```
 
 To abandon the merge instead, `git reset --hard HEAD` un-stages everything; the worktree and branch are still around to retry.
+
+**If `main` is dirty when you go to merge.** `merge-worktree.js` refuses to run unless both sides are clean. Preferred fix: commit the WIP on `main` first (even a throwaway `git commit -am "wip"` is fine — amend or squash it later) so history stays linear and nothing can get lost. Alternative: `git stash push -m "wip"` → run `merge-worktree.js` → commit the merge → `git stash pop`. Don't try to merge on top of unstaged changes — the squash-merge will tangle them with the worktree's diff and you won't be able to tell which hunks came from where.
+
+**Why local squash and not PRs.** This project is solo (Gabriel) with no CI and no reviewers. Pushing each worktree branch and opening a GitHub PR adds a network round-trip and review ceremony for no gain — IntelliJ's staged-diff view is the review. If a collaborator ever joins, switching to a PR-based merge is a small edit to `merge-worktree.js`. Until then, local squash → push from main is the workflow.
 
 **If something goes wrong.** Worktrees are cheap. If a worktree is in a confused state, `git worktree remove --force <path>` followed by `git branch -D agent/<name>` resets cleanly — the main repo and other worktrees are untouched. The mitigation pattern recommended elsewhere in this file (`git checkout -- <file>` for truncation recovery) still applies inside a worktree.
 
