@@ -20,7 +20,8 @@ WHERE is_offline = TRUE AND series IS DISTINCT FROM 'worlds'
     OR UPPER(name) LIKE '%GENESIS%'
     OR UPPER(name) LIKE '%CURTAIN CALL%'
     OR UPPER(name) LIKE '%FINAL BOSS%'
-    OR UPPER(name) LIKE '%DESTINY%');
+    OR UPPER(name) LIKE '%DESTINY%'
+    OR UPPER(name) LIKE '%FROSTFIRE%');
 
 -- ── Regionals ──────────────────────────────────────────────────────────────
 UPDATE tournaments SET series = 'regional'
@@ -32,7 +33,6 @@ WHERE is_offline = TRUE AND series NOT IN ('worlds', 'major')
     OR UPPER(name) LIKE '%SOCAL REGIONALS%'
     OR UPPER(name) LIKE '%DEFEND THE NORTH%'
     OR UPPER(name) LIKE '%SUMMER JAM%'
-    OR UPPER(name) LIKE '%FROSTFIRE%'
     OR UPPER(name) LIKE '%BATTLE ARENA MELBOURNE%'
     OR UPPER(name) LIKE '%OZHADOU%'
     OR UPPER(name) LIKE '%REVOLUTION%'
