@@ -22,8 +22,16 @@ app.use(cors({
 }));
 app.use(express.json());
 
-// Rate limit: 500 requests per 15 min per IP (high enough for batch imports)
-app.use(rateLimit({ windowMs: 15 * 60 * 1000, max: 500 }));
+// Rate limit: 500 requests per 15 min per IP (high enough for batch imports).
+// Loopback callers (frontend dev server, batch import scripts, browser-console
+// harvest tools hitting localhost from challonge.com) are exempted — the
+// limiter is meant to deter external abuse, not local tooling sharing one IP.
+const LOOPBACK_IPS = new Set(['127.0.0.1', '::1', '::ffff:127.0.0.1']);
+app.use(rateLimit({
+  windowMs: 15 * 60 * 1000,
+  max: 500,
+  skip: (req) => LOOPBACK_IPS.has(req.ip),
+}));
 
 app.use('/api/tournaments', tournamentsRouter);
 app.use('/api/players', playersRouter);
