@@ -1635,27 +1635,22 @@ router.post('/batch-import-offline', async (req, res) => {
     return res.status(400).json({ error: 'tournaments array is required' });
   }
 
-  const results = { imported: [], skipped: [], errors: [] };
+  const results = { imported: [], errors: [] };
 
-  // Fetch already-imported slugs
-  const { rows: existing } = await db.query(
-    `SELECT liquipedia_slug FROM tournaments WHERE liquipedia_slug IS NOT NULL`
-  );
-  const existingSlugs = new Set(existing.map(r => r.liquipedia_slug));
-
+  // Always run the upsert. importOneOffline's tournament INSERT has
+  // ON CONFLICT (liquipedia_slug) DO UPDATE so existing rows are refreshed,
+  // and its placement INSERTs have ON CONFLICT (tournament_id, player_id)
+  // DO UPDATE so winner/runner-up rows are restored even if a previous
+  // reset_bracket_placements.js wiped them. Skipping by liquipedia_slug
+  // existence (the prior behaviour) left ~36% of offline events with no
+  // rank-1/rank-2 placements after a reset cycle.
   for (const t of tournaments) {
     const slug = t.liquipedia_slug ||
       (t.name || '').toLowerCase().replace(/[^a-z0-9]+/g, '_').replace(/^_|_$/, '');
 
-    if (existingSlugs.has(slug)) {
-      results.skipped.push({ name: t.name, reason: 'already imported' });
-      continue;
-    }
-
     try {
-      const result = await importOneOffline({ ...t, liquipedia_slug: slug });
+      await importOneOffline({ ...t, liquipedia_slug: slug });
       results.imported.push({ name: t.name, winner: t.winner });
-      existingSlugs.add(slug); // prevent duplicates within same batch
       console.log(`✅ Offline imported: ${t.name}`);
     } catch (err) {
       console.error(`❌ Offline import failed for ${t.name}:`, err.message);
@@ -1666,7 +1661,6 @@ router.post('/batch-import-offline', async (req, res) => {
   res.json({
     total:    tournaments.length,
     imported: results.imported.length,
-    skipped:  results.skipped.length,
     errors:   results.errors.length,
     detail:   results,
   });
@@ -1681,15 +1675,19 @@ router.post('/batch-import-offline', async (req, res) => {
 // ══════════════════════════════════════════════════════════════════════════════
 
 /**
- * Derive a stable slug from a Liquipedia bracket URL.
+ * Derive the canonical Liquipedia path key from a bracket URL.
  * e.g. "https://liquipedia.net/fighters/Frostfire/2022/Pokken/Bracket"
- *      → "frostfire/2022/pokken"
+ *      → "Frostfire/2022/Pokken"
+ *
+ * Case is preserved so the value can also serve as the user-clickable URL
+ * (Liquipedia is case-sensitive). Joins against this column in the DB use
+ * LOWER(...) on both sides so existing lowercased rows still match while
+ * new imports write canonical case.
  */
 function liquipediaUrlToSlug(bracketUrl) {
   return bracketUrl
     .replace(/^https?:\/\/liquipedia\.net\/fighters\//i, '')
-    .replace(/\/Bracket\/?$/i, '')
-    .toLowerCase();
+    .replace(/\/Bracket\/?$/i, '');
 }
 
 async function importOneLiquipediaBracket({ bracketUrl, name, date, location, prize_pool, participants_count, matches }) {
@@ -1706,11 +1704,12 @@ async function importOneLiquipediaBracket({ bracketUrl, name, date, location, pr
   let tournament;
 
   const { rows: [byUrl] } = await db.query(
-    `SELECT * FROM tournaments WHERE liquipedia_url = $1`, [liquipediaUrl]
+    `SELECT * FROM tournaments WHERE LOWER(liquipedia_url) = LOWER($1)`, [liquipediaUrl]
   );
 
   if (byUrl) {
-    // Update metadata and link
+    // Update metadata and refresh liquipedia_url to canonical case (legacy
+    // rows were stored lowercased; this self-heals on re-import).
     const { rows: [updated] } = await db.query(
       `UPDATE tournaments SET
          name               = COALESCE($2, name),
@@ -1718,9 +1717,10 @@ async function importOneLiquipediaBracket({ bracketUrl, name, date, location, pr
          location           = COALESCE($4, location),
          prize_pool         = COALESCE($5, prize_pool),
          participants_count = COALESCE($6, participants_count),
+         liquipedia_url     = $7,
          is_offline         = TRUE
        WHERE id = $1 RETURNING *`,
-      [byUrl.id, name || null, completedAt, location || null, prize_pool || null, participants_count || null]
+      [byUrl.id, name || null, completedAt, location || null, prize_pool || null, participants_count || null, liquipediaUrl]
     );
     tournament = updated;
   } else {
@@ -2034,10 +2034,11 @@ async function importOneLiquipediaPlacements({ eventUrl, name, date, location, p
   // that were inserted via the bracket import (whose liquipedia_url has
   // /Bracket stripped). If a row was inserted by offline_import.js without
   // a liquipedia_url at all, we'll fall back to a name-based ILIKE match.
+  // Case is preserved — the column doubles as a user-clickable URL and
+  // Liquipedia is case-sensitive. Joins use LOWER(...) on both sides.
   const liquipediaUrl = eventUrl
     .replace(/^https?:\/\/liquipedia\.net\/fighters\//i, '')
-    .replace(/\/Bracket\/?$/i, '')
-    .toLowerCase();
+    .replace(/\/Bracket\/?$/i, '');
   const completedAt = date ? new Date(date).toISOString() : null;
 
   // ── Find or create tournament ──────────────────────────────────────────────
@@ -2046,7 +2047,7 @@ async function importOneLiquipediaPlacements({ eventUrl, name, date, location, p
   // 3rd: create a fresh offline row from the metadata we have
   let tournament;
   const { rows: [byUrl] } = await db.query(
-    `SELECT * FROM tournaments WHERE liquipedia_url = $1`, [liquipediaUrl]
+    `SELECT * FROM tournaments WHERE LOWER(liquipedia_url) = LOWER($1)`, [liquipediaUrl]
   );
 
   if (byUrl) {
@@ -2057,9 +2058,10 @@ async function importOneLiquipediaPlacements({ eventUrl, name, date, location, p
          location           = COALESCE($4, location),
          prize_pool         = COALESCE($5, prize_pool),
          participants_count = COALESCE($6, participants_count),
+         liquipedia_url     = $7,
          is_offline         = TRUE
        WHERE id = $1 RETURNING *`,
-      [byUrl.id, name || null, completedAt, location || null, prize_pool || null, participants_count || null]
+      [byUrl.id, name || null, completedAt, location || null, prize_pool || null, participants_count || null, liquipediaUrl]
     );
     tournament = updated;
   } else {
