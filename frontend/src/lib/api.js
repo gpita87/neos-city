@@ -1,6 +1,24 @@
 import axios from 'axios';
 
-const api = axios.create({ baseURL: '/api' });
+// In dev VITE_API_URL is unset and the Vite proxy forwards /api → localhost:3001.
+// In prod set VITE_API_URL to the deployed backend (e.g. https://neos-city-api.onrender.com)
+// at build time so the bundle calls the right host.
+const baseURL = import.meta.env.VITE_API_URL
+  ? `${import.meta.env.VITE_API_URL}/api`
+  : '/api';
+
+const api = axios.create({ baseURL });
+
+// Admin token for mutating routes (organizer add/delete/sync, tournament imports).
+// Set in DevTools: localStorage.setItem('admin_token', '...'). When present we
+// attach it as `x-admin-token` on every request — read endpoints ignore it.
+api.interceptors.request.use(config => {
+  if (typeof window !== 'undefined') {
+    const token = window.localStorage?.getItem('admin_token');
+    if (token) config.headers['x-admin-token'] = token;
+  }
+  return config;
+});
 
 // region: 'NA' | 'EU' | 'JP' | null (null = all regions)
 export const getLeaderboard = (region = null) =>
