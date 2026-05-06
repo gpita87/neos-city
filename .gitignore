@@ -97,3 +97,10 @@ tmp/
 # at merge time. It should never land in main's history.
 # ========================================================================
 WORKTREE_SUMMARY.md
+
+# ========================================================================
+# Claude Code per-machine overrides
+# .claude/settings.json IS tracked (shared project permissions).
+# .claude/settings.local.json is per-machine and must stay local.
+# ========================================================================
+.claude/settings.local.json

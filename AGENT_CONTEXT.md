@@ -6,16 +6,18 @@ This file captures decisions, constraints, and community knowledge that aren't o
 
 ## For Agents: Setup & Handoff Rules
 
+**Harness:** Claude Code (CLI). `CLAUDE.md` at the project root `@`-includes this file, so the full context loads automatically when Claude Code starts in this directory. `.claude/settings.json` (also checked in) pre-allows read-only diagnostics and pre-denies DB-mutating scripts and the dev server — see that file for the exact lists.
+
 **Project directory:** `C:\Users\pitag\Documents\neos-city`
-- At the start of every session, mount this directory so you have file access.
-- All file edits should be made directly in this directory.
+- Start Claude Code from this directory (`cd` here first, or pass `--cwd`). All file edits happen here.
+- For parallel work, see the **Multi-agent worktree workflow** section below — each parallel session starts from its own worktree path, not the main directory.
 
 **Version control:** the project is under git (set up 2026-04-30 — see `GIT_WORKFLOW.md`). Before any non-trivial multi-file edit, ask Gabriel to commit so `git diff` is meaningful. Never commit `backend/.env` or anything matching the `.gitignore` patterns. If a credential accidentally lands in a commit, rotate it immediately — see GIT_WORKFLOW.md "Recovery" section.
 
-**Thread size — handoff protocol:**
-- When your context window is getting large (you're noticing you're far into a long session, or Claude warns you about context length), **stop before starting any new task**.
-- Write a handoff update to the bottom of the `## ⚡ NEXT AGENT` section in this file. Include: what was just completed, what's in progress (if anything), and what the next step is.
-- Then let Gabriel know the thread is getting large and that he should start a fresh session — the new agent will pick up from this file.
+**Thread size — handoff protocol.** Claude Code auto-compacts long conversations, but compaction loses fidelity, so the handoff log in this file is still the source of truth between sessions.
+- Before the conversation gets long enough to risk compaction, **stop before starting any new task**.
+- Append a handoff update at the bottom of the `## ⚡ NEXT AGENT` section. Include: what was just completed, what's in progress (if anything), and what the next step is.
+- Tell Gabriel the thread is getting large and suggest a fresh session — the new agent picks up from this file.
 
 ---
 
@@ -30,7 +32,7 @@ cd C:\Users\pitag\Documents\neos-city
 node spawn-worktree.js <agent-name>
 ```
 
-This creates branch `agent/<agent-name>` off `main`, materializes a worktree at `C:\Users\pitag\Documents\neos-city-worktrees\<agent-name>`, runs `npm install` in /, /backend, and /frontend, and writes a `WORKTREE_SUMMARY.md` template. The script prints the worktree path — mount THAT folder in the new Cowork session, not the main directory.
+This creates branch `agent/<agent-name>` off `main`, materializes a worktree at `C:\Users\pitag\Documents\neos-city-worktrees\<agent-name>`, runs `npm install` in /, /backend, and /frontend, and writes a `WORKTREE_SUMMARY.md` template. The script prints the worktree path — start the parallel Claude Code session from THAT folder (`cd <worktree-path>` or `--cwd <worktree-path>`), not the main directory. The checked-in `.claude/settings.json` is shared across all worktrees automatically (git worktrees share the working tree's tracked files), so the deny list still protects you.
 
 **Rules when you (the agent) are running inside a worktree.** Detect with `git rev-parse --show-toplevel`. If the result is anything under `neos-city-worktrees/`, you are in a worktree, and:
 
