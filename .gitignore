@@ -99,8 +99,10 @@ tmp/
 WORKTREE_SUMMARY.md
 
 # ========================================================================
-# Claude Code per-machine overrides
+# Claude Code per-machine state
 # .claude/settings.json IS tracked (shared project permissions).
 # .claude/settings.local.json is per-machine and must stay local.
+# .claude/worktrees/ is Claude Code's internal per-session state.
 # ========================================================================
 .claude/settings.local.json
+.claude/worktrees/
