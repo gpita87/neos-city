@@ -12,14 +12,25 @@ const organizersRouter = require('./routes/organizers');
 
 const app = express();
 
-app.use(cors({
-  origin: [
-    process.env.FRONTEND_URL || 'http://localhost:5173',
-    'https://liquipedia.net',   // needed for liquipedia_import_console.js
-    'https://tonamel.com',      // needed for tonamel_import_console.js
-    'https://challonge.com',    // needed for harvest_console.js
-  ]
-}));
+// Build the CORS allow-list:
+//  - FRONTEND_URL is required in production (no localhost fallback).
+//  - In dev (NODE_ENV !== 'production') we always allow http://localhost:5173
+//    so a fresh checkout works without setting FRONTEND_URL.
+//  - The three external origins below are needed by the browser-console importers
+//    regardless of environment — they're always allowed.
+const isProduction = process.env.NODE_ENV === 'production';
+if (isProduction && !process.env.FRONTEND_URL) {
+  console.error('FRONTEND_URL must be set in production. Refusing to start.');
+  process.exit(1);
+}
+const corsOrigins = [
+  process.env.FRONTEND_URL,
+  ...(isProduction ? [] : ['http://localhost:5173']),
+  'https://liquipedia.net',   // needed for liquipedia_import_console.js
+  'https://tonamel.com',      // needed for tonamel_import_console.js
+  'https://challonge.com',    // needed for harvest_console.js
+].filter(Boolean);
+app.use(cors({ origin: corsOrigins }));
 app.use(express.json());
 
 // Rate limit: 500 requests per 15 min per IP (high enough for batch imports).
