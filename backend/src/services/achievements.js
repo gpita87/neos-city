@@ -78,6 +78,7 @@ function detectOfflineTier(name = '') {
   if (n.includes('CURTAIN CALL'))                                      return SERIES.MAJOR;
   if (n.includes('FINAL BOSS'))                                        return SERIES.MAJOR;
   if (n.includes('DESTINY'))                                           return SERIES.MAJOR;
+  if (n.includes('FROSTFIRE'))                                         return SERIES.MAJOR;
   if (n.includes('NORTHEAST CHAMPIONSHIP') || n.includes('NEC '))      return SERIES.REGIONAL;
   if (n.includes('WINTER BRAWL'))                                      return SERIES.REGIONAL;
   if (n.includes('FINAL ROUND'))                                       return SERIES.REGIONAL;
@@ -85,7 +86,6 @@ function detectOfflineTier(name = '') {
   if (n.includes('SOCAL REGIONALS'))                                   return SERIES.REGIONAL;
   if (n.includes('DEFEND THE NORTH'))                                  return SERIES.REGIONAL;
   if (n.includes('SUMMER JAM'))                                        return SERIES.REGIONAL;
-  if (n.includes('FROSTFIRE'))                                         return SERIES.REGIONAL;
   if (n.includes('BATTLE ARENA MELBOURNE') || n.includes('BAM '))      return SERIES.REGIONAL;
   if (n.includes('OZHADOU'))                                           return SERIES.REGIONAL;
   if (n.includes('REVOLUTION'))                                        return SERIES.REGIONAL;

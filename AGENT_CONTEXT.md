@@ -921,8 +921,8 @@ Offline tournaments are classified into four tiers via the `series` column (reus
 | Tier       | Series value | What it covers |
 |------------|-------------|----------------|
 | `worlds`   | `'worlds'`  | World Championships, International Championships (NA/EU/OCE) |
-| `major`    | `'major'`   | EVO, CEO, DreamHack, Frosty Faustings/Vortex Gallery, Genesis, Curtain Call, Final Boss, Destiny |
-| `regional` | `'regional'`| NEC, Winter Brawl, Final Round, NorCal/SoCal Regionals, Defend the North, Summer Jam, Frostfire, BAM, Canada Cup, OzHadou, Revolution, FightClub Championship, All In Together, and others |
+| `major`    | `'major'`   | EVO, CEO, DreamHack, Frosty Faustings/Vortex Gallery, Genesis, Curtain Call, Final Boss, Destiny, Frostfire |
+| `regional` | `'regional'`| NEC, Winter Brawl, Final Round, NorCal/SoCal Regionals, Defend the North, Summer Jam, BAM, Canada Cup, OzHadou, Revolution, FightClub Championship, All In Together, and others |
 | `other`    | `'other'`   | Everything else (locals / one-offs) |
 
 Migration: `backend/src/db/migrations/add_offline_tiers.sql` — retroactively tags existing offline tournaments.
