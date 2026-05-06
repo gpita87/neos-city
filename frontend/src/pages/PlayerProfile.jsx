@@ -3,6 +3,7 @@ import { useParams, Link } from 'react-router-dom';
 import { getPlayer } from '../lib/api';
 import { formatDate } from '../lib/utils';
 import AchievementTournamentsModal from '../components/AchievementTournamentsModal';
+import OfflinePlacementsModal from '../components/OfflinePlacementsModal';
 import AchievementIcon, { REGION_NUMERALS } from '../components/AchievementIcon';
 
 const REGION_LABELS = {
@@ -90,6 +91,8 @@ export default function PlayerProfile() {
   const [player, setPlayer] = useState(null);
   const [loading, setLoading] = useState(true);
   const [openAchievement, setOpenAchievement] = useState(null);
+  // { tier: 'major', placement: 'top8' } when an offline-record cell is clicked
+  const [openOfflineCell, setOpenOfflineCell] = useState(null);
 
   useEffect(() => {
     getPlayer(id).then(setPlayer).finally(() => setLoading(false));
@@ -136,7 +139,6 @@ export default function PlayerProfile() {
         <div className="bg-[#0c1425] border border-[#1a2744] rounded-xl p-5">
           <div className="flex items-center justify-between mb-4">
             <h2 className="font-display text-sm tracking-widest text-amber-400">OFFLINE RECORD</h2>
-            <span className="text-xs text-slate-500">Score: <span className="text-amber-400 font-bold">{player.offline_score}</span></span>
           </div>
           <div className="overflow-x-auto">
             <table className="w-full text-sm">
@@ -161,22 +163,38 @@ export default function PlayerProfile() {
                   const top4 = player[`offline_${tier.key}_top4`] || 0;
                   const top8 = player[`offline_${tier.key}_top8`] || 0;
                   if (wins + ru + top4 + top8 === 0) return null;
+                  // Each non-zero numeric cell becomes a button that opens the
+                  // OfflinePlacementsModal scoped to that tier × placement.
+                  const cell = (count, placementKey, valueClass) => (
+                    count > 0 ? (
+                      <button
+                        type="button"
+                        onClick={() => setOpenOfflineCell({ tier: tier.key, placement: placementKey })}
+                        className={`${valueClass} underline decoration-dotted decoration-slate-600 underline-offset-2 hover:decoration-current hover:text-white focus:outline-none focus:ring-1 focus:ring-cyan-500 rounded px-1 transition-colors`}
+                        title="Show contributing tournaments"
+                      >
+                        {count}
+                      </button>
+                    ) : (
+                      <span className="text-slate-600">—</span>
+                    )
+                  );
                   return (
                     <tr key={tier.key} className="border-b border-[#1a2744]/50 hover:bg-white/5">
                       <td className={`px-3 py-2.5 font-medium ${tier.color}`}>
                         <span className="mr-1.5">{tier.icon}</span>{tier.label}
                       </td>
                       <td className="px-3 py-2.5 text-center">
-                        {wins > 0 ? <span className="text-yellow-400 font-bold">{wins}</span> : <span className="text-slate-600">—</span>}
+                        {cell(wins, 'wins', 'text-yellow-400 font-bold')}
                       </td>
                       <td className="px-3 py-2.5 text-center">
-                        {ru > 0 ? <span className="text-slate-300 font-bold">{ru}</span> : <span className="text-slate-600">—</span>}
+                        {cell(ru, 'runner_up', 'text-slate-300 font-bold')}
                       </td>
                       <td className="px-3 py-2.5 text-center">
-                        {top4 > 0 ? <span className="text-slate-300">{top4}</span> : <span className="text-slate-600">—</span>}
+                        {cell(top4, 'top4', 'text-slate-300')}
                       </td>
                       <td className="px-3 py-2.5 text-center">
-                        {top8 > 0 ? <span className="text-slate-300">{top8}</span> : <span className="text-slate-600">—</span>}
+                        {cell(top8, 'top8', 'text-slate-300')}
                       </td>
                     </tr>
                   );
@@ -352,6 +370,17 @@ export default function PlayerProfile() {
           playerId={player.id}
           playerName={player.display_name}
           onClose={() => setOpenAchievement(null)}
+        />
+      )}
+
+      {/* Offline-record cell -> contributing tournaments modal */}
+      {openOfflineCell && (
+        <OfflinePlacementsModal
+          playerId={player.id}
+          playerName={player.display_name}
+          tier={openOfflineCell.tier}
+          placement={openOfflineCell.placement}
+          onClose={() => setOpenOfflineCell(null)}
         />
       )}
     </div>

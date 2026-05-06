@@ -153,7 +153,6 @@ export default function Leaderboard() {
               <tr className="border-b border-[#1a2744] text-slate-500 text-xs font-display tracking-wider">
                 <th className="px-4 py-3 text-left w-10">#</th>
                 <th className="px-4 py-3 text-left">PLAYER</th>
-                <th className="px-3 py-3 text-right">SCORE</th>
                 {OFFLINE_TIERS.map(t => (
                   <th key={t.key} className="px-2 py-3 text-center" title={t.label}>
                     <span className="text-xs">{t.icon}</span>
@@ -177,7 +176,6 @@ export default function Leaderboard() {
                       )}
                     </Link>
                   </td>
-                  <td className="px-3 py-3 text-right font-display font-bold text-amber-400">{p.offline_score}</td>
                   {OFFLINE_TIERS.map(t => {
                     const w = p[`offline_${t.key}_wins`] || 0;
                     const r = p[`offline_${t.key}_runner_up`] || 0;

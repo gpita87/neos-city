@@ -28,6 +28,11 @@ export const getRecentPlacements = (days = 30) =>
   api.get('/tournaments/recent-placements', { params: { days } }).then(r => r.data);
 export const getOfflineLeaderboard = () => api.get('/players/offline-leaderboard').then(r => r.data);
 
+// tier:      'worlds' | 'major' | 'regional' | 'other'
+// placement: 'wins' | 'runner_up' | 'top4' | 'top8'
+export const getOfflinePlacements = (player_id, tier, placement) =>
+  api.get(`/players/${player_id}/offline-placements`, { params: { tier, placement } }).then(r => r.data);
+
 // Live match rooms
 export const createRoom = (player1_id, player2_id, format) =>
   api.post('/live/create', { player1_id, player2_id, format }).then(r => r.data);
