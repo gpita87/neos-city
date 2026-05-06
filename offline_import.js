@@ -11,8 +11,16 @@
  */
 
 const axios = require('axios');
+const path  = require('path');
+
+require('dotenv').config({ path: path.join(__dirname, 'backend', '.env') });
 
 const BACKEND_URL = 'http://localhost:3001';
+const ADMIN_TOKEN = process.env.ADMIN_TOKEN;
+if (!ADMIN_TOKEN) {
+  console.error('ADMIN_TOKEN is not set. Add it to backend/.env (see .env.example).');
+  process.exit(1);
+}
 
 // All offline Pokkén Tournament events from Liquipedia (2016–2026)
 // Fields: name, date (YYYY-MM-DD), location, prize_pool, participants_count, winner, runner_up, liquipedia_slug
@@ -854,9 +862,11 @@ async function main() {
     process.exit(1);
   }
 
-  const res = await axios.post(`${BACKEND_URL}/api/tournaments/batch-import-offline`, {
-    tournaments: OFFLINE_TOURNAMENTS,
-  });
+  const res = await axios.post(
+    `${BACKEND_URL}/api/tournaments/batch-import-offline`,
+    { tournaments: OFFLINE_TOURNAMENTS },
+    { headers: { 'x-admin-token': ADMIN_TOKEN } }
+  );
 
   const { imported, skipped, errors, detail } = res.data;
   console.log(`✅ Imported:  ${imported}`);

@@ -28,6 +28,9 @@
 
 const ORG_URL        = 'https://tonamel.com/organization/OhUc2?game=pokken';
 const BACKEND_URL    = 'http://localhost:3001';
+// Paste your ADMIN_TOKEN here (the same value as backend/.env ADMIN_TOKEN).
+// Required — the import endpoint is gated and the script will refuse to run if blank.
+const ADMIN_TOKEN    = '';
 const IFRAME_HOLD_MS = 1000;   // extra settle time after bracket markers appear
 const MAX_WAIT_MS    = 20000;  // give up looking for bracket markers after this
 const POST_DELAY_MS  = 250;    // breath between backend POSTs
@@ -178,9 +181,10 @@ async function getAlreadyImported() {
 }
 
 async function postToBackend(payload) {
+  if (!ADMIN_TOKEN) throw new Error('Set ADMIN_TOKEN at the top of this script.');
   const resp = await fetch(`${BACKEND_URL}/api/tournaments/import-tonamel`, {
     method:  'POST',
-    headers: { 'Content-Type': 'application/json' },
+    headers: { 'Content-Type': 'application/json', 'x-admin-token': ADMIN_TOKEN },
     body:    JSON.stringify(payload),
   });
   const json = await resp.json().catch(() => ({}));

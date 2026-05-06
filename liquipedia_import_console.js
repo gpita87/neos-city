@@ -44,6 +44,13 @@
 (async () => {
 
 const BACKEND = 'http://localhost:3001';
+// Paste your ADMIN_TOKEN here (the same value as backend/.env ADMIN_TOKEN).
+// Required — the import endpoints are gated, this script will exit if it's blank.
+const ADMIN_TOKEN = '';
+if (!ADMIN_TOKEN) {
+  console.error('Set ADMIN_TOKEN at the top of this script before running.');
+  return;
+}
 const DELAY_MS = 800; // polite pause between Liquipedia fetches
 
 // Set to true to re-import every event even if its liquipedia_url is already
@@ -761,7 +768,7 @@ for (let i = 0; i < EVENT_URLS.length; i++) {
 
         const postResp = await fetch(`${BACKEND}/api/tournaments/import-liquipedia-placements`, {
           method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
+          headers: { 'Content-Type': 'application/json', 'x-admin-token': ADMIN_TOKEN },
           body: JSON.stringify({
             eventUrl,
             name:               mainMeta.name,
@@ -833,7 +840,7 @@ for (let i = 0; i < EVENT_URLS.length; i++) {
 
     const postResp = await fetch(`${BACKEND}/api/tournaments/import-liquipedia-bracket`, {
       method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
+      headers: { 'Content-Type': 'application/json', 'x-admin-token': ADMIN_TOKEN },
       body: JSON.stringify({
         bracketUrl,
         name:               bracketMeta.name,

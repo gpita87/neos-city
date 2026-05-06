@@ -20,10 +20,17 @@ const fs   = require('fs');
 const http = require('http');
 const path = require('path');
 
-const API_HOST   = 'localhost';
-const API_PORT   = 3001;
-const CHUNK_SIZE = 50;
-const DELAY_MS   = 1500;
+require('dotenv').config({ path: path.join(__dirname, 'backend', '.env') });
+
+const API_HOST    = 'localhost';
+const API_PORT    = 3001;
+const CHUNK_SIZE  = 50;
+const DELAY_MS    = 1500;
+const ADMIN_TOKEN = process.env.ADMIN_TOKEN;
+if (!ADMIN_TOKEN) {
+  console.error('ADMIN_TOKEN is not set. Add it to backend/.env (see .env.example).');
+  process.exit(1);
+}
 
 // Read URLs from harvested_tournaments.txt
 const txtPath = path.join(__dirname, 'harvested_tournaments.txt');
@@ -51,6 +58,7 @@ function postJson(apiPath, data) {
       headers: {
         'Content-Type':   'application/json',
         'Content-Length': Buffer.byteLength(body),
+        'x-admin-token':  ADMIN_TOKEN,
       },
     }, res => {
       let raw = '';

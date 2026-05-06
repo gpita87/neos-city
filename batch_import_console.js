@@ -12,6 +12,12 @@ const ALL_SLUGS = ['6rn5l0oz', '82g5sj9t', '8rd0p4mu', '4ly9e8mw', 'zesfy2jd', '
   const CHUNK_SIZE = 50;          // slugs per batch-import call
   const DELAY_MS   = 2000;        // wait between chunks (ms) to respect rate limits
   const API        = 'http://localhost:3001/api/tournaments/batch-import';
+  // Paste your ADMIN_TOKEN here (the same value as backend/.env ADMIN_TOKEN).
+  const ADMIN_TOKEN = '';
+  if (!ADMIN_TOKEN) {
+    console.error('Set ADMIN_TOKEN at the top of this script before running.');
+    return;
+  }
 
   const totals = { imported: 0, skipped: 0, errors: 0 };
   const errorLog = [];
@@ -30,7 +36,7 @@ const ALL_SLUGS = ['6rn5l0oz', '82g5sj9t', '8rd0p4mu', '4ly9e8mw', 'zesfy2jd', '
     try {
       const r = await fetch(API, {
         method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
+        headers: { 'Content-Type': 'application/json', 'x-admin-token': ADMIN_TOKEN },
         body: JSON.stringify({ urls: chunk.map(s => `https://challonge.com/${s}`) })
       });
       const data = await r.json();
