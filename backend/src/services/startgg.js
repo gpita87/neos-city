@@ -52,6 +52,12 @@ async function getPhaseGroup(phaseGroupId) {
             }
           }
         }
+        standings(query: { perPage: 256, page: 1 }) {
+          nodes {
+            placement
+            entrant { id name }
+          }
+        }
         sets(page: 1, perPage: 64, sortType: STANDARD) {
           pageInfo { total page }
           nodes {
@@ -61,7 +67,6 @@ async function getPhaseGroup(phaseGroupId) {
             fullRoundText
             round
             slots {
-              standing { placement }
               entrant { id name }
             }
           }
@@ -88,7 +93,6 @@ async function getAllSets(phaseGroupId) {
             nodes {
               id state winnerId fullRoundText round
               slots {
-                standing { placement }
                 entrant { id name }
               }
             }

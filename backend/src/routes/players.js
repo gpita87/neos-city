@@ -66,6 +66,62 @@ router.get('/offline-leaderboard', async (req, res) => {
   }
 });
 
+// GET /api/players/:id/offline-placements — contributing offline tournaments
+// for a single tier × placement cell on the player profile.
+//
+// Query params:
+//   tier:      worlds | major | regional | other            (required)
+//   placement: wins | runner_up | top4 | top8               (required)
+//
+// `top4` and `top8` are inclusive (final_rank <= 4 / <= 8) so the row count
+// matches the offline-record table on the profile page.
+router.get('/:id/offline-placements', async (req, res) => {
+  try {
+    const validTiers = new Set(['worlds', 'major', 'regional', 'other']);
+    const validPlacements = new Set(['wins', 'runner_up', 'top4', 'top8']);
+    const tier = String(req.query.tier || '').toLowerCase();
+    const placement = String(req.query.placement || '').toLowerCase();
+
+    if (!validTiers.has(tier)) {
+      return res.status(400).json({ error: `tier must be one of: ${[...validTiers].join(', ')}` });
+    }
+    if (!validPlacements.has(placement)) {
+      return res.status(400).json({ error: `placement must be one of: ${[...validPlacements].join(', ')}` });
+    }
+
+    let rankFilter;
+    if      (placement === 'wins')      rankFilter = 'tp.final_rank = 1';
+    else if (placement === 'runner_up') rankFilter = 'tp.final_rank = 2';
+    else if (placement === 'top4')      rankFilter = 'tp.final_rank <= 4';
+    else                                rankFilter = 'tp.final_rank <= 8';
+
+    const { rows } = await db.query(
+      `SELECT
+         t.id, t.name, t.series, t.location, t.prize_pool, t.participants_count,
+         t.completed_at, t.started_at, t.liquipedia_url, t.liquipedia_slug,
+         tp.final_rank
+       FROM tournament_placements tp
+       JOIN tournaments t ON tp.tournament_id = t.id
+       WHERE tp.player_id = $1
+         AND t.is_offline = TRUE
+         AND t.series = $2
+         AND ${rankFilter}
+       ORDER BY COALESCE(t.completed_at, t.started_at) DESC NULLS LAST, t.id DESC`,
+      [req.params.id, tier]
+    );
+
+    res.json({
+      player_id: Number(req.params.id),
+      tier,
+      placement,
+      count: rows.length,
+      tournaments: rows,
+    });
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
 // GET /api/players/:id — full profile
 router.get('/:id', async (req, res) => {
   try {

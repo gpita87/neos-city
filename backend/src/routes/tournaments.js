@@ -134,7 +134,29 @@ router.get('/:id', async (req, res) => {
       [tournament.id]
     );
 
-    res.json({ ...tournament, matches, placements });
+    // Achievements unlocked at this tournament — joined with the player who
+    // earned them and the achievement catalog so the UI gets everything it
+    // needs in one fetch. Relies on player_achievements.tournament_id, which
+    // recalculate_elo.js fills in.
+    const { rows: achievements } = await db.query(
+      `SELECT pa.player_id,
+              pa.achievement_id,
+              pa.unlocked_at,
+              p.display_name AS player_name,
+              a.name,
+              a.description,
+              a.icon,
+              a.category,
+              a.series
+         FROM player_achievements pa
+         JOIN players      p ON pa.player_id      = p.id
+         JOIN achievements a ON pa.achievement_id = a.id
+        WHERE pa.tournament_id = $1
+        ORDER BY p.display_name, a.category, a.id`,
+      [tournament.id]
+    );
+
+    res.json({ ...tournament, matches, placements, achievements });
   } catch (err) {
     res.status(500).json({ error: err.message });
   }
@@ -848,17 +870,14 @@ async function importOneStartgg(phaseGroupId) {
       entrantMap.set(entrantId, player);
     }
 
-    // Derive final placements from set slot standings
+    // Final placements come from the bracket-level standings, NOT per-set slot
+    // standings. start.gg's `slot.standing.placement` on a set is the player's
+    // position within THAT match (1 = winner, 2 = loser), not their tournament
+    // finish — using it produced "everyone who won a single match is 1st".
     const placementByEntrantId = new Map();
-    for (const set of sets) {
-      for (const slot of set.slots) {
-        if (slot.entrant && slot.standing?.placement) {
-          const existing = placementByEntrantId.get(String(slot.entrant.id));
-          // Keep the best (lowest) placement seen
-          if (!existing || slot.standing.placement < existing) {
-            placementByEntrantId.set(String(slot.entrant.id), slot.standing.placement);
-          }
-        }
+    for (const node of (bracket.standings?.nodes || [])) {
+      if (node?.entrant?.id != null && node?.placement != null) {
+        placementByEntrantId.set(String(node.entrant.id), node.placement);
       }
     }
 
@@ -1533,7 +1552,15 @@ async function importOneOffline({ name, date, location, prize_pool, participants
     [name, location || null, prize_pool || null, participants_count || null, date, slug, tier]
   );
 
-  // Helper: upsert a player by display name (same logic as start.gg/Tonamel)
+  // Helper: upsert a player by display name (same logic as start.gg/Tonamel).
+  //
+  // ON CONFLICT preserves the existing display_name. Reason: the offline
+  // alias system routes participants like "ThankSwalot" to canonical players
+  // like @jukem, but @jukem's stored display_name is the canonical name
+  // ("Jukem") set deliberately by the user. Overwriting it from EXCLUDED
+  // would silently re-tag @jukem as "ThankSwalot" on every offline import.
+  // For brand-new players (no conflict), the INSERT path still sets the
+  // display_name from the offline data.
   async function upsertOfflinePlayer(displayName) {
     let username = displayName.toLowerCase().replace(/\s+/g, '_');
     username = await resolveAlias(username);
@@ -1541,7 +1568,7 @@ async function importOneOffline({ name, date, location, prize_pool, participants
       `INSERT INTO players (challonge_username, display_name)
        VALUES ($1, $2)
        ON CONFLICT (challonge_username) DO UPDATE SET
-         display_name = EXCLUDED.display_name
+         display_name = players.display_name
        RETURNING *`,
       [username, displayName]
     );
@@ -1740,10 +1767,13 @@ async function importOneLiquipediaBracket({ bracketUrl, name, date, location, pr
   for (const displayName of allNames) {
     let username = displayName.toLowerCase().replace(/\s+/g, '_');
     username = await resolveAlias(username);
+    // Preserve existing display_name on conflict — see the matching comment
+    // in importOneOffline.upsertOfflinePlayer for why. The SET clause is a
+    // no-op (col = self) so the row is still RETURNED to populate playerMap.
     const { rows: [player] } = await db.query(
       `INSERT INTO players (challonge_username, display_name)
        VALUES ($1, $2)
-       ON CONFLICT (challonge_username) DO UPDATE SET display_name = EXCLUDED.display_name
+       ON CONFLICT (challonge_username) DO UPDATE SET display_name = players.display_name
        RETURNING *`,
       [username, displayName]
     );
@@ -1805,29 +1835,79 @@ async function importOneLiquipediaBracket({ bracketUrl, name, date, location, pr
       gamesMap.set(p2.id, (gamesMap.get(p2.id) || 0) + 1);
     }
 
-    // Derive placements for placement bonuses (same weight-based algorithm as Tonamel)
-    const playerRecord = new Map();
-    for (const m of matches) {
-      const update = (name, isWin) => {
-        const cur = playerRecord.get(name);
-        if (!cur || m.weight > cur.weight || (m.weight === cur.weight && isWin))
-          playerRecord.set(name, { weight: m.weight, isWin });
+    // ── Derive placements (v2: "last match defines you") ─────────────────
+    //
+    // Why a rewrite: the prior algorithm tracked each player's
+    // {weight, isWin} of their highest-weight appearance, with a
+    // tie-breaker that PREFERRED wins at the same weight. That had two
+    // failure modes on Liquipedia brackets:
+    //
+    //   (a) The Liquipedia parser assigns weight per-COLUMN, so multiple
+    //       matches in the same column share a weight. With the
+    //       "prefer wins on ties" rule, every player who won a match in
+    //       a given column ended up flagged isWin=true at that column's
+    //       weight — including players who later lost a same-weight
+    //       match. Result: multiple "winners" tied at the highest column.
+    //   (b) GF reset specifically: GF1 winner records {W=GF, isWin=true},
+    //       then loses GF2 (same weight, isWin=false) → no update kept
+    //       them flagged as a winner of the GF column, tying them with
+    //       the actual champion at rank 1.
+    //
+    // The fix: for each player, track their LAST match (highest weight,
+    // with array-index as tie-breaker so reset matches actually overwrite
+    // the earlier same-weight record). Then:
+    //   - Champion = the player whose last match they WON, at the
+    //     highest weight. (In a normal bracket there is exactly one such
+    //     player; if the parser produced something weird the highest-
+    //     weight winner still wins out.)
+    //   - Everyone else is ranked by their last-match weight, descending
+    //     (you went out later → you placed better). Players who lost in
+    //     the same column / same weight tie at the same rank, and the
+    //     next group's rank is bumped by the size of the tie group —
+    //     which mirrors how a real double-elim bracket numbers placements
+    //     ("5–6", "7–8", "9–12", ...).
+    const lastMatch = new Map();  // player name → { weight, isWin, idx }
+    matches.forEach((m, idx) => {
+      const upd = (name, isWin) => {
+        if (!name) return;
+        const cur = lastMatch.get(name);
+        if (!cur
+            || m.weight > cur.weight
+            || (m.weight === cur.weight && idx > cur.idx)) {
+          lastMatch.set(name, { weight: m.weight, isWin, idx });
+        }
       };
-      update(m.winner, true);
-      update(m.loser,  false);
-    }
-    const sorted = [...playerRecord.entries()].sort((a, b) => {
-      if (a[1].isWin !== b[1].isWin) return a[1].isWin ? -1 : 1;
-      return b[1].weight - a[1].weight;
+      upd(m.winner, true);
+      upd(m.loser,  false);
     });
-    let rank = 1, i = 0;
+
+    // Champion = player whose last match was a win, at the highest weight.
+    let champion = null;
+    let champWeight = -Infinity;
+    for (const [name, rec] of lastMatch) {
+      if (rec.isWin && rec.weight > champWeight) {
+        champWeight = rec.weight;
+        champion = name;
+      }
+    }
+
     const placements = new Map(); // display name → rank
-    while (i < sorted.length) {
-      const { weight: w, isWin } = sorted[i][1];
+    if (champion) placements.set(champion, 1);
+
+    // Rank everyone else by their last-match weight DESC, with same-weight
+    // ties sharing a rank and the next group bumped by the tie size.
+    const others = [...lastMatch.entries()]
+      .filter(([name]) => name !== champion)
+      .sort((a, b) => b[1].weight - a[1].weight);
+
+    let rank = 2, i = 0;
+    while (i < others.length) {
+      const w = others[i][1].weight;
       let j = i;
-      while (j < sorted.length && sorted[j][1].weight === w && sorted[j][1].isWin === isWin) j++;
-      for (let k = i; k < j; k++) placements.set(sorted[k][0], rank);
-      rank += (j - i); i = j;
+      while (j < others.length && others[j][1].weight === w) j++;
+      for (let k = i; k < j; k++) placements.set(others[k][0], rank);
+      rank += (j - i);
+      i = j;
     }
 
     // Apply placement bonuses
@@ -1856,32 +1936,41 @@ async function importOneLiquipediaBracket({ bracketUrl, name, date, location, pr
     }
 
     // ── Tournament placements & career points ────────────────────────────────
+    // Wipe every existing placement on this tournament before re-inserting so
+    // the bracket import is the authoritative source of truth for placements.
+    // Without this, two failure modes leave stale rows in place:
+    //   (a) An older buggy bracket parse promoted multiple same-column winners
+    //       to rank 1, and those rows survived later parses (different
+    //       player_id, so the (tournament_id, player_id) upsert never touched
+    //       them — leaving multiple rank-1 / rank-2 rows per tournament).
+    //   (b) offline_import.js's pre-bracket rank-1/2 rows for the canonical
+    //       winner/runner-up co-existed with bracket-derived ranks, again as
+    //       different player_ids in the same tournament.
+    // The bracket data covers every entrant (because we just upserted players
+    // for every name in matches[]), so the post-DELETE INSERT loop is a
+    // complete repopulation — no row is left orphaned.
+    await db.query(
+      `DELETE FROM tournament_placements WHERE tournament_id = $1`,
+      [tournament.id]
+    );
     for (const [name, rank] of placements) {
       const player = playerMap.get(name);
       if (!player) continue;
       const pts = careerPoints(rank, totalParticipants);
       await db.query(
         `INSERT INTO tournament_placements (tournament_id, player_id, final_rank, career_points)
+         VALUES ($1, $2, $3, $4)
          ON CONFLICT (tournament_id, player_id) DO UPDATE SET final_rank=$3, career_points=$4`,
         [tournament.id, player.id, rank, pts]
       );
     }
 
     // ── Update offline player stats ──────────────────────────────────────────
+    // refreshOfflineStats rebuilds the full per-tier offline_*_*/offline_score
+    // columns from the placements that were just written, so the profile's
+    // OFFLINE RECORD table updates without needing a separate recalculate run.
     for (const [, player] of playerMap) {
-      const { rows: [stats] } = await db.query(
-        `SELECT
-           COUNT(*) FILTER (WHERE tp.final_rank = 1)  AS wins,
-           COUNT(*) FILTER (WHERE tp.final_rank <= 2) AS top2
-         FROM tournament_placements tp
-         JOIN tournaments t ON tp.tournament_id = t.id
-         WHERE tp.player_id = $1 AND t.is_offline = TRUE`,
-        [player.id]
-      );
-      await db.query(
-        `UPDATE players SET offline_wins = $2, offline_top2 = $3 WHERE id = $1`,
-        [player.id, parseInt(stats.wins), parseInt(stats.top2)]
-      );
+      await refreshOfflineStats(player.id);
 
       // Also run full stat update so games_played, win streaks, etc. are accurate
       await updatePlayerStats(player.id, tournament, playerMap, matches, null, totalParticipants);
@@ -1909,9 +1998,196 @@ router.post('/import-liquipedia-bracket', async (req, res) => {
   }
 });
 
+// ──────────────────────────────────────────────────────────────────────────────
+// Liquipedia placements importer — canonical placements with proper ties
+// ──────────────────────────────────────────────────────────────────────────────
+//
+// Why this exists alongside importOneLiquipediaBracket:
+//
+// The bracket parser produces *match* data (who played whom, who won) which is
+// the input ELO and Pass-2 achievements depend on. But it has historically
+// been bad at *placements*: the legacy parser stamps sequential DOM-order
+// `round` values on every match and never sets bracket_section='losers', so
+// players who actually went out at the same bracket round (5–6, 7–8, 9–12,
+// 13–16, 17–24 in a 24-player double-elim) get distinct ranks instead of
+// tying. Even the new-style parseBracket fell back to DOM-order weights
+// because its column-walking branch was never wired up.
+//
+// Liquipedia tournament pages already have a Prize Pool / placements table
+// that lists the canonical placements WITH their tie groupings. Scraping
+// that table is much more reliable than reconstructing ties from match data.
+//
+// This endpoint accepts a parsed placements list and overwrites whatever the
+// bracket import wrote. The flow expected from the browser console script:
+//
+//   1. POST /api/tournaments/import-liquipedia-bracket   ← matches + ELO
+//   2. POST /api/tournaments/import-liquipedia-placements ← canonical ranks
+//
+// Either order works (placements wipe + replace whatever exists), but running
+// placements last guarantees the Prize Pool table wins.
+async function importOneLiquipediaPlacements({ eventUrl, name, date, location, prize_pool, participants_count, placements }) {
+  if (!eventUrl) throw new Error('eventUrl is required');
+  if (!Array.isArray(placements) || placements.length === 0) throw new Error('placements array is required');
+
+  // The eventUrl is the MAIN page URL (no /Bracket suffix). Normalize the
+  // same way liquipediaUrlToSlug does so we can match against tournaments
+  // that were inserted via the bracket import (whose liquipedia_url has
+  // /Bracket stripped). If a row was inserted by offline_import.js without
+  // a liquipedia_url at all, we'll fall back to a name-based ILIKE match.
+  const liquipediaUrl = eventUrl
+    .replace(/^https?:\/\/liquipedia\.net\/fighters\//i, '')
+    .replace(/\/Bracket\/?$/i, '')
+    .toLowerCase();
+  const completedAt = date ? new Date(date).toISOString() : null;
+
+  // ── Find or create tournament ──────────────────────────────────────────────
+  // 1st: exact liquipedia_url match (set by previous bracket import)
+  // 2nd: name-based match against an existing offline row
+  // 3rd: create a fresh offline row from the metadata we have
+  let tournament;
+  const { rows: [byUrl] } = await db.query(
+    `SELECT * FROM tournaments WHERE liquipedia_url = $1`, [liquipediaUrl]
+  );
+
+  if (byUrl) {
+    const { rows: [updated] } = await db.query(
+      `UPDATE tournaments SET
+         name               = COALESCE($2, name),
+         completed_at       = COALESCE($3, completed_at),
+         location           = COALESCE($4, location),
+         prize_pool         = COALESCE($5, prize_pool),
+         participants_count = COALESCE($6, participants_count),
+         is_offline         = TRUE
+       WHERE id = $1 RETURNING *`,
+      [byUrl.id, name || null, completedAt, location || null, prize_pool || null, participants_count || null]
+    );
+    tournament = updated;
+  } else {
+    const { rows: [byName] } = name ? await db.query(
+      `SELECT * FROM tournaments WHERE is_offline = TRUE AND name ILIKE $1 LIMIT 1`,
+      [`%${name}%`]
+    ) : { rows: [] };
+
+    if (byName) {
+      const { rows: [updated] } = await db.query(
+        `UPDATE tournaments SET
+           liquipedia_url     = $2,
+           completed_at       = COALESCE($3, completed_at),
+           location           = COALESCE($4, location),
+           prize_pool         = COALESCE($5, prize_pool),
+           participants_count = COALESCE($6, participants_count)
+         WHERE id = $1 RETURNING *`,
+        [byName.id, liquipediaUrl, completedAt, location || null, prize_pool || null, participants_count || null]
+      );
+      tournament = updated;
+    } else {
+      const { rows: [created] } = await db.query(
+        `INSERT INTO tournaments
+           (challonge_id, name, is_offline, location, prize_pool, participants_count,
+            completed_at, started_at, source, liquipedia_url)
+         VALUES (NULL, $1, TRUE, $2, $3, $4, $5, $5, 'offline', $6)
+         RETURNING *`,
+        [name || liquipediaUrl, location || null, prize_pool || null, participants_count || null, completedAt, liquipediaUrl]
+      );
+      tournament = created;
+    }
+  }
+
+  // ── Upsert players ─────────────────────────────────────────────────────────
+  // The placements list comes from Liquipedia's display names, which is what
+  // every other importer (challonge, startgg, tonamel, bracket import) keys
+  // on. resolveAlias maps known display-name aliases to a canonical username
+  // — same path as importOneLiquipediaBracket so a player who appears in the
+  // bracket AND the placements table resolves to the same row.
+  const allNames = new Set();
+  for (const group of placements) {
+    if (!Array.isArray(group.players)) continue;
+    for (const n of group.players) {
+      const trimmed = (n || '').trim();
+      if (trimmed) allNames.add(trimmed);
+    }
+  }
+
+  const playerByName = new Map();
+  for (const displayName of allNames) {
+    let username = displayName.toLowerCase().replace(/\s+/g, '_');
+    username = await resolveAlias(username);
+    const { rows: [player] } = await db.query(
+      `INSERT INTO players (challonge_username, display_name)
+       VALUES ($1, $2)
+       ON CONFLICT (challonge_username) DO UPDATE SET display_name = players.display_name
+       RETURNING *`,
+      [username, displayName]
+    );
+    playerByName.set(displayName, player);
+  }
+
+  const totalParticipants = participants_count || allNames.size;
+
+  // ── Wipe + INSERT placements ───────────────────────────────────────────────
+  // Wipe is required for the same reasons importOneLiquipediaBracket wipes
+  // (see the long comment in that function): without it, stale rows from
+  // any prior import path survive whenever the upsert key (tournament_id,
+  // player_id) doesn't collide with something we're writing now.
+  await db.query(
+    `DELETE FROM tournament_placements WHERE tournament_id = $1`,
+    [tournament.id]
+  );
+
+  let inserted = 0;
+  const affectedPlayerIds = new Set();
+  for (const group of placements) {
+    const rank = parseInt(group.rank, 10);
+    if (!rank || rank < 1) continue;
+    const players = (group.players || []).map(s => (s || '').trim()).filter(Boolean);
+    for (const displayName of players) {
+      const player = playerByName.get(displayName);
+      if (!player) continue;
+      const pts = careerPoints(rank, totalParticipants);
+      await db.query(
+        `INSERT INTO tournament_placements (tournament_id, player_id, final_rank, career_points)
+         VALUES ($1, $2, $3, $4)
+         ON CONFLICT (tournament_id, player_id) DO UPDATE SET final_rank=$3, career_points=$4`,
+        [tournament.id, player.id, rank, pts]
+      );
+      affectedPlayerIds.add(player.id);
+      inserted++;
+    }
+  }
+
+  // ── Refresh per-player offline tier stats ──────────────────────────────────
+  // Same hook the bracket import calls; keeps the OFFLINE RECORD card on each
+  // player profile in sync without needing a full recalculate_elo run.
+  for (const pid of affectedPlayerIds) {
+    await refreshOfflineStats(pid);
+  }
+
+  return {
+    success: true,
+    tournament: tournament.name,
+    liquipedia_url: liquipediaUrl,
+    placements_inserted: inserted,
+    participants: totalParticipants,
+  };
+}
+
+// POST /api/tournaments/import-liquipedia-placements
+// Body: { eventUrl, name?, date?, location?, prize_pool?, participants_count?,
+//         placements: [{ rank: number, players: string[] }] }
+router.post('/import-liquipedia-placements', async (req, res) => {
+  try {
+    const result = await importOneLiquipediaPlacements(req.body);
+    res.json(result);
+  } catch (err) {
+    console.error('Liquipedia placements import error:', err.message);
+    res.status(500).json({ error: err.message });
+  }
+});
+
 module.exports = router;
 module.exports.importOne                    = importOne;
 module.exports.importOneStartgg             = importOneStartgg;
 module.exports.importOneTonamel             = importOneTonamel;
 module.exports.importOneOffline             = importOneOffline;
 module.exports.importOneLiquipediaBracket   = importOneLiquipediaBracket;
+module.exports.importOneLiquipediaPlacements = importOneLiquipediaPlacements;
