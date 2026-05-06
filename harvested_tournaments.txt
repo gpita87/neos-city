@@ -537,3 +537,6 @@ https://challonge.com/translate
 https://challonge.com/terms_of_service
 https://challonge.com/privacy_policy
 https://challonge.com/bracket_generator
+# Appended via harvest_console.js on 2026-05-06 (organizer: rigz_)
+https://challonge.com/rigz_/e6vyswtc
+https://challonge.com/rigz_/smu2m4a9
