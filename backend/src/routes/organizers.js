@@ -3,6 +3,7 @@ const router = express.Router();
 const db = require('../db');
 const challonge = require('../services/challonge');
 const { detectSeries, SERIES_NAMES } = require('../services/achievements');
+const requireAdmin = require('../middleware/requireAdmin');
 
 // ── Shared helpers ────────────────────────────────────────────────────────────
 
@@ -58,7 +59,7 @@ router.get('/', async (req, res) => {
 });
 
 // POST /api/organizers — add an organizer to the pool
-router.post('/', async (req, res) => {
+router.post('/', requireAdmin, async (req, res) => {
   const { challonge_username, display_name, notes, challonge_subdomain, slug_patterns } = req.body;
   if (!challonge_username) return res.status(400).json({ error: 'challonge_username required' });
 
@@ -81,7 +82,7 @@ router.post('/', async (req, res) => {
 });
 
 // DELETE /api/organizers/:id — remove an organizer
-router.delete('/:id', async (req, res) => {
+router.delete('/:id', requireAdmin, async (req, res) => {
   try {
     await db.query(`DELETE FROM organizers WHERE id = $1`, [req.params.id]);
     res.json({ success: true });
@@ -91,7 +92,7 @@ router.delete('/:id', async (req, res) => {
 });
 
 // POST /api/organizers/discover — preview what tournaments would be found (dry run)
-router.post('/discover', async (req, res) => {
+router.post('/discover', requireAdmin, async (req, res) => {
   try {
     const { rows: organizers } = await db.query(`SELECT * FROM organizers`);
     if (organizers.length === 0) return res.json({ tournaments: [] });
@@ -184,7 +185,7 @@ router.post('/discover', async (req, res) => {
 });
 
 // POST /api/organizers/sync — import all NEW tournaments from all organizers
-router.post('/sync', async (req, res) => {
+router.post('/sync', requireAdmin, async (req, res) => {
   const { dry_run = false, series_filter = null } = req.body;
 
   try {

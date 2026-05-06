@@ -5,6 +5,7 @@ const startgg   = require('../services/startgg');
 const { checkAchievements, checkAchievementsPass1, checkAchievementsPass2, detectSeries, detectOfflineTier } = require('../services/achievements');
 const { calculateNewRatings, placementBonus } = require('../services/elo');
 const db = require('../db');
+const requireAdmin = require('../middleware/requireAdmin');
 
 // ── Player alias resolution ──────────────────────────────────────────────────
 // Checks the player_aliases table for name changes (e.g. thankswalot → jukem).
@@ -388,7 +389,7 @@ async function importOne(challonge_id) {
 }
 
 // POST /api/tournaments/import  — HTTP wrapper around importOne()
-router.post('/import', async (req, res) => {
+router.post('/import', requireAdmin, async (req, res) => {
   const { challonge_id } = req.body;
   if (!challonge_id) return res.status(400).json({ error: 'challonge_id required' });
   // Strip full URL down to slug if pasted
@@ -404,7 +405,7 @@ router.post('/import', async (req, res) => {
 // POST /api/tournaments/batch-import — import several tournaments at once
 // Body: { urls: ["https://challonge.com/abc123", "challonge.com/xyz", ...] }
 // Each entry can be a full URL or just a slug.
-router.post('/batch-import', async (req, res) => {
+router.post('/batch-import', requireAdmin, async (req, res) => {
   const { urls = [] } = req.body;
   if (!Array.isArray(urls) || urls.length === 0) {
     return res.status(400).json({ error: 'urls array is required' });
@@ -470,7 +471,7 @@ router.post('/batch-import', async (req, res) => {
 // Returns each URL's tournament date without writing anything to the DB.
 // batch_import.js calls this first so it can sort URLs chronologically across
 // sources, which keeps live ELO close to correct without a full recalc.
-router.post('/preview-dates', async (req, res) => {
+router.post('/preview-dates', requireAdmin, async (req, res) => {
   const { urls = [] } = req.body;
   if (!Array.isArray(urls)) {
     return res.status(400).json({ error: 'urls array is required' });
@@ -529,7 +530,7 @@ router.post('/preview-dates', async (req, res) => {
 // 403-blocked from Node. The browser scrapes the URLs, the backend dedupes
 // against harvested_tournaments.txt + tournaments DB, validates each via the
 // Pokkén keyword list, and appends only the new validated URLs to the file.
-router.post('/append-harvest', async (req, res) => {
+router.post('/append-harvest', requireAdmin, async (req, res) => {
   const fs   = require('fs');
   const path = require('path');
   const { urls = [], organizer = 'unknown', skip_validation = false } = req.body;
@@ -1030,7 +1031,7 @@ async function importOneStartgg(phaseGroupId) {
 }
 
 // POST /api/tournaments/import-startgg — import a single start.gg bracket
-router.post('/import-startgg', async (req, res) => {
+router.post('/import-startgg', requireAdmin, async (req, res) => {
   const { url, phase_group_id } = req.body;
 
   let pgId = phase_group_id;
@@ -1051,7 +1052,7 @@ router.post('/import-startgg', async (req, res) => {
 
 // POST /api/tournaments/batch-import-startgg
 // Body: { urls: ["https://www.start.gg/tournament/.../brackets/PHASE/PHASEGROUP/..."] }
-router.post('/batch-import-startgg', async (req, res) => {
+router.post('/batch-import-startgg', requireAdmin, async (req, res) => {
   const { urls = [] } = req.body;
   if (!Array.isArray(urls) || urls.length === 0) {
     return res.status(400).json({ error: 'urls array is required' });
@@ -1383,7 +1384,7 @@ async function importOneTonamel(payload) {
 
 // POST /api/tournaments/import-tonamel — import a single Tonamel bracket
 // Body: { tonamel_id, name, series, date, participants_count, matches: [...] }
-router.post('/import-tonamel', async (req, res) => {
+router.post('/import-tonamel', requireAdmin, async (req, res) => {
   try {
     const result = await importOneTonamel(req.body);
     res.json(result);
@@ -1395,7 +1396,7 @@ router.post('/import-tonamel', async (req, res) => {
 
 // POST /api/tournaments/batch-import-tonamel
 // Body: { tournaments: [{ tonamel_id, name, series, date, participants_count, matches }, ...] }
-router.post('/batch-import-tonamel', async (req, res) => {
+router.post('/batch-import-tonamel', requireAdmin, async (req, res) => {
   const { tournaments = [] } = req.body;
   if (!Array.isArray(tournaments) || tournaments.length === 0) {
     return res.status(400).json({ error: 'tournaments array is required' });
@@ -1617,7 +1618,7 @@ async function importOneOffline({ name, date, location, prize_pool, participants
 
 // POST /api/tournaments/import-offline
 // Body: { name, date, location, prize_pool, participants_count, winner, runner_up, liquipedia_slug }
-router.post('/import-offline', async (req, res) => {
+router.post('/import-offline', requireAdmin, async (req, res) => {
   try {
     const result = await importOneOffline(req.body);
     res.json(result);
@@ -1629,7 +1630,7 @@ router.post('/import-offline', async (req, res) => {
 
 // POST /api/tournaments/batch-import-offline
 // Body: { tournaments: [{ name, date, location, prize_pool, participants_count, winner, runner_up, liquipedia_slug }] }
-router.post('/batch-import-offline', async (req, res) => {
+router.post('/batch-import-offline', requireAdmin, async (req, res) => {
   const { tournaments = [] } = req.body;
   if (!Array.isArray(tournaments) || tournaments.length === 0) {
     return res.status(400).json({ error: 'tournaments array is required' });
@@ -1988,7 +1989,7 @@ async function importOneLiquipediaBracket({ bracketUrl, name, date, location, pr
 
 // POST /api/tournaments/import-liquipedia-bracket
 // Body: { bracketUrl, name, date, location, prize_pool, participants_count, matches: [...] }
-router.post('/import-liquipedia-bracket', async (req, res) => {
+router.post('/import-liquipedia-bracket', requireAdmin, async (req, res) => {
   try {
     const result = await importOneLiquipediaBracket(req.body);
     res.json(result);
@@ -2176,7 +2177,7 @@ async function importOneLiquipediaPlacements({ eventUrl, name, date, location, p
 // POST /api/tournaments/import-liquipedia-placements
 // Body: { eventUrl, name?, date?, location?, prize_pool?, participants_count?,
 //         placements: [{ rank: number, players: string[] }] }
-router.post('/import-liquipedia-placements', async (req, res) => {
+router.post('/import-liquipedia-placements', requireAdmin, async (req, res) => {
   try {
     const result = await importOneLiquipediaPlacements(req.body);
     res.json(result);
