@@ -413,6 +413,18 @@ function parsePlaceString(s) {
 //     non-breaking space (U+00A0) between "place" and the number, which is
 //     why we use \s+ rather than a literal space in the test.
 //   • TBD / TBA / TBC placeholders.
+//   • Team-template wrappers — modern .block-player rows and the team column
+//     of wikitable layouts both wrap their team logo+link in
+//     .team-template-team-standard / .team-template-text / a class containing
+//     "team-template". Drop those — they're org pages, not players. (Without
+//     this filter the CEO 2016 / Frostfire 2019 / 2019 NA Championship Series
+//     wikitables leaked "Lazarus Esports", "Panda Global", and "Circa eSports"
+//     into the players table as if they had placed in Pokkén events.)
+//   • Multi-segment /fighters/ paths — wikitable layouts often include a
+//     "qualifies for" tournament link in an early cell, e.g.
+//     /fighters/Pokk%C3%A9n_Tournament_DX/World_Championships/2019. Real
+//     player paths are always /fighters/<single-segment>; anything with an
+//     extra slash after that first segment is a tournament/page link.
 function extractPlayerNames(cell) {
   if (!cell) return [];
   const out = [];
@@ -425,6 +437,8 @@ function extractPlayerNames(cell) {
     if (/^place\s+\d+(\s+to\s+\d+)?\s*$/i.test(txt)) continue; // expander link
     const href = a.getAttribute('href') || '';
     if (href === '#' || /#$/.test(href)) continue;         // same-page anchor
+    if (a.closest('.team-template-team-standard, .team-template-text, [class*="team-template"]')) continue;
+    if (/^\/fighters\/[^/?#]+\/[^/?#]/.test(href)) continue; // tournament/page link, not a player
     out.push(txt);
   }
 
@@ -496,32 +510,70 @@ function findPlacementRows(doc) {
   if (modern) {
     const rows = modern.querySelectorAll('.csstable-widget-row, .prizepoolrowcontent, tr');
     const out = [];
+
+    // Predicate: is this cell the team column? Two markers, both observed in
+    // the wild: a literal `prizepool-col-team` class, or any descendant that
+    // looks like a team-template wrapper. We exclude these whether picking
+    // a participant cell OR walking anchors inside one.
+    const isTeamCell = (c) =>
+      c.matches?.('.prizepool-col-team') ||
+      !!c.querySelector?.('.team-template-team-standard, [class*="team-template"]');
+
     for (const row of rows) {
       if (row.matches('.prizepoolrowtitle, thead tr')) continue;
       const cells = row.querySelectorAll(':scope > .csstable-widget-cell, :scope > td, :scope > .prizepoolrowcontent > div');
       if (cells.length < 2) continue;
+
+      // Place text — when cells[0] doesn't parse as a place AND we already
+      // have a tier on the stack, this is a wikitable spillover row: a tied
+      // player gets their own row with just [player, team] cells, no place
+      // column. Reuse the previous tier's placeText so the player gets
+      // grouped with their tier-mates in reducePlacements.
       const placeCell = row.querySelector('.placement-text, [class*="placement"]') || cells[0];
-      const placeText = (placeCell?.textContent || '').trim();
-      if (!placeText) continue;
-      // Gather EVERY cell on the row that contains a player block — tied tiers
-      // render each player as a separate top-level .csstable-widget-cell, so
-      // we'd lose all but one if we only looked at cells[length-1]. Wrap the
-      // collected cells into a synthetic <div> so the existing extractor API
-      // (which takes a single cell) keeps working: it'll see every <a> in one
-      // querySelectorAll('a') sweep. Falls back to the last cell for legacy
-      // tables that don't use .block-player wrappers.
+      const rawPlaceText = (placeCell?.textContent || '').trim();
+      const parsedPlace = parsePlaceString(rawPlaceText);
+      let effectivePlaceText = rawPlaceText;
+      let isSpillover = false;
+      if (!parsedPlace && out.length > 0 && cells.length <= 2) {
+        effectivePlaceText = out[out.length - 1][0];
+        isSpillover = true;
+      }
+      if (!effectivePlaceText) continue;
+
+      // Pick the participant cell(s).
+      //
+      // Modern .csstable-widget rows: one .block-player cell per tied player —
+      // gather them all into a synthetic <div> and feed extractPlayerNames.
+      //
+      // Wikitable rows: layout is [place, $, %, player, team] (or just
+      // [player, team] on spillover rows). Drop team cells; on a placement
+      // row with a place column, also drop the leading 3 metadata cells so
+      // we don't pull in the "qualifies for World Championships" tournament
+      // link that frequently lives in cell[2] (extractPlayerNames'
+      // multi-segment-href filter would catch it anyway, but skipping the
+      // metadata cells up front keeps the inputs honest).
       const cellsArr = Array.from(cells);
-      const playerCells = cellsArr.filter(c => c.querySelector('.block-player, .block-players-wrapper'));
+      const playerBlockCells = cellsArr.filter(c => c.querySelector('.block-player, .block-players-wrapper'));
+
+      let participantCells;
+      if (playerBlockCells.length > 0) {
+        participantCells = playerBlockCells;
+      } else {
+        const nonTeam = cellsArr.filter(c => !isTeamCell(c));
+        // Spillover rows have only [player, team] → all non-team cells are
+        // players. Placement rows lead with [place, $, %] → skip those.
+        participantCells = isSpillover ? nonTeam : nonTeam.slice(3);
+      }
+      if (participantCells.length === 0) continue;
+
       let participantCell;
-      if (playerCells.length === 0) {
-        participantCell = cells[cells.length - 1];
-      } else if (playerCells.length === 1) {
-        participantCell = playerCells[0];
+      if (participantCells.length === 1) {
+        participantCell = participantCells[0];
       } else {
         participantCell = doc.createElement('div');
-        for (const c of playerCells) participantCell.appendChild(c.cloneNode(true));
+        for (const c of participantCells) participantCell.appendChild(c.cloneNode(true));
       }
-      out.push([placeText, participantCell]);
+      out.push([effectivePlaceText, participantCell]);
     }
     if (out.length >= 2) return { rows: out, strategy: 'modern' };
   }
