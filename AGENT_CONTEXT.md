@@ -36,6 +36,23 @@ This file captures decisions, constraints, and community knowledge that aren't o
 
 `.claude/worktrees/` is gitignored (`192a102`) and the harness creates one per Claude Code invocation when isolation is on. Treat any work that lands in there as **disposable**: don't write `WORKTREE_SUMMARY.md`, deploy plans, or other "next agent reads this" docs into a `.claude/worktrees/<slug>/`, because the slug is unguessable, the directory may be cleaned up by Claude Code, and Gabriel has no `merge-worktree.js`-equivalent for it. For routine edits (one or two files, a quick fix, no need to leave a handoff doc behind), just do the work in place and commit + push your branch — the change survives in git history regardless of what happens to the directory, and Gabriel can cherry-pick it onto `main` in one command. Only escalate to `spawn-worktree.js` when the work is non-trivial enough that you'd otherwise want a `WORKTREE_SUMMARY.md` to hand it off, or when you'd be touching enough files that reviewing the squashed diff in IntelliJ matters.
 
+**Handoff rule (read this before writing your final message).** A deploy command of the form `cd C:\Users\pitag\Documents\neos-city; node <script> <path>` only works if `<path>` exists on `main`. If you're in a `.claude/worktrees/<slug>/` and you created or modified `<path>` this session, the file lives on the harness branch (e.g. `claude/<slug>`) — `main`'s working tree doesn't have it yet. Your final message MUST get the files onto `main` BEFORE any command that uses them.
+
+Git worktrees share `.git`, so the harness branch is already visible from `main` as a local ref — Gabriel doesn't need a `git push` / `git fetch` to land it. He merges the local branch directly. The reliable pattern:
+
+1. From the worktree, commit (don't push): `git add -A; git commit -m "<summary>"`.
+2. Before writing the handoff, check whether `main` has moved since this session started. From the worktree:
+   ```
+   git log --oneline main ^HEAD
+   ```
+   If empty → `main` is at the worktree's base; suggest `git merge --ff-only claude/<slug>` (one new commit, linear history).
+   If non-empty → `main` has new commits the worktree doesn't have; `--ff-only` will fail. Do `git merge-tree --write-tree HEAD main` to confirm no conflicts, then suggest **`git cherry-pick claude/<slug>`** (clean single commit on top of main) or `git merge --squash claude/<slug>` followed by `git commit` (mirrors what `merge-worktree.js` does for the supported flow). If `merge-tree` produced conflict markers, surface them in the handoff — Gabriel will resolve them in IntelliJ before running the migration.
+3. Only AFTER step 2's merge command does the `node run_migration.js …` / `node recalculate_elo.js` / etc. command appear in your handoff.
+
+Mentally check before sending: "is every path I'm about to ask Gabriel to run actually on `main` right now?" If you can't answer yes, the handoff is broken and step 2 is missing.
+
+A `git push` of the harness branch is optional and only useful as a backup of the work — it does not affect Gabriel's ability to merge locally. Don't push without explicit user approval.
+
 The rest of this section describes the supported flow.
 
 **Setup at the start of a parallel session.** From the main worktree:
@@ -113,14 +130,10 @@ Series detection happens in `achievements.js` via `detectSeries(slug, name)` —
 - **No ELO floor** — the floor at 1200 was removed. Ratings can now drop freely below the starting value based on match results.
 - K-factor adjusts based on player experience (higher K early, lower later).
 - Placement bonuses on top of standard ELO delta for top finishes.
+- ELO is computed and stored but hidden from the UI (see "Front page revamp" below).
 
-### Career Points
-- **Only ever goes up.** 1st=10, 2nd=7, top4=5, top8=3, attended=1.
-- This is the "feel good" metric — it rewards longevity and participation, not just winning.
-- Displayed alongside ELO so players who don't win can still see progress.
-
-### Why Two Systems?
-Gabriel explicitly wanted to avoid a single metric that makes veterans feel bad. ELO is the competitive ranking. Career Points reward showing up.
+### Career Points (removed 2026-05-07)
+The career points system (1st=10, 2nd=7, top4=5, top8=3, attended=1) was removed. The values were arbitrary and the player record + achievements already convey participation and accomplishment. Migration: `backend/src/db/migrations/remove_career_points.sql` drops `players.career_points`, `tournament_placements.career_points`, and `idx_players_career_pts`.
 
 ---
 
@@ -318,8 +331,6 @@ Working:
 Broken / lossy:
 - The placements scraper in `liquipedia_import_console.js` (`findPlacementRows` / `extractPlayerNames` / `reducePlacements`) returns one player per tied tier and we don't know why. The two failure modes I worked through this session were the `place 9 to 24` expander leak (fixed) and `querySelector('.csstable-widget-cell-content')` returning only the first wrapper (changed to `cells[cells.length - 1]`). Neither change fully solved it.
 - `reapply_placements_from_matches.js` runs the v2 algorithm against the matches table and produces distinct ranks for everyone — it can't reconstruct ties because the legacy bracket parser flattened the bracket structure into sequential round numbers (every match has `bracket_section='winners'`, `round = 1..N` in DOM order). The matches table is genuinely lossy here. Don't expect this script to give canonical placements for legacy-parsed events; it's a fallback.
-- `careerPoints()` in `backend/src/routes/tournaments.js:32` only awards 3 pts to ranks 5–8 when `rank/total <= 0.125` (so only in 64+ entrant brackets). For a 24-player event, 5–8 fall through to "attended = 1". Doc says "1st=10, 2nd=7, top4=5, top8=3, attended=1" without scaling. Untouched this session — might be intentional, ask before "fixing".
-
 #### Why I'm flagging this as a circle
 
 I changed two things that should have moved the needle (anchor filter + last-cell pick) and the symptom is the same shape (one player per tier) with a different "winner" each time, suggesting the parser's row-selection is wrong, not just the cell-selection. Without DOM access (Liquipedia is on the fetch-block list — see the `web_fetch` failure earlier in this thread's history), I'm guessing at the structure.
@@ -367,10 +378,6 @@ node recalculate_elo.js                   # picks up the corrected placements
 ```
 
 Spot-check after: `/tournaments/<id>` for Frosty Faustings XVIII should show one rank-1 (Jukem), one rank-2 (Shadowcat), and the rest of the 24-player bracket distributed across ranks 3–24 with no duplicates.
-
-#### Known unrelated quirk worth flagging
-
-`careerPoints()` (`tournaments.js:32`) gives top-8 finishers 3 pts only when `rank/total <= 0.125`, i.e. only for brackets ≥ 64 entrants. In a 24-person event, ranks 5–8 fall through to the "attended = 1" bucket. AGENT_CONTEXT documents the system as "1st=10, 2nd=7, top4=5, top8=3, attended=1" without the size scaling, so the implementation and the doc disagree. Not touched in this session — flagging in case it's intentional or in case Gabriel wants the literal top-8-rank rule.
 
 ---
 

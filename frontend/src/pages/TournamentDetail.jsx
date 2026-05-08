@@ -128,7 +128,6 @@ export default function TournamentDetail() {
                 <tr className="border-b border-[#1a2744] text-slate-500 text-xs font-display tracking-wider">
                   <th className="px-4 py-3 text-left w-20">RANK</th>
                   <th className="px-4 py-3 text-left">PLAYER</th>
-                  <th className="px-4 py-3 text-right hidden sm:table-cell">CAREER PTS</th>
                   {!isOffline && (
                     <th className="px-4 py-3 text-right hidden sm:table-cell">ELO</th>
                   )}
@@ -149,9 +148,6 @@ export default function TournamentDetail() {
                         >
                           {p.display_name}
                         </Link>
-                      </td>
-                      <td className="px-4 py-3 text-right text-slate-300 hidden sm:table-cell">
-                        {p.career_points || 0}
                       </td>
                       {!isOffline && (
                         <td className="px-4 py-3 text-right text-slate-500 hidden sm:table-cell">

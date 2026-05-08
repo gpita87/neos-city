@@ -46,16 +46,6 @@ let oneTournamentId = null;
 
 function prompt(rl, q) { return new Promise(r => rl.question(q, ans => r(ans.trim()))); }
 
-// Mirror the careerPoints rule from backend/src/routes/tournaments.js so this
-// script writes the same values the bracket import would.
-function careerPoints(rank, total) {
-  if (rank === 1)            return 10;
-  if (rank === 2)            return 7;
-  if (rank <= 4)             return 5;
-  if (rank / total <= 0.125) return 3;
-  return 1;
-}
-
 const OFFLINE_TIERS = ['worlds', 'major', 'regional', 'other'];
 const OFFLINE_WEIGHTS = {
   worlds:   { wins: 100, runner_up: 60, top4: 35, top8: 20 },
@@ -293,8 +283,6 @@ async function run() {
 
       if (placements.size === 0) { skippedNoPlacements++; continue; }
 
-      const totalParticipants = t.participants_count || placements.size;
-
       if (!dryRun) {
         const del = await client.query(
           `DELETE FROM tournament_placements WHERE tournament_id = $1`,
@@ -303,12 +291,11 @@ async function run() {
         totalDeleted += del.rowCount;
 
         for (const [playerId, rank] of placements) {
-          const pts = careerPoints(rank, totalParticipants);
           await client.query(
-            `INSERT INTO tournament_placements (tournament_id, player_id, final_rank, career_points)
-             VALUES ($1, $2, $3, $4)
-             ON CONFLICT (tournament_id, player_id) DO UPDATE SET final_rank=$3, career_points=$4`,
-            [t.id, playerId, rank, pts]
+            `INSERT INTO tournament_placements (tournament_id, player_id, final_rank)
+             VALUES ($1, $2, $3)
+             ON CONFLICT (tournament_id, player_id) DO UPDATE SET final_rank=$3`,
+            [t.id, playerId, rank]
           );
           affectedPlayers.add(playerId);
           totalInserted++;

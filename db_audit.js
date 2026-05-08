@@ -57,7 +57,7 @@ async function run() {
   // 5. Placements by source
   const placements = await pool.query(`
     SELECT t.source, COUNT(tp.id) as placement_count,
-      COUNT(CASE WHEN tp.career_points > 0 THEN 1 END) as with_points
+      COUNT(CASE WHEN tp.final_rank IS NOT NULL THEN 1 END) as with_rank
     FROM tournament_placements tp JOIN tournaments t ON tp.tournament_id = t.id
     GROUP BY t.source ORDER BY placement_count DESC
   `);

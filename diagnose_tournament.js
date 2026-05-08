@@ -32,7 +32,7 @@ if (!id) {
     console.log(t);
 
     const { rows: ps } = await pool.query(
-      `SELECT tp.final_rank, tp.career_points, p.display_name, p.id AS player_id
+      `SELECT tp.final_rank, p.display_name, p.id AS player_id
        FROM tournament_placements tp
        JOIN players p ON p.id = tp.player_id
        WHERE tp.tournament_id = $1
@@ -40,7 +40,7 @@ if (!id) {
     );
     console.log(`\n── placements (${ps.length}) ──`);
     for (const r of ps) {
-      console.log(`  rank=${String(r.final_rank).padStart(3)}  pts=${String(r.career_points).padStart(2)}  ${r.display_name} (id=${r.player_id})`);
+      console.log(`  rank=${String(r.final_rank).padStart(3)}  ${r.display_name} (id=${r.player_id})`);
     }
 
     const { rows: [{ count: matchCount }] } = await pool.query(

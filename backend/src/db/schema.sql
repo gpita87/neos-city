@@ -8,7 +8,6 @@ CREATE TABLE IF NOT EXISTS players (
   display_name                TEXT NOT NULL,
   elo_rating                  INTEGER NOT NULL DEFAULT 1200,
   peak_elo                    INTEGER NOT NULL DEFAULT 1200,
-  career_points               INTEGER NOT NULL DEFAULT 0,
   games_played                INTEGER NOT NULL DEFAULT 0,
   total_match_wins            INTEGER NOT NULL DEFAULT 0,
   total_match_losses          INTEGER NOT NULL DEFAULT 0,
@@ -75,7 +74,6 @@ CREATE TABLE IF NOT EXISTS tournament_placements (
   tournament_id   INTEGER REFERENCES tournaments(id) ON DELETE CASCADE,
   player_id       INTEGER REFERENCES players(id) ON DELETE CASCADE,
   final_rank      INTEGER,
-  career_points   INTEGER NOT NULL DEFAULT 0,
   UNIQUE (tournament_id, player_id)
 );
 
@@ -147,7 +145,6 @@ CREATE INDEX IF NOT EXISTS idx_matches_player1       ON matches(player1_id);
 CREATE INDEX IF NOT EXISTS idx_matches_player2       ON matches(player2_id);
 CREATE INDEX IF NOT EXISTS idx_elo_history_player    ON elo_history(player_id);
 CREATE INDEX IF NOT EXISTS idx_player_achievements   ON player_achievements(player_id);
-CREATE INDEX IF NOT EXISTS idx_players_career_pts    ON players(career_points DESC);
 CREATE INDEX IF NOT EXISTS idx_players_elo           ON players(elo_rating DESC);
 CREATE INDEX IF NOT EXISTS idx_placements_player     ON tournament_placements(player_id);
 CREATE INDEX IF NOT EXISTS idx_tournaments_series    ON tournaments(series);

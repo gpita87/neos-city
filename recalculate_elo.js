@@ -45,7 +45,7 @@ const OFFLINE_WEIGHTS = {
   const REQUIRED_PLAYER_COLUMNS = [
     'total_match_wins', 'total_match_losses', 'tournaments_entered',
     'tournament_wins', 'runner_up_finishes', 'top4_finishes', 'top8_finishes',
-    'career_points', 'current_win_streak', 'longest_win_streak',
+    'current_win_streak', 'longest_win_streak',
     'games_played', 'peak_elo', 'elo_rating',
     'games_taken_from_champions', 'comebacks',
     ...ALL_SERIES.flatMap(s => [`${s}_entered`, `${s}_top8`, `${s}_top4`, `${s}_runner_up`, `${s}_wins`]),
@@ -94,7 +94,7 @@ const OFFLINE_WEIGHTS = {
     db.query(`SELECT id, tournament_id, player1_id, player2_id, winner_id, round,
                      player1_score, player2_score, state, played_at
               FROM matches`),
-    db.query(`SELECT player_id, tournament_id, final_rank, career_points
+    db.query(`SELECT player_id, tournament_id, final_rank
               FROM tournament_placements`),
   ]);
 
@@ -252,7 +252,7 @@ const OFFLINE_WEIGHTS = {
     }
 
     // Placement stats
-    let tWins = 0, runnerUp = 0, top4 = 0, top8 = 0, careerPts = 0;
+    let tWins = 0, runnerUp = 0, top4 = 0, top8 = 0;
     // Per-series placement stats
     const seriesStats = {};
     for (const s of ALL_SERIES) seriesStats[s] = { entered: 0, top8: 0, top4: 0, runner_up: 0, wins: 0 };
@@ -263,7 +263,6 @@ const OFFLINE_WEIGHTS = {
 
     for (const pl of myPlacements) {
       const rank = pl.final_rank;
-      careerPts += parseInt(pl.career_points) || 0;
       if (rank === 1) tWins++;
       if (rank === 2) runnerUp++;
       if (rank <= 4) top4++;
@@ -358,7 +357,6 @@ const OFFLINE_WEIGHTS = {
       runner_up_finishes: runnerUp,
       top4_finishes: top4,
       top8_finishes: top8,
-      career_points: careerPts,
       current_win_streak: currentStreak,
       longest_win_streak: longestStreak,
       games_taken_from_champions: champGames,
@@ -696,7 +694,7 @@ const OFFLINE_WEIGHTS = {
     'elo_rating', 'peak_elo', 'games_played',
     'total_match_wins', 'total_match_losses', 'tournaments_entered',
     'tournament_wins', 'runner_up_finishes', 'top4_finishes', 'top8_finishes',
-    'career_points', 'current_win_streak', 'longest_win_streak',
+    'current_win_streak', 'longest_win_streak',
     'games_taken_from_champions', 'comebacks',
     ...ALL_SERIES.flatMap(s => [`${s}_entered`, `${s}_top8`, `${s}_top4`, `${s}_runner_up`, `${s}_wins`]),
     'offline_wins', 'offline_top2', 'offline_score',

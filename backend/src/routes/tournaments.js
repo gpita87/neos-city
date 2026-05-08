@@ -29,15 +29,6 @@ async function resolveAlias(username) {
 // Invalidate cache when server has been running a while (pick up new aliases)
 setInterval(() => { _aliasCache = null; }, 5 * 60 * 1000);
 
-// Career point values by placement percentile
-function careerPoints(rank, total) {
-  if (rank === 1)              return 10;
-  if (rank === 2)              return 7;
-  if (rank <= 4)               return 5;
-  if (rank / total <= 0.125)   return 3;  // top 8 in large brackets
-  return 1;                                // attended
-}
-
 // GET /api/tournaments
 // Optional: ?is_offline=true  → only offline events
 //           ?is_offline=false → only online events
@@ -80,7 +71,7 @@ router.get('/recent-placements', async (req, res) => {
     const results = [];
     for (const t of tournaments) {
       const { rows: placements } = await db.query(
-        `SELECT tp.player_id, tp.final_rank, tp.career_points,
+        `SELECT tp.player_id, tp.final_rank,
                 p.display_name, p.challonge_username, p.region
          FROM tournament_placements tp
          JOIN players p ON tp.player_id = p.id
@@ -352,20 +343,18 @@ async function importOne(challonge_id) {
       }
     }
 
-    // ── Tournament placements & career points ──────────────────────────────
+    // ── Tournament placements ──────────────────────────────────────────────
     const tournamentWinnerId = [...playerMap.values()].find(p => p.finalRank === 1)?.id || null;
 
     for (const [, player] of playerMap) {
       const rank = player.finalRank;
-      const pts = rank ? careerPoints(rank, totalParticipants) : 1;
 
       await db.query(
-        `INSERT INTO tournament_placements (tournament_id, player_id, final_rank, career_points)
-         VALUES ($1, $2, $3, $4)
+        `INSERT INTO tournament_placements (tournament_id, player_id, final_rank)
+         VALUES ($1, $2, $3)
          ON CONFLICT (tournament_id, player_id) DO UPDATE SET
-           final_rank = EXCLUDED.final_rank,
-           career_points = EXCLUDED.career_points`,
-        [tournament.id, player.id, rank, pts]
+           final_rank = EXCLUDED.final_rank`,
+        [tournament.id, player.id, rank]
       );
     }
 
@@ -636,8 +625,7 @@ async function updatePlayerStats(playerId, tournament, playerMap, matchList, tou
        COUNT(*) FILTER (WHERE final_rank = 1)  AS t_wins,
        COUNT(*) FILTER (WHERE final_rank = 2)  AS runner_up,
        COUNT(*) FILTER (WHERE final_rank <= 4) AS top4,
-       COUNT(*) FILTER (WHERE final_rank <= 8) AS top8,
-       COALESCE(SUM(career_points), 0)         AS career_pts
+       COUNT(*) FILTER (WHERE final_rank <= 8) AS top8
      FROM tournament_placements WHERE player_id = $1`,
     [playerId]
   );
@@ -713,7 +701,6 @@ async function updatePlayerStats(playerId, tournament, playerMap, matchList, tou
     playerId,
     parseInt(global.wins),        parseInt(global.losses),      parseInt(global.entered),
     parseInt(placements.t_wins),  parseInt(placements.runner_up), parseInt(placements.top4), parseInt(placements.top8),
-    parseInt(placements.career_pts),
     currentStreak,                longestStreak,
   ];
   // Per-series: entered, top8, top4, runner_up, wins (5 fields × 9 series = 45)
@@ -731,7 +718,6 @@ async function updatePlayerStats(playerId, tournament, playerMap, matchList, tou
   const setFields = [
     'total_match_wins',      'total_match_losses',    'tournaments_entered',
     'tournament_wins',       'runner_up_finishes',    'top4_finishes',         'top8_finishes',
-    'career_points',
     'current_win_streak',    'longest_win_streak',
   ];
   for (const s of ALL_SERIES) {
@@ -993,18 +979,16 @@ async function importOneStartgg(phaseGroupId) {
       }
     }
 
-    // ── Tournament placements & career points ──────────────────────────────
+    // ── Tournament placements ──────────────────────────────────────────────
     for (const [entrantId, player] of entrantMap) {
       const rank = placementByEntrantId.get(entrantId) || null;
-      const pts  = rank ? careerPoints(rank, totalParticipants) : 1;
 
       await db.query(
-        `INSERT INTO tournament_placements (tournament_id, player_id, final_rank, career_points)
-         VALUES ($1, $2, $3, $4)
+        `INSERT INTO tournament_placements (tournament_id, player_id, final_rank)
+         VALUES ($1, $2, $3)
          ON CONFLICT (tournament_id, player_id) DO UPDATE SET
-           final_rank   = EXCLUDED.final_rank,
-           career_points = EXCLUDED.career_points`,
-        [t.id, player.id, rank, pts]
+           final_rank = EXCLUDED.final_rank`,
+        [t.id, player.id, rank]
       );
     }
 
@@ -1349,21 +1333,19 @@ async function importOneTonamel(payload) {
     }
   }
 
-  // ── Tournament placements & career points ───────────────────────────────────
+  // ── Tournament placements ───────────────────────────────────────────────────
   const tournamentWinnerId = [...playerMap.entries()]
     .find(([n]) => placements[n] === 1)?.[1]?.id || null;
 
   for (const [playerName, player] of playerMap) {
     const rank = placements[playerName] || null;
-    const pts  = rank ? careerPoints(rank, totalParticipants) : 1;
 
     await db.query(
-      `INSERT INTO tournament_placements (tournament_id, player_id, final_rank, career_points)
-       VALUES ($1, $2, $3, $4)
+      `INSERT INTO tournament_placements (tournament_id, player_id, final_rank)
+       VALUES ($1, $2, $3)
        ON CONFLICT (tournament_id, player_id) DO UPDATE SET
-         final_rank    = EXCLUDED.final_rank,
-         career_points = EXCLUDED.career_points`,
-      [tournament.id, player.id, rank, pts]
+         final_rank = EXCLUDED.final_rank`,
+      [tournament.id, player.id, rank]
     );
   }
 
@@ -1580,9 +1562,9 @@ async function importOneOffline({ name, date, location, prize_pool, participants
   const winnerPlayer = await upsertOfflinePlayer(winner);
 
   await db.query(
-    `INSERT INTO tournament_placements (tournament_id, player_id, final_rank, career_points)
-     VALUES ($1, $2, 1, 10)
-     ON CONFLICT (tournament_id, player_id) DO UPDATE SET final_rank = 1, career_points = 10`,
+    `INSERT INTO tournament_placements (tournament_id, player_id, final_rank)
+     VALUES ($1, $2, 1)
+     ON CONFLICT (tournament_id, player_id) DO UPDATE SET final_rank = 1`,
     [tournament.id, winnerPlayer.id]
   );
 
@@ -1592,9 +1574,9 @@ async function importOneOffline({ name, date, location, prize_pool, participants
     runnerUpPlayer = await upsertOfflinePlayer(runner_up);
 
     await db.query(
-      `INSERT INTO tournament_placements (tournament_id, player_id, final_rank, career_points)
-       VALUES ($1, $2, 2, 7)
-       ON CONFLICT (tournament_id, player_id) DO UPDATE SET final_rank = 2, career_points = 7`,
+      `INSERT INTO tournament_placements (tournament_id, player_id, final_rank)
+       VALUES ($1, $2, 2)
+       ON CONFLICT (tournament_id, player_id) DO UPDATE SET final_rank = 2`,
       [tournament.id, runnerUpPlayer.id]
     );
   }
@@ -1936,7 +1918,7 @@ async function importOneLiquipediaBracket({ bracketUrl, name, date, location, pr
       }
     }
 
-    // ── Tournament placements & career points ────────────────────────────────
+    // ── Tournament placements ────────────────────────────────────────────────
     // Wipe every existing placement on this tournament before re-inserting so
     // the bracket import is the authoritative source of truth for placements.
     // Without this, two failure modes leave stale rows in place:
@@ -1957,12 +1939,11 @@ async function importOneLiquipediaBracket({ bracketUrl, name, date, location, pr
     for (const [name, rank] of placements) {
       const player = playerMap.get(name);
       if (!player) continue;
-      const pts = careerPoints(rank, totalParticipants);
       await db.query(
-        `INSERT INTO tournament_placements (tournament_id, player_id, final_rank, career_points)
-         VALUES ($1, $2, $3, $4)
-         ON CONFLICT (tournament_id, player_id) DO UPDATE SET final_rank=$3, career_points=$4`,
-        [tournament.id, player.id, rank, pts]
+        `INSERT INTO tournament_placements (tournament_id, player_id, final_rank)
+         VALUES ($1, $2, $3)
+         ON CONFLICT (tournament_id, player_id) DO UPDATE SET final_rank=$3`,
+        [tournament.id, player.id, rank]
       );
     }
 
@@ -2146,12 +2127,11 @@ async function importOneLiquipediaPlacements({ eventUrl, name, date, location, p
     for (const displayName of players) {
       const player = playerByName.get(displayName);
       if (!player) continue;
-      const pts = careerPoints(rank, totalParticipants);
       await db.query(
-        `INSERT INTO tournament_placements (tournament_id, player_id, final_rank, career_points)
-         VALUES ($1, $2, $3, $4)
-         ON CONFLICT (tournament_id, player_id) DO UPDATE SET final_rank=$3, career_points=$4`,
-        [tournament.id, player.id, rank, pts]
+        `INSERT INTO tournament_placements (tournament_id, player_id, final_rank)
+         VALUES ($1, $2, $3)
+         ON CONFLICT (tournament_id, player_id) DO UPDATE SET final_rank=$3`,
+        [tournament.id, player.id, rank]
       );
       affectedPlayerIds.add(player.id);
       inserted++;

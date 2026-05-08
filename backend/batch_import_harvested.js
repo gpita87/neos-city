@@ -77,7 +77,6 @@ async function importOne(challonge_id) {
   }
 
   // ── Placements ────────────────────────────────────────────────────────────
-  const totalPlayers = participants.length;
   for (const p of participants) {
     const attrs = p.attributes || p.participant || p;
     const challongeUserId = String(attrs.challonge_username_and_suggested_events || attrs.username || attrs.name || attrs.display_name || `anon_${attrs.id}`).toLowerCase().trim();
@@ -86,28 +85,12 @@ async function importOne(challonge_id) {
     const playerId = idMap[challongePartId];
     if (!playerId) continue;
 
-    function careerPts(rank, total) {
-      if (rank === 1) return 10;
-      if (rank === 2) return 7;
-      if (rank <= 4) return 5;
-      if (total > 0 && rank / total <= 0.125) return 3;
-      return 1;
-    }
-    const pts = finalRank ? careerPts(finalRank, totalPlayers) : 1;
-
     await db.query(
-      `INSERT INTO tournament_placements (tournament_id, player_id, final_rank, career_points)
-       VALUES ($1, $2, $3, $4)
+      `INSERT INTO tournament_placements (tournament_id, player_id, final_rank)
+       VALUES ($1, $2, $3)
        ON CONFLICT (tournament_id, player_id) DO UPDATE SET
-         final_rank    = EXCLUDED.final_rank,
-         career_points = EXCLUDED.career_points`,
-      [tournament.id, playerId, finalRank, pts]
-    );
-
-    // Bump career_points on player (only ever goes up)
-    await db.query(
-      `UPDATE players SET career_points = career_points + $1 WHERE id = $2`,
-      [pts, playerId]
+         final_rank = EXCLUDED.final_rank`,
+      [tournament.id, playerId, finalRank]
     );
   }
 
