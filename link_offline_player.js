@@ -388,8 +388,8 @@ async function run() {
     console.log(`  player_achievements:         moved=${pa.rowCount}`);
 
     // ── Merge defeated-opponent rows ─────────────────────────────────────
-    // ensureDefeatedOpponentsTable() above guarantees the table exists, so
-    // this block can run un-guarded inside the transaction.
+    // PK = (player_id, achievement_id, opponent_id). Both columns can collide
+    // during the merge, so dedup before each UPDATE and clean self-rows after.
     await client.query(`
       DELETE FROM achievement_defeated_opponents
       WHERE player_id = $1
@@ -399,7 +399,19 @@ async function run() {
         )
     `, [src.id, dst.id]);
     await client.query(`UPDATE achievement_defeated_opponents SET player_id  = $1 WHERE player_id  = $2`, [dst.id, src.id]);
+    await client.query(`
+      DELETE FROM achievement_defeated_opponents
+      WHERE opponent_id = $1
+        AND (player_id, achievement_id) IN (
+          SELECT player_id, achievement_id
+          FROM achievement_defeated_opponents WHERE opponent_id = $2
+        )
+    `, [src.id, dst.id]);
     await client.query(`UPDATE achievement_defeated_opponents SET opponent_id = $1 WHERE opponent_id = $2`, [dst.id, src.id]);
+    await client.query(
+      `DELETE FROM achievement_defeated_opponents WHERE player_id = $1 AND opponent_id = $1`,
+      [dst.id]
+    );
 
     // ── Delete the now-empty source player ───────────────────────────────
     await client.query(`DELETE FROM players WHERE id = $1`, [src.id]);
