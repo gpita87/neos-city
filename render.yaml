@@ -9,7 +9,7 @@ services:
     plan: starter           # $7/mo, no cold starts
     region: ohio            # or virginia — must be us-east to match Supabase
     rootDir: backend
-    buildCommand: npm install
+    buildCommand: npm ci
     startCommand: npm start
     healthCheckPath: /api/health
     envVars:
@@ -36,7 +36,7 @@ services:
     name: neos-city-web
     runtime: static
     rootDir: frontend
-    buildCommand: npm install && npm run build
+    buildCommand: npm ci && npm run build
     staticPublishPath: ./dist
     envVars:
       - key: VITE_API_URL

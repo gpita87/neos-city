@@ -33,10 +33,23 @@ const corsOrigins = [
 app.use(cors({ origin: corsOrigins }));
 app.use(express.json());
 
+// Trust the first proxy hop in production. Render (and most PaaS) put a single
+// load balancer in front of the app, so without this `req.ip` is the proxy's
+// address and rate limiting becomes a global cap shared across all clients.
+// Setting this to `1` makes `req.ip` resolve to the real client IP via
+// X-Forwarded-For. We deliberately avoid `true` (trust all proxies), which
+// express-rate-limit v7 flags as spoofable. In dev there's no proxy, so we
+// leave the default (no trust) and `req.ip` is the socket address.
+if (isProduction) {
+  app.set('trust proxy', 1);
+}
+
 // Rate limit: 500 requests per 15 min per IP (high enough for batch imports).
 // Loopback callers (frontend dev server, batch import scripts, browser-console
 // harvest tools hitting localhost from challonge.com) are exempted — the
 // limiter is meant to deter external abuse, not local tooling sharing one IP.
+// The skip only fires in dev; in production `req.ip` is the real client IP
+// (see trust-proxy block above), so external requests are correctly bucketed.
 const LOOPBACK_IPS = new Set(['127.0.0.1', '::1', '::ffff:127.0.0.1']);
 app.use(rateLimit({
   windowMs: 15 * 60 * 1000,
