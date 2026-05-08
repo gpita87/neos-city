@@ -545,13 +545,16 @@ function findPlacementRows(doc) {
       // Modern .csstable-widget rows: one .block-player cell per tied player —
       // gather them all into a synthetic <div> and feed extractPlayerNames.
       //
-      // Wikitable rows: layout is [place, $, %, player, team] (or just
-      // [player, team] on spillover rows). Drop team cells; on a placement
-      // row with a place column, also drop the leading 3 metadata cells so
-      // we don't pull in the "qualifies for World Championships" tournament
-      // link that frequently lives in cell[2] (extractPlayerNames'
-      // multi-segment-href filter would catch it anyway, but skipping the
-      // metadata cells up front keeps the inputs honest).
+      // Wikitable rows: cell layout varies by tournament. With prize money
+      // it's [place, $, %, player, team]; without prize money it's just
+      // [place, %, player, team] (e.g. Defend the North 2016, no purse →
+      // no $ column → 4 cells). Spillover rows for tied players are always
+      // [player, team]. Unified rule: drop the team column and, on
+      // non-spillover rows, drop cells[0] (the place column) too. Whatever
+      // remains gets fed to extractPlayerNames, which already filters out
+      // anchors that aren't players ($ amounts have no /fighters/ anchor;
+      // "qualifies for World Championships" links use multi-segment
+      // /fighters/ paths and are rejected by the href filter).
       const cellsArr = Array.from(cells);
       const playerBlockCells = cellsArr.filter(c => c.querySelector('.block-player, .block-players-wrapper'));
 
@@ -559,10 +562,7 @@ function findPlacementRows(doc) {
       if (playerBlockCells.length > 0) {
         participantCells = playerBlockCells;
       } else {
-        const nonTeam = cellsArr.filter(c => !isTeamCell(c));
-        // Spillover rows have only [player, team] → all non-team cells are
-        // players. Placement rows lead with [place, $, %] → skip those.
-        participantCells = isSpillover ? nonTeam : nonTeam.slice(3);
+        participantCells = cellsArr.filter((c, i) => (isSpillover || i !== 0) && !isTeamCell(c));
       }
       if (participantCells.length === 0) continue;
 
