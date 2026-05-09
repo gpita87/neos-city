@@ -70,6 +70,18 @@ function detectOfflineTier(name = '') {
   const n = name.toUpperCase();
   if (n.includes('WORLD CHAMPIONSHIPS'))                               return SERIES.WORLDS;
   if (n.includes('INTERNATIONAL CHAMPIONSHIPS'))                       return SERIES.WORLDS;
+
+  // Specific events promoted to major — must be checked before the generic
+  // regional patterns below catch them via substring match.
+  if (n === 'WINTER BRAWL 12')                                         return SERIES.MAJOR;
+  if (n === 'WINTER BRAWL 3D 2019')                                    return SERIES.MAJOR;
+  if (n === 'SOCAL REGIONALS 2017')                                    return SERIES.MAJOR;
+  if (n === 'SUMMER JAM XI')                                           return SERIES.MAJOR;
+  if (n === 'TORYUKEN 8')                                              return SERIES.MAJOR;
+  if (n === 'EYE OF THE STORM 2018')                                   return SERIES.MAJOR;
+  if (n === 'THE FALL CLASSIC 2017')                                   return SERIES.MAJOR;
+  if (n === 'SMASH CONFERENCE LXIX')                                   return SERIES.MAJOR;
+
   if (n.includes('EVO ') || n === 'EVO')                               return SERIES.MAJOR;
   if (n.includes('CEO '))                                              return SERIES.MAJOR;
   if (n.includes('DREAMHACK'))                                         return SERIES.MAJOR;
@@ -79,17 +91,18 @@ function detectOfflineTier(name = '') {
   if (n.includes('FINAL BOSS'))                                        return SERIES.MAJOR;
   if (n.includes('DESTINY'))                                           return SERIES.MAJOR;
   if (n.includes('FROSTFIRE'))                                         return SERIES.MAJOR;
-  if (n.includes('NORTHEAST CHAMPIONSHIP') || n.includes('NEC '))      return SERIES.REGIONAL;
+  // Promoted 2026-05-08: full series.
+  if (n.includes('NORTHEAST CHAMPIONSHIP') || n.includes('NEC '))      return SERIES.MAJOR;
+  if (n.includes('FINAL ROUND'))                                       return SERIES.MAJOR;
+  if (n.includes('NORCAL REGIONALS'))                                  return SERIES.MAJOR;
+  if (n.includes('DEFEND THE NORTH'))                                  return SERIES.MAJOR;
+
   if (n.includes('WINTER BRAWL'))                                      return SERIES.REGIONAL;
-  if (n.includes('FINAL ROUND'))                                       return SERIES.REGIONAL;
-  if (n.includes('NORCAL REGIONALS'))                                  return SERIES.REGIONAL;
   if (n.includes('SOCAL REGIONALS'))                                   return SERIES.REGIONAL;
-  if (n.includes('DEFEND THE NORTH'))                                  return SERIES.REGIONAL;
   if (n.includes('SUMMER JAM'))                                        return SERIES.REGIONAL;
   if (n.includes('BATTLE ARENA MELBOURNE') || n.includes('BAM '))      return SERIES.REGIONAL;
   if (n.includes('OZHADOU'))                                           return SERIES.REGIONAL;
   if (n.includes('REVOLUTION'))                                        return SERIES.REGIONAL;
-  if (n.includes('TEXAS SHOWDOWN'))                                    return SERIES.REGIONAL;
   if (n.includes('TORYUKEN'))                                          return SERIES.REGIONAL;
   if (n.includes('KUMITE IN TENNESSEE'))                               return SERIES.REGIONAL;
   if (n.includes('EYE OF THE STORM'))                                  return SERIES.REGIONAL;
@@ -97,6 +110,7 @@ function detectOfflineTier(name = '') {
   if (n.includes('CANADA CUP'))                                        return SERIES.REGIONAL;
   if (n.includes('ALL IN TOGETHER'))                                   return SERIES.REGIONAL;
   if (n.includes('FIGHTCLUB CHAMPIONSHIP'))                            return SERIES.REGIONAL;
+  // Texas Showdown removed 2026-05-08 — falls through to 'other'.
   return SERIES.OTHER;
 }
 

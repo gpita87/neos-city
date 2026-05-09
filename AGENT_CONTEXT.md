@@ -940,9 +940,9 @@ Offline tournaments are classified into four tiers via the `series` column (reus
 | Tier       | Series value | What it covers |
 |------------|-------------|----------------|
 | `worlds`   | `'worlds'`  | World Championships, International Championships (NA/EU/OCE) |
-| `major`    | `'major'`   | EVO, CEO, DreamHack, Frosty Faustings/Vortex Gallery, Genesis, Curtain Call, Final Boss, Destiny, Frostfire |
-| `regional` | `'regional'`| NEC, Winter Brawl, Final Round, NorCal/SoCal Regionals, Defend the North, Summer Jam, BAM, Canada Cup, OzHadou, Revolution, FightClub Championship, All In Together, and others |
-| `other`    | `'other'`   | Everything else (locals / one-offs) |
+| `major`    | `'major'`   | EVO, CEO, DreamHack, Frosty Faustings/Vortex Gallery, Genesis, Curtain Call, Final Boss, Destiny, Frostfire, NEC (full series), Final Round (full series), NorCal Regionals (full series), Defend the North (full series), and specific events: Winter Brawl 12, Winter Brawl 3D 2019, SoCal Regionals 2017, Summer Jam XI, Toryuken 8, Eye of the Storm 2018, The Fall Classic 2017, Smash Conference LXIX |
+| `regional` | `'regional'`| Winter Brawl (other years), SoCal Regionals (other years), Summer Jam (other years), BAM, OzHadou, Revolution, Toryuken (other), Kumite In Tennessee, Eye of the Storm (other), The Fall Classic (other), Canada Cup, All In Together, FightClub Championship |
+| `other`    | `'other'`   | Everything else (locals / one-offs). Texas Showdown 2016 demoted here 2026-05-08. |
 
 Migration: `backend/src/db/migrations/add_offline_tiers.sql` — retroactively tags existing offline tournaments.
 Run with: `node run_migration.js backend/src/db/migrations/add_offline_tiers.sql`
