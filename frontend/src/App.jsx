@@ -1,6 +1,7 @@
 import { Routes, Route, NavLink } from 'react-router-dom';
 import Home from './pages/Home';
 import Leaderboard from './pages/Leaderboard';
+import Players from './pages/Players';
 import PlayerProfile from './pages/PlayerProfile';
 import Tournaments from './pages/Tournaments';
 import TournamentDetail from './pages/TournamentDetail';
@@ -39,6 +40,7 @@ export default function App() {
           </NavLink>
           <nav className="flex gap-1 flex-wrap">
             <NavItem to="/">Home</NavItem>
+            <NavItem to="/players">Players</NavItem>
             <NavItem to="/tournaments">Tournaments</NavItem>
             <NavItem to="/calendar">Calendar</NavItem>
             <NavItem to="/achievements">Achievements</NavItem>
@@ -52,6 +54,7 @@ export default function App() {
         <Routes>
           <Route path="/" element={<Home />} />
           <Route path="/leaderboard" element={<Leaderboard />} />
+          <Route path="/players" element={<Players />} />
           <Route path="/players/:id" element={<PlayerProfile />} />
           <Route path="/tournaments" element={<Tournaments />} />
           <Route path="/tournaments/:id" element={<TournamentDetail />} />

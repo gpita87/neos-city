@@ -24,6 +24,8 @@ api.interceptors.request.use(config => {
 export const getLeaderboard = (region = null) =>
   api.get('/players', { params: region ? { region } : {} }).then(r => r.data);
 export const getPlayer = (id) => api.get(`/players/${id}`).then(r => r.data);
+// Alphabetical index of every player — for the /players lookup page.
+export const getPlayerIndex = () => api.get('/players/index').then(r => r.data);
 // is_offline: true → offline only, false → online only, undefined → all
 export const getTournaments = (is_offline) =>
   api.get('/tournaments', { params: is_offline !== undefined ? { is_offline } : {} }).then(r => r.data);

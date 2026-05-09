@@ -66,6 +66,24 @@ router.get('/offline-leaderboard', async (req, res) => {
   }
 });
 
+// GET /api/players/index — alphabetical lookup index of every known player.
+// Used by the /players page so users can find players who don't surface on the
+// leaderboard (no recent online activity, no podium offline finishes, etc.).
+// Returns the full table — no LIMIT — with a lightweight column set.
+router.get('/index', async (req, res) => {
+  try {
+    const { rows } = await db.query(
+      `SELECT id, display_name, challonge_username, region, avatar_url,
+              tournaments_entered, games_played, offline_top2
+       FROM players
+       ORDER BY LOWER(display_name) ASC, id ASC`
+    );
+    res.json(rows);
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
 // GET /api/players/:id/offline-placements — contributing offline tournaments
 // for a single tier × placement cell on the player profile.
 //
