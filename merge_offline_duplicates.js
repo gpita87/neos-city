@@ -188,24 +188,14 @@ async function applyMerge(plan) {
   try {
     await client.query('BEGIN');
 
-    // 1. Backfill missing metadata on KEEP from DROP.
-    await client.query(`
-      UPDATE tournaments SET
-        liquipedia_url     = COALESCE(liquipedia_url,     $2),
-        participants_count = COALESCE(participants_count, $3),
-        prize_pool         = COALESCE(prize_pool,         $4),
-        location           = COALESCE(location,           $5)
-      WHERE id = $1
-    `, [keepId, drop.liquipedia_url, drop.participants_count, drop.prize_pool, drop.location]);
-
-    // 2. Re-point matches. challonge_match_id stays unchanged — the DROP
+    // 1. Re-point matches. challonge_match_id stays unchanged — the DROP
     //    row's match keys still encode dropId in their string but they're
     //    unique within the new (keepId, key) tuple.
     if (drop.match_count > 0) {
       await client.query(`UPDATE matches SET tournament_id = $1 WHERE tournament_id = $2`, [keepId, dropId]);
     }
 
-    // 3. Replace placements. KEEP's placements are offline-import-only
+    // 2. Replace placements. KEEP's placements are offline-import-only
     //    (winner + runner-up). DROP's placements are bracket-derived (full
     //    field). Prefer DROP's. If DROP has no placements, leave KEEP's
     //    intact.
@@ -214,15 +204,30 @@ async function applyMerge(plan) {
       await client.query(`UPDATE tournament_placements SET tournament_id = $1 WHERE tournament_id = $2`, [keepId, dropId]);
     }
 
-    // 4. Re-point player_achievements.tournament_id (FK is ON DELETE SET
+    // 3. Re-point player_achievements.tournament_id (FK is ON DELETE SET
     //    NULL, so without this step deleting DROP would orphan those refs).
     if (drop.achievement_count > 0) {
       await client.query(`UPDATE player_achievements SET tournament_id = $1 WHERE tournament_id = $2`, [keepId, dropId]);
     }
 
-    // 5. Drop the duplicate row. CASCADE on matches/placements is moot now
-    //    that we've re-pointed everything.
+    // 4. Drop the duplicate row. CASCADE on matches/placements is moot now
+    //    that we've re-pointed everything. This MUST happen before the
+    //    metadata backfill in step 5: DROP holds a liquipedia_url that
+    //    KEEP is about to copy via COALESCE, and the unique index
+    //    tournaments_liquipedia_url_lower_unique would reject the UPDATE
+    //    if DROP still existed with that URL.
     await client.query(`DELETE FROM tournaments WHERE id = $1`, [dropId]);
+
+    // 5. Backfill missing metadata on KEEP from DROP's now-released values.
+    //    DROP is gone, so any unique-index slots it held are free.
+    await client.query(`
+      UPDATE tournaments SET
+        liquipedia_url     = COALESCE(liquipedia_url,     $2),
+        participants_count = COALESCE(participants_count, $3),
+        prize_pool         = COALESCE(prize_pool,         $4),
+        location           = COALESCE(location,           $5)
+      WHERE id = $1
+    `, [keepId, drop.liquipedia_url, drop.participants_count, drop.prize_pool, drop.location]);
 
     await client.query('COMMIT');
   } catch (err) {
