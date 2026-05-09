@@ -298,6 +298,89 @@ Backend uses `nodemon` for hot reload. Changes to `.js` files in `backend/src/` 
 
 ## ⚡ NEXT AGENT: What to Do First
 
+### Current state (as of May 9 2026 — offline tier reclass DONE, duplicate-merge READY-TO-APPLY, HANDOFF)
+
+#### What this session shipped
+
+Three commits on branch `claude/silly-shockley-fd72d5` (already cherry-pickable from main — they're reachable via the worktree refs even without push). Cherry-pick everything with:
+
+```powershell
+cd C:\Users\pitag\Documents\neos-city
+git cherry-pick e7165a5 9bb25f8 b6287c4
+```
+
+**1. `e7165a5` — Tier reclassification.** Promoted to **major**: full series for NEC, Final Round, NorCal Regionals, Defend the North; specific events Winter Brawl 12, Winter Brawl 3D 2019, SoCal Regionals 2017, Summer Jam XI, Toryuken 8, Eye of the Storm 2018, The Fall Classic 2017, Smash Conference LXIX. Demoted Texas Showdown 2016 → other. Touched files:
+- [add_offline_tiers.sql](backend/src/db/migrations/add_offline_tiers.sql) — now resets all `is_offline=TRUE` rows to NULL first, then re-tags. Fully idempotent. Safe to re-run any number of times.
+- [achievements.js:69](backend/src/services/achievements.js:69) — `detectOfflineTier()` mirrors the migration so new imports are classified consistently. Specific-event matches are checked **before** the generic substring patterns so e.g. `SUMMER JAM XI` resolves to major before `SUMMER JAM` regional catches it.
+- [AGENT_CONTEXT.md](AGENT_CONTEXT.md) — tier table updated.
+
+**2. `9bb25f8` — `check_offline_tiers.js`.** Diagnostic script. Prints counts per tier and lists every offline tournament under its tier with the winner's name. Run after any tier-rules change to eyeball results.
+
+**3. `b6287c4` — `merge_offline_duplicates.js` + `diagnose_evo.js`.** The merge script handles a deeper data integrity problem the tier diagnostic surfaced: **21 duplicate offline-tournament rows** in the DB. Root cause: `importOneLiquipediaBracket` ([tournaments.js:1748](backend/src/routes/tournaments.js:1748)) creates a new row when its `liquipedia_url` lookup misses AND its `name ILIKE '%X%'` fallback misses. For 18 of the 21 events the offline-import row had a slug but no URL, and the bracket-import row had a URL but no slug — neither matched the other on its lookup key, so they ended up as two rows for the same event.
+
+`diagnose_evo.js` is a small read-only investigator for the EVO-specific anomaly that prompted this dig; mostly subsumed by `check_offline_tiers.js` now but useful if a similar single-event mystery comes up.
+
+#### Status of the merge run
+
+Gabriel ran `node merge_offline_duplicates.js` (dry run) and the output looks clean. **18 merges queued, 3 SKIPped.** What's still pending:
+
+```powershell
+node merge_offline_duplicates.js --apply             # NOT YET RUN
+node run_migration.js backend/src/db/migrations/add_offline_tiers.sql
+node check_offline_tiers.js                          # verify result
+```
+
+Per-merge: backfills missing metadata onto the keep row, re-points `matches.tournament_id`, replaces placements (drop's bracket-derived data is more complete than keep's offline-only winner+runner_up), re-points `player_achievements.tournament_id`, deletes the drop row. Each merge runs in its own transaction so a single-pair failure doesn't roll back the others. Notable: EVO 2017 drop has 2 player_achievement-links — those re-point correctly.
+
+#### The 3 SKIPped pairs — corruption case, separate triage
+
+These pairs both carry `liquipedia_slug` values and the slugs **differ**, meaning the bracket-import overwrote the wrong existing row's name+date+url, leaving its slug intact:
+
+| Display name shown | DB row id | slug it carries | What that slug REALLY refers to |
+|---|---|---|---|
+| Frosty Faustings XI | 571 | `frosty_faustings_14` | FF14 (2022-01-29) |
+| Frosty Faustings XI | 590 | `frosty_faustings_11` | FF11 (correct) |
+| Frosty Faustings X  | 565 | `frosty_faustings_15` | FF15 (2023-02-03) |
+| Frosty Faustings X  | 605 | `frosty_faustings_10` | FF10 (correct) |
+| Final Round 20      | 586 | `final_round_2019`   | FR 2019 (2019-03-15) |
+| Final Round 20      | 618 | `final_round_20`     | FR20 (correct) |
+
+In each pair the high-data row (570s — 8 placements, 10–22 matches) is the originally-correct FF14/FF15/FR2019 offline_import row that got corrupted. The slug is correct, but the name/date/url were overwritten. The low-data row (590-ish, 2 placements only) is what FF11/FF10/FR20 currently look like — winner+runner-up only.
+
+**Why it happened:** `importOneLiquipediaBracket` at [tournaments.js:1729-1732](backend/src/routes/tournaments.js:1729) does:
+```js
+SELECT * FROM tournaments WHERE is_offline = TRUE AND name ILIKE $1 LIMIT 1
+// with $1 = `%${name}%`
+```
+Substring match. `"Frosty Faustings XI"` matches `"Frosty Faustings XIV"` and `"Frosty Faustings XV"`. `"Final Round 20"` matches `"Final Round 2019"`. Bracket import then UPDATEd the wrong row.
+
+**Recommended triage path:**
+
+1. After running `--apply` for the 18 simple merges, run `node offline_import.js`. The static data still has FF14, FF15, FR2019. The script's UPSERT key is `liquipedia_slug` — for each of those three slugs it will find the corrupted row, restore name/date/location/prize_pool to the correct FF14/FF15/FR2019 values. That instantly un-corrupts rows 565/571/586's metadata.
+2. After step 1, the FF11/FF10/FR20 bracket data still lives on the wrong row (now correctly named FF14/FF15/FR2019). Need a small script to move that data — for each of the three (FF11, FF10, FR20), find the canonical row by slug and re-point matches/placements from the wrong row to it. Then those events will have full bracket data on the correct row.
+3. Re-run `add_offline_tiers.sql` and `check_offline_tiers.js`. Should be at 80 offline tournaments, no duplicates.
+
+#### Root-cause patch worth adding
+
+Anchor the ILIKE name match in `importOneLiquipediaBracket` to prevent recurrence. Two options:
+
+- **Strict:** `LOWER(name) = LOWER($1)` — exact match only. Safe but might miss legitimate near-matches (suffix differences like " - PokkenDX").
+- **Anchored:** `LOWER(name) LIKE LOWER($1) || '%'` — prefix match. "Frosty Faustings XI" no longer matches "Frosty Faustings XIV" (the V is past the X), but "Frosty Faustings XI" still matches "Frosty Faustings XI - PokkenDX". This is the safer drop-in.
+
+Either way, also call `detectOfflineTier(name)` on the create-new branch ([line 1748](backend/src/routes/tournaments.js:1748)) and write `series` on insert, so a freshly-created bracket-only row gets a tier instead of NULL.
+
+#### Open question — the "EVO is 'other' not 'major'" mystery
+
+After my migration ran, the bracket-import EVO rows showed `series='other'`. The hex bytes of both rows' names are identical (`45564f2032303139` for "EVO 2019"), so `LIKE 'EVO %'` should have matched. I didn't fully solve why one row didn't get re-tagged. Most likely the migration ran before the bracket-import created those rows, then they got tagged later by a different code path. Becomes moot after the merge — there will only be one row per event. If it recurs after re-running the migration on a clean DB, dig with `diagnose_evo.js`.
+
+#### Files added this session
+
+- [check_offline_tiers.js](check_offline_tiers.js) — tier diagnostic.
+- [diagnose_evo.js](diagnose_evo.js) — EVO-row inspector with hex bytes.
+- [merge_offline_duplicates.js](merge_offline_duplicates.js) — duplicate merger, dry-run by default, `--apply` to execute.
+
+---
+
 ### Current state (as of May 4 2026 — offline placements: parser still dropping tied players, HANDOFF)
 
 #### Symptom
