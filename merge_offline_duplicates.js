@@ -70,7 +70,11 @@ async function main() {
              t.source, t.participants_count, t.prize_pool, t.location,
              (SELECT COUNT(*) FROM matches               WHERE tournament_id = t.id) AS match_count,
              (SELECT COUNT(*) FROM tournament_placements WHERE tournament_id = t.id) AS placement_count,
-             (SELECT COUNT(*) FROM player_achievements   WHERE tournament_id = t.id) AS achievement_count
+             (SELECT COUNT(*) FROM player_achievements   WHERE tournament_id = t.id) AS achievement_count,
+             (SELECT p.display_name FROM tournament_placements tp JOIN players p ON p.id = tp.player_id
+               WHERE tp.tournament_id = t.id AND tp.final_rank = 1 LIMIT 1) AS rank1,
+             (SELECT p.display_name FROM tournament_placements tp JOIN players p ON p.id = tp.player_id
+               WHERE tp.tournament_id = t.id AND tp.final_rank = 2 LIMIT 1) AS rank2
       FROM tournaments t
       WHERE t.id = ANY($1)
       ORDER BY t.id
@@ -80,6 +84,7 @@ async function main() {
     for (const r of rows) {
       console.log(`  id=${r.id}  series=${r.series}  slug=${r.liquipedia_slug || '-'}  url=${r.liquipedia_url || '-'}`);
       console.log(`           matches=${r.match_count}  placements=${r.placement_count}  achievements=${r.achievement_count}`);
+      console.log(`           rank1=${r.rank1 || '-'}  rank2=${r.rank2 || '-'}`);
     }
 
     const plan = classifyPair(rows);
@@ -144,6 +149,27 @@ function classifyPair(rows) {
   else {
     keep = a.id < b.id ? a : b;
     drop = a.id < b.id ? b : a;
+  }
+
+  // Safety check: if we'd overwrite KEEP's placements with DROP's, the rank-1
+  // and rank-2 must agree. Otherwise we'd silently lose KEEP's canonical
+  // offline_import winner. Most often happens when DROP's placements came
+  // from the placements-only scraper (matches=0) — that path has been
+  // unreliable around tied tiers and unrelated page tables.
+  const wouldOverwritePlacements =
+    Number(drop.placement_count) > 0 && Number(keep.placement_count) > 0;
+  if (wouldOverwritePlacements) {
+    const r1Match = (keep.rank1 || '') === (drop.rank1 || '');
+    const r2Match = (keep.rank2 || '') === (drop.rank2 || '');
+    if (!r1Match || !r2Match) {
+      const issues = [];
+      if (!r1Match) issues.push(`rank1: "${keep.rank1 || '-'}" vs "${drop.rank1 || '-'}"`);
+      if (!r2Match) issues.push(`rank2: "${keep.rank2 || '-'}" vs "${drop.rank2 || '-'}"`);
+      return {
+        action: 'skip',
+        reason: `KEEP and DROP disagree on top-2 (${issues.join('; ')}) — KEEP from offline_import is canonical, manual review required`,
+      };
+    }
   }
 
   return {
