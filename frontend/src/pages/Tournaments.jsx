@@ -1,5 +1,5 @@
 import { useEffect, useState } from 'react';
-import { Link, useNavigate } from 'react-router-dom';
+import { Link, useNavigate, useSearchParams } from 'react-router-dom';
 import { getTournaments, importTournament } from '../lib/api';
 import { formatDate } from '../lib/utils';
 
@@ -126,7 +126,16 @@ function OfflinePlacement({ tournamentId, rank }) {
 }
 
 export default function Tournaments() {
-  const [tab, setTab]           = useState('online');
+  const [searchParams, setSearchParams] = useSearchParams();
+  const tabParam = searchParams.get('tab');
+  const tab = tabParam === 'offline' ? 'offline' : 'online';
+  const setTab = (next) => {
+    if (next === 'online') {
+      setSearchParams({}, { replace: true });
+    } else {
+      setSearchParams({ tab: next }, { replace: true });
+    }
+  };
   const [online, setOnline]     = useState([]);
   const [offline, setOffline]   = useState([]);
   const [loadingOnline, setLoadingOnline]   = useState(true);
