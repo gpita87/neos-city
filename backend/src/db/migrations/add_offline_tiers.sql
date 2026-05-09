@@ -41,15 +41,18 @@ WHERE is_offline = TRUE AND series IS NULL
     OR UPPER(name) LIKE '%NORCAL REGIONALS%'
     OR UPPER(name) LIKE '%DEFEND THE NORTH%'
     -- Promoted 2026-05-08: specific events (must be matched before the
-    -- generic regional patterns below catch them)
-    OR UPPER(name) = 'WINTER BRAWL 12'
-    OR UPPER(name) = 'WINTER BRAWL 3D 2019'
-    OR UPPER(name) = 'SOCAL REGIONALS 2017'
-    OR UPPER(name) = 'SUMMER JAM XI'
-    OR UPPER(name) = 'TORYUKEN 8'
-    OR UPPER(name) = 'EYE OF THE STORM 2018'
-    OR UPPER(name) = 'THE FALL CLASSIC 2017'
-    OR UPPER(name) = 'SMASH CONFERENCE LXIX');
+    -- generic regional patterns below catch them).
+    -- Use a word-boundary regex so e.g. "SUMMER JAM XI" doesn't accidentally
+    -- match "SUMMER JAM XII"/"XIII", and so suffixes like " - PokkenDX" or
+    -- " - Pokkén DX" are tolerated.
+    OR UPPER(name) ~ '^WINTER BRAWL 12( |-|$)'
+    OR UPPER(name) ~ '^WINTER BRAWL 3D 2019( |-|$)'
+    OR UPPER(name) ~ '^SOCAL REGIONALS 2017( |-|$)'
+    OR UPPER(name) ~ '^SUMMER JAM XI( |-|$)'
+    OR UPPER(name) ~ '^TORYUKEN 8( |-|$)'
+    OR UPPER(name) ~ '^EYE OF THE STORM 2018( |-|$)'
+    OR UPPER(name) ~ '^THE FALL CLASSIC 2017( |-|$)'
+    OR UPPER(name) ~ '^SMASH CONFERENCE LXIX( |-|$)');
 
 -- ── Regionals ──────────────────────────────────────────────────────────────
 -- (Texas Showdown removed 2026-05-08 — falls through to 'other'.)

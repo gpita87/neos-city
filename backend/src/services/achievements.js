@@ -73,14 +73,16 @@ function detectOfflineTier(name = '') {
 
   // Specific events promoted to major — must be checked before the generic
   // regional patterns below catch them via substring match.
-  if (n === 'WINTER BRAWL 12')                                         return SERIES.MAJOR;
-  if (n === 'WINTER BRAWL 3D 2019')                                    return SERIES.MAJOR;
-  if (n === 'SOCAL REGIONALS 2017')                                    return SERIES.MAJOR;
-  if (n === 'SUMMER JAM XI')                                           return SERIES.MAJOR;
-  if (n === 'TORYUKEN 8')                                              return SERIES.MAJOR;
-  if (n === 'EYE OF THE STORM 2018')                                   return SERIES.MAJOR;
-  if (n === 'THE FALL CLASSIC 2017')                                   return SERIES.MAJOR;
-  if (n === 'SMASH CONFERENCE LXIX')                                   return SERIES.MAJOR;
+  // Word-boundary regex so e.g. "SUMMER JAM XI" doesn't match "SUMMER JAM XII"
+  // and suffixes like " - PokkenDX" are tolerated.
+  if (/^WINTER BRAWL 12( |-|$)/.test(n))                               return SERIES.MAJOR;
+  if (/^WINTER BRAWL 3D 2019( |-|$)/.test(n))                          return SERIES.MAJOR;
+  if (/^SOCAL REGIONALS 2017( |-|$)/.test(n))                          return SERIES.MAJOR;
+  if (/^SUMMER JAM XI( |-|$)/.test(n))                                 return SERIES.MAJOR;
+  if (/^TORYUKEN 8( |-|$)/.test(n))                                    return SERIES.MAJOR;
+  if (/^EYE OF THE STORM 2018( |-|$)/.test(n))                         return SERIES.MAJOR;
+  if (/^THE FALL CLASSIC 2017( |-|$)/.test(n))                         return SERIES.MAJOR;
+  if (/^SMASH CONFERENCE LXIX( |-|$)/.test(n))                         return SERIES.MAJOR;
 
   if (n.includes('EVO ') || n === 'EVO')                               return SERIES.MAJOR;
   if (n.includes('CEO '))                                              return SERIES.MAJOR;
