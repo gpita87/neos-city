@@ -107,9 +107,17 @@ export default function PlayerProfile() {
     <div className="space-y-6">
       {/* Header */}
       <div className="bg-[#0c1425] border border-[#1a2744] rounded-xl p-6 flex items-center gap-6">
-        <div className="w-16 h-16 rounded-full bg-cyan-500/20 flex items-center justify-center text-3xl">
-          ⚔️
-        </div>
+        {player.avatar_url ? (
+          <img
+            src={player.avatar_url}
+            alt={player.display_name}
+            className="w-16 h-16 rounded-full object-cover bg-slate-800 border border-[#1a2744]"
+          />
+        ) : (
+          <div className="w-16 h-16 rounded-full bg-cyan-500/20 flex items-center justify-center text-3xl">
+            ⚔️
+          </div>
+        )}
         <div className="flex-1">
           <h1 className="font-display text-2xl text-white tracking-wide">{player.display_name}</h1>
           <p className="text-slate-500 text-sm">@{player.challonge_username}</p>
