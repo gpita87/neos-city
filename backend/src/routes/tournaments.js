@@ -468,16 +468,61 @@ router.post('/preview-dates', requireAdmin, async (req, res) => {
     return res.status(400).json({ error: 'urls array is required' });
   }
 
+  const cleaned = urls.map(u => String(u).trim()).filter(Boolean);
+
+  const challongeSlugs = [];
+  const startggPhaseIds = [];
+  for (const url of cleaned) {
+    if (url.includes('start.gg')) {
+      const parsed = startgg.parseStartggUrl(url);
+      if (parsed?.phaseGroupId) startggPhaseIds.push(parsed.phaseGroupId);
+    } else {
+      const slug = challonge.extractSlugFromUrl(url) || url;
+      if (slug) challongeSlugs.push(slug);
+    }
+  }
+
+  const knownChallonge = new Map();
+  const knownStartgg = new Map();
+  if (challongeSlugs.length) {
+    const { rows } = await db.query(
+      'SELECT challonge_id, started_at, completed_at, created_at FROM tournaments WHERE challonge_id = ANY($1)',
+      [challongeSlugs]
+    );
+    for (const r of rows) {
+      knownChallonge.set(r.challonge_id, r.started_at || r.completed_at || r.created_at || null);
+    }
+  }
+  if (startggPhaseIds.length) {
+    const { rows } = await db.query(
+      'SELECT startgg_phase_group_id, started_at, completed_at, created_at FROM tournaments WHERE startgg_phase_group_id = ANY($1)',
+      [startggPhaseIds]
+    );
+    for (const r of rows) {
+      knownStartgg.set(r.startgg_phase_group_id, r.started_at || r.completed_at || r.created_at || null);
+    }
+  }
+
   const results = [];
+  let cachedCount = 0;
 
-  for (const raw of urls) {
-    const url = String(raw).trim();
-    if (!url) continue;
-
+  for (const url of cleaned) {
     if (url.includes('start.gg')) {
       const parsed = startgg.parseStartggUrl(url);
       if (!parsed?.phaseGroupId) {
         results.push({ url, source: 'startgg', date: null, error: 'unparseable URL' });
+        continue;
+      }
+      if (knownStartgg.has(parsed.phaseGroupId)) {
+        cachedCount++;
+        const date = knownStartgg.get(parsed.phaseGroupId);
+        results.push({
+          url,
+          source: 'startgg',
+          phase_group_id: parsed.phaseGroupId,
+          date: date ? new Date(date).toISOString() : null,
+          cached: true,
+        });
         continue;
       }
       try {
@@ -497,6 +542,18 @@ router.post('/preview-dates', requireAdmin, async (req, res) => {
     } else {
       // Treat anything else as a Challonge URL or bare slug
       const slug = challonge.extractSlugFromUrl(url) || url;
+      if (knownChallonge.has(slug)) {
+        cachedCount++;
+        const date = knownChallonge.get(slug);
+        results.push({
+          url,
+          source: 'challonge',
+          slug,
+          date: date ? new Date(date).toISOString() : null,
+          cached: true,
+        });
+        continue;
+      }
       try {
         const data = await challonge.getTournament(slug);
         const t = data?.tournament || data;
@@ -512,7 +569,7 @@ router.post('/preview-dates', requireAdmin, async (req, res) => {
     }
   }
 
-  res.json({ count: results.length, results });
+  res.json({ count: results.length, cached: cachedCount, results });
 });
 
 // POST /api/tournaments/append-harvest

@@ -98,7 +98,8 @@ async function sortUrlsByDate(urls) {
         for (const url of slice) annotated.push({ url, date: null, source: detectSource(url) });
         continue;
       }
-      console.log(`OK (${body.count} dated)`);
+      const cachedNote = body.cached ? `, ${body.cached} from DB` : '';
+      console.log(`OK (${body.count} dated${cachedNote})`);
       for (const r of body.results) annotated.push(r);
     } catch (err) {
       console.log(`NETWORK ERROR: ${err.message} - falling back to file order for this slice`);
