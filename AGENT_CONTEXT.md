@@ -298,6 +298,47 @@ Backend uses `nodemon` for hot reload. Changes to `.js` files in `backend/src/` 
 
 ## ⚡ NEXT AGENT: What to Do First
 
+### Current state (as of May 10 2026 — DEPLOYED TO RENDER + offline-row fetch fix)
+
+#### What this session shipped
+
+Neos City is live in production on Render:
+- **Frontend (static site, free tier):** https://neos-city-web.onrender.com
+- **Backend (web service, Starter $7/mo):** https://neos-city-api.onrender.com
+
+Auto-deploy is on: any push to `main` rebuilds both services. No CI, no staging branch, no preview env — `main` IS prod.
+
+Admin auth is wired end-to-end. Every mutating route is gated behind `ADMIN_TOKEN` (12 POSTs in `tournaments.js`, 4 mutating routes in `organizers.js`). [requireAdmin.js](backend/src/middleware/requireAdmin.js) fails closed: 503 if `ADMIN_TOKEN` is unset on the server, 401 on a missing/wrong client header, timing-safe compare otherwise. Smoke tests against prod confirmed 401 without token and a successful import with token. Frontend reads the token from `localStorage.admin_token` (set via `localStorage.setItem('admin_token', '...')` in DevTools — no UI yet) and the axios interceptor in [api.js](frontend/src/lib/api.js) attaches it as `x-admin-token` on every request.
+
+#### Where secrets live
+
+`ADMIN_TOKEN`, `DATABASE_URL`, `CHALLONGE_V1_KEY`, `CHALLONGE_CLIENT_ID`, `CHALLONGE_CLIENT_SECRET`, `STARTGG_TOKEN`, `JWT_SECRET`, `NODE_ENV=production`, `FRONTEND_URL` — Render env vars on `neos-city-api`, mirrored in Gabriel's local `backend/.env`. `VITE_API_URL` — Render env var on `neos-city-web`, baked into the JS bundle at build time. There is no recovery flow: if `ADMIN_TOKEN` is lost from one store, copy from the other. If lost from both, generate a new one and update both; existing browser localStorage values become stale and users have to paste the new token.
+
+#### The offline-row fetch bug (fixed in `dd0ad21`)
+
+After deploy, `/tournaments?tab=offline` rendered with blank winner/runner-up columns. Root cause: `OfflineRow` in [Tournaments.jsx](frontend/src/pages/Tournaments.jsx) used a raw `fetch('/api/tournaments/${id}')` with a relative URL. That worked in dev via Vite's proxy but in prod hit the static-site origin, where Render's SPA rewrite served `index.html` for the unknown path → JSON parse failed silently → empty placements. Fix: route through the existing `getTournament` helper from `lib/api.js`, which uses the configured `${VITE_API_URL}/api` baseURL like the rest of the app. **Worth a one-time grep** — `grep -r "fetch('/api" frontend/src` — to catch any sibling slips that bypass the axios client.
+
+#### Known imperfections to clean up
+
+1. **`/api/health/challonge` returns `challonge_ok: false`** even though imports work fine. The diagnostic checks `/v2.1/application/tournaments`, which is documented elsewhere in this file as known-broken (requires user OAuth, not client_credentials). False alarm — prod uses v1 API via `CHALLONGE_V1_KEY`. Worth rewriting to hit a v1 endpoint instead.
+
+2. **`/api/players?region=NA` returns `[]` in prod** — no players have `region='NA'` set. NA/EU region tagging requires manual SQL (only JP is auto-tagged via Tonamel imports). Pre-existing gap, surfaced during smoke test. Could be auto-derived from organizer associations (FFC/RTG-NA/DCM/EOTR → NA; RTG-EU/TCC → EU).
+
+3. **Junk tournament in the DB: "X-Division Championship".** Imported when I tested the admin gate locally with `challonge_id: "x"` — that slug happens to match a real non-Pokkén tournament. 44 participants, 43 matches. Should be cleaned up; verify cascade across `matches`, `tournament_placements`, `player_achievements` before a raw `DELETE FROM tournaments WHERE challonge_id = 'x'`.
+
+4. **`DEPLOYMENT_RUNBOOK.md` and `DEPLOY_HANDOFF.md` are uncommitted in `.claude/worktrees/elegant-wescoff-f6aa32/`** — exactly the failure mode this file warns about. They guided this session but will vanish on the next harness cleanup. Worth committing to `main` (root or `docs/`) so the deploy story stays findable.
+
+5. **Supabase free-tier pauses after 7 days of inactivity.** The API will 503 until manually unpaused. Either upgrade Supabase or set up a tiny GitHub Action that pings `/api/health` daily.
+
+#### Reminders for future agents
+
+- **Push to main = deploy to prod.** No staging. Test locally; if uncertain, ask before pushing.
+- **Region for Render services is `ohio`** (us-east) to match Supabase's `aws-1-us-east-1.pooler.supabase.com`. Don't change to Oregon without migrating Supabase too.
+- **Frontend env vars are baked at build time.** Changing `VITE_API_URL` requires a redeploy of the static site, not just a service restart.
+- **CORS in prod requires `FRONTEND_URL` to be set** — `app.js` does `process.exit(1)` if it's missing. If the API service won't start, that's the first thing to check.
+
+---
+
 ### Current state (as of May 10 2026 — offline duplicate cleanup complete + root-cause patches landed)
 
 #### What this session shipped
@@ -1153,11 +1194,9 @@ Run `node recalculate_elo.js` to replay all matches chronologically and correct 
 
 3. **Live rooms** — `backend/src/routes/live.js` exists and has room creation + score reporting, but there's no persistent storage for rooms (they're in-memory). A server restart wipes all active rooms.
 
-4. **No authentication** — The admin routes (import, sync, delete organizer) are completely open. Anyone who knows the URL can trigger them. Fine for local dev / small community use; would need auth before any public deployment.
+4. **ELO history** — Schema has `elo_history` tracked but the frontend player profile may not be fully displaying the chart yet.
 
-5. **ELO history** — Schema has `elo_history` tracked but the frontend player profile may not be fully displaying the chart yet.
-
-6. **Achievements seeding** — After running `seed_achievements.sql`, verify with `SELECT COUNT(*) FROM achievements;`. Should return a count in the 40–60 range across all series.
+5. **Achievements seeding** — After running `seed_achievements.sql`, verify with `SELECT COUNT(*) FROM achievements;`. Should return a count in the 40–60 range across all series.
 
 ---
 
