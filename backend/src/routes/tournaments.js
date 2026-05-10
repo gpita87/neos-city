@@ -1766,10 +1766,15 @@ async function importOneLiquipediaBracket({ bracketUrl, name, date, location, pr
     );
     tournament = updated;
   } else {
-    // Try to find by name in offline records — link the bracket data to the existing record
+    // Try to find by name in offline records — link the bracket data to the existing record.
+    // Anchored prefix match (LIKE $1 || '%') so e.g. "Frosty Faustings XI" doesn't substring-
+    // match "Frosty Faustings XIV". Trailing suffixes like " - PokkenDX" are still tolerated.
     const { rows: [byName] } = name ? await db.query(
-      `SELECT * FROM tournaments WHERE is_offline = TRUE AND name ILIKE $1 LIMIT 1`,
-      [`%${name}%`]
+      `SELECT * FROM tournaments
+        WHERE is_offline = TRUE
+          AND LOWER(name) LIKE LOWER($1) || '%'
+        LIMIT 1`,
+      [name]
     ) : { rows: [] };
 
     if (byName) {
@@ -1785,14 +1790,17 @@ async function importOneLiquipediaBracket({ bracketUrl, name, date, location, pr
       );
       tournament = updated;
     } else {
-      // Create new offline tournament record
+      // Create new offline tournament record. detectOfflineTier classifies the
+      // event into worlds/major/regional/other; without this the row defaults
+      // to 'other' regardless of name.
+      const tier = detectOfflineTier(name || '');
       const { rows: [created] } = await db.query(
         `INSERT INTO tournaments
-           (challonge_id, name, is_offline, location, prize_pool, participants_count,
+           (challonge_id, name, is_offline, series, location, prize_pool, participants_count,
             completed_at, started_at, source, liquipedia_url)
-         VALUES (NULL, $1, TRUE, $2, $3, $4, $5, $5, 'offline', $6)
+         VALUES (NULL, $1, TRUE, $2, $3, $4, $5, $6, $6, 'offline', $7)
          RETURNING *`,
-        [name || liquipediaUrl, location || null, prize_pool || null, participants_count || null, completedAt, liquipediaUrl]
+        [name || liquipediaUrl, tier, location || null, prize_pool || null, participants_count || null, completedAt, liquipediaUrl]
       );
       tournament = created;
     }
@@ -2106,9 +2114,13 @@ async function importOneLiquipediaPlacements({ eventUrl, name, date, location, p
     );
     tournament = updated;
   } else {
+    // Anchored prefix match — see importOneLiquipediaBracket for rationale.
     const { rows: [byName] } = name ? await db.query(
-      `SELECT * FROM tournaments WHERE is_offline = TRUE AND name ILIKE $1 LIMIT 1`,
-      [`%${name}%`]
+      `SELECT * FROM tournaments
+        WHERE is_offline = TRUE
+          AND LOWER(name) LIKE LOWER($1) || '%'
+        LIMIT 1`,
+      [name]
     ) : { rows: [] };
 
     if (byName) {
@@ -2124,13 +2136,14 @@ async function importOneLiquipediaPlacements({ eventUrl, name, date, location, p
       );
       tournament = updated;
     } else {
+      const tier = detectOfflineTier(name || '');
       const { rows: [created] } = await db.query(
         `INSERT INTO tournaments
-           (challonge_id, name, is_offline, location, prize_pool, participants_count,
+           (challonge_id, name, is_offline, series, location, prize_pool, participants_count,
             completed_at, started_at, source, liquipedia_url)
-         VALUES (NULL, $1, TRUE, $2, $3, $4, $5, $5, 'offline', $6)
+         VALUES (NULL, $1, TRUE, $2, $3, $4, $5, $6, $6, 'offline', $7)
          RETURNING *`,
-        [name || liquipediaUrl, location || null, prize_pool || null, participants_count || null, completedAt, liquipediaUrl]
+        [name || liquipediaUrl, tier, location || null, prize_pool || null, participants_count || null, completedAt, liquipediaUrl]
       );
       tournament = created;
     }
