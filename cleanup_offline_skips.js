@@ -141,9 +141,16 @@ async function applyMoveAndDelete(client, { label, fromId, toId }) {
     [toId, fromId]
   );
 
-  // 5. Carry FROM's URL/location/prize/participants_count onto TO where TO
-  //    is missing them. (TO's name/date/slug are already canonical for the
-  //    event the bracket data actually represents.)
+  // 5. DELETE FROM first. This MUST happen before copying its URL onto TO:
+  //    the tournaments_liquipedia_url_lower_unique index would otherwise
+  //    reject the UPDATE because FROM still holds the same URL value.
+  //    Cascades on matches/placements are no-ops since we just re-pointed
+  //    everything off FROM in steps 2–4.
+  await client.query(`DELETE FROM tournaments WHERE id = $1`, [fromId]);
+
+  // 6. Carry FROM's saved URL/location/prize/participants_count onto TO
+  //    where TO is missing them. FROM's row is gone, so its unique-index
+  //    slots are free.
   await client.query(`
     UPDATE tournaments SET
       liquipedia_url     = COALESCE(liquipedia_url,     $2),
@@ -152,15 +159,6 @@ async function applyMoveAndDelete(client, { label, fromId, toId }) {
       participants_count = COALESCE(participants_count, $5)
     WHERE id = $1
   `, [toId, fromRow.liquipedia_url, fromRow.location, fromRow.prize_pool, fromRow.participants_count]);
-
-  // 6. NULL out FROM's liquipedia_url BEFORE delete to avoid hitting the
-  //    tournaments_liquipedia_url_lower_unique index later if anything
-  //    re-creates a row with that URL. Belt-and-braces; not strictly needed
-  //    since we're about to delete the row.
-  await client.query(`UPDATE tournaments SET liquipedia_url = NULL WHERE id = $1`, [fromId]);
-
-  // 7. DELETE FROM. Cascades touch matches/placements but those are now empty.
-  await client.query(`DELETE FROM tournaments WHERE id = $1`, [fromId]);
 
   console.log(`  → ${label}: moved ${matchesRes.rowCount} match${matchesRes.rowCount===1?'':'es'}, `
     + `${placementsRes.rowCount} placement${placementsRes.rowCount===1?'':'s'}, `
