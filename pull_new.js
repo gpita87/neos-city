@@ -84,9 +84,10 @@ function banner(title) {
 
   // 2. Optionally refresh harvested_tournaments.txt with new URLs from organizer pages
   console.log('\nStep 2/7: Refresh harvested_tournaments.txt');
-  console.log('  Walks each Pokken organizer\'s Challonge profile and appends any');
-  console.log('  newly-discovered tournaments to harvested_tournaments.txt.');
-  const harvestAnswer = await ask('  Run harvest_new.js now? (Y/n): ');
+  console.log('  - harvest_new.js     walks each Pokken organizer\'s Challonge profile');
+  console.log('  - harvest_startgg.js queries start.gg for past Pokken (videogameId 447) tournaments');
+  console.log('  Both append newly-discovered URLs to harvested_tournaments.txt.');
+  const harvestAnswer = await ask('  Run both harvest scripts now? (Y/n): ');
   if (harvestAnswer === 'n' || harvestAnswer === 'no') {
     console.log('  Skipping harvest. Importing only URLs already in the file.');
   } else {
@@ -94,7 +95,14 @@ function banner(title) {
       await runScript('harvest_new.js');
     } catch (err) {
       console.error(`\n  harvest_new.js failed: ${err.message}`);
-      const cont = await ask('  Continue without a fresh harvest? (Y/n): ');
+      const cont = await ask('  Continue with start.gg harvest + import? (Y/n): ');
+      if (cont === 'n' || cont === 'no') process.exit(1);
+    }
+    try {
+      await runScript('harvest_startgg.js');
+    } catch (err) {
+      console.error(`\n  harvest_startgg.js failed: ${err.message}`);
+      const cont = await ask('  Continue with import using existing file? (Y/n): ');
       if (cont === 'n' || cont === 'no') process.exit(1);
     }
   }

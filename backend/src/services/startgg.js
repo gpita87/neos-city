@@ -166,4 +166,107 @@ function isStartggUrl(url = '') {
   return /start\.gg\/tournament\//i.test(url);
 }
 
-module.exports = { getPhaseGroup, getAllSets, getEventBySlug, parseStartggUrl, isStartggUrl };
+// ─── Discover recent Pokkén tournaments via the public search ────────────────
+//
+// Pokkén Tournament's start.gg videogame ID is 447 (verifiable via the search
+// UI's `events.videogame.id=447` URL filter). The `tournaments` query supports
+// `videogameIds` + `past` + `afterDate`, so we don't need an organizer list.
+//
+// Yields one URL per phase group on the LAST phase of each Pokkén event in the
+// tournament. The "last phase" heuristic picks the final-bracket stage when an
+// event has Pools + Top 8; for single-phase events it's just the bracket.
+// Multiple phase groups on the same phase (rare, e.g. parallel pools) all get
+// emitted — dedup downstream catches anything already imported.
+
+const POKKEN_VIDEOGAME_ID = 447;
+
+async function discoverPokkenTournaments({ sinceDays = 90, perPage = 50, maxPages = 5, sleepMs = 500 } = {}) {
+  const afterDate = Math.floor((Date.now() - sinceDays * 24 * 60 * 60 * 1000) / 1000);
+  const out = [];
+
+  for (let page = 1; page <= maxPages; page++) {
+    const data = await gql(
+      `query SearchPokken($videogameIds: [ID]!, $afterDate: Timestamp, $perPage: Int!, $page: Int!) {
+        tournaments(query: {
+          perPage: $perPage
+          page: $page
+          filter: {
+            videogameIds: $videogameIds
+            afterDate: $afterDate
+            past: true
+          }
+        }) {
+          pageInfo { totalPages page }
+          nodes {
+            id
+            slug
+            name
+            startAt
+            events {
+              id
+              slug
+              name
+              numEntrants
+              videogame { id }
+              phases {
+                id
+                name
+                phaseGroups(query: { perPage: 20 }) {
+                  nodes { id displayIdentifier }
+                }
+              }
+            }
+          }
+        }
+      }`,
+      { videogameIds: [POKKEN_VIDEOGAME_ID], afterDate, perPage, page }
+    );
+
+    const nodes = data?.tournaments?.nodes || [];
+    for (const t of nodes) {
+      // Filter events to Pokkén client-side — server-side `events(filter:)`
+      // schema has varied across start.gg API versions; client-side check is
+      // safer and the response set is small.
+      const pokkenEvents = (t.events || []).filter(
+        ev => Number(ev?.videogame?.id) === POKKEN_VIDEOGAME_ID
+      );
+      for (const ev of pokkenEvents) {
+        const phases = ev.phases || [];
+        if (phases.length === 0) continue;
+        const lastPhase = phases[phases.length - 1];
+        const groups = lastPhase.phaseGroups?.nodes || [];
+        for (const g of groups) {
+          // Convert API event slug "tournament/X/event/Y" to URL form "tournament/X/events/Y"
+          const urlSlug = String(ev.slug || '').replace('/event/', '/events/');
+          if (!urlSlug) continue;
+          out.push({
+            phaseGroupId:   String(g.id),
+            phaseId:        String(lastPhase.id),
+            tournamentSlug: t.slug,
+            eventSlug:      ev.slug,
+            name:           `${t.name} — ${ev.name}`,
+            startAt:        t.startAt,
+            numEntrants:    ev.numEntrants,
+            url: `https://www.start.gg/${urlSlug}/brackets/${lastPhase.id}/${g.id}`,
+          });
+        }
+      }
+    }
+
+    const totalPages = data?.tournaments?.pageInfo?.totalPages || 1;
+    if (page >= totalPages) break;
+    if (sleepMs) await new Promise(r => setTimeout(r, sleepMs));
+  }
+
+  return out;
+}
+
+module.exports = {
+  getPhaseGroup,
+  getAllSets,
+  getEventBySlug,
+  parseStartggUrl,
+  isStartggUrl,
+  discoverPokkenTournaments,
+  POKKEN_VIDEOGAME_ID,
+};

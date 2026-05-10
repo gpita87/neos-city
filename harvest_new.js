@@ -11,8 +11,9 @@
 // After this finishes, run `node pull_new.js` to import the new URLs.
 //
 // Notes:
-// - start.gg URLs are NOT auto-discovered (no public list-by-organizer API);
-//   add those to harvested_tournaments.txt by hand.
+// - start.gg has its own harvester (harvest_startgg.js) which queries the
+//   public `tournaments(filter: { videogameIds: [447] })` endpoint. Run it
+//   separately, or let pull_new.js Step 2 run both.
 // - Tonamel and Liquipedia events live on separate pipelines and are
 //   unaffected by this script.
 // - Backend doesn't need to be running. The script uses the Challonge service
