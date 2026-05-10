@@ -79,7 +79,7 @@ router.get('/recent', async (req, res) => {
     const { rows } = await db.query(`
       SELECT pa.player_id, pa.achievement_id, pa.unlocked_at, pa.tournament_id,
              pa.first_seen_at,
-             p.display_name AS player_name,
+             p.display_name AS player_name, p.avatar_url AS player_avatar_url,
              a.name AS achievement_name, a.icon, a.description,
              t.name AS tournament_name
       FROM player_achievements pa

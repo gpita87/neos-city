@@ -72,7 +72,7 @@ router.get('/recent-placements', async (req, res) => {
     for (const t of tournaments) {
       const { rows: placements } = await db.query(
         `SELECT tp.player_id, tp.final_rank,
-                p.display_name, p.challonge_username, p.region
+                p.display_name, p.challonge_username, p.region, p.avatar_url
          FROM tournament_placements tp
          JOIN players p ON tp.player_id = p.id
          WHERE tp.tournament_id = $1 AND tp.final_rank <= $2
@@ -220,14 +220,16 @@ async function importOne(challonge_id) {
       username = await resolveAlias(username);
       const displayName = attrs.display_name || attrs.name || username;
       const finalRank = attrs.final_rank || attrs.final_rank_or_null || null;
+      const avatarUrl = attrs.attached_participatable_portrait_url || null;
 
       const { rows: [player] } = await db.query(
-        `INSERT INTO players (challonge_username, display_name)
-         VALUES ($1, $2)
+        `INSERT INTO players (challonge_username, display_name, avatar_url)
+         VALUES ($1, $2, $3)
          ON CONFLICT (challonge_username) DO UPDATE SET
-           display_name = EXCLUDED.display_name
+           display_name = EXCLUDED.display_name,
+           avatar_url = COALESCE(EXCLUDED.avatar_url, players.avatar_url)
          RETURNING *`,
-        [username, displayName]
+        [username, displayName, avatarUrl]
       );
 
       playerMap.set(chalId, { ...player, finalRank: finalRank ? parseInt(finalRank) : null });

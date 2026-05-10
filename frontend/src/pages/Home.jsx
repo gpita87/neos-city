@@ -38,6 +38,11 @@ function PlacementRow({ p, index }) {
       }`}>
         {rank <= 3 ? PLACEMENT_ICONS[rank] : <span className="text-xs">{rank}</span>}
       </span>
+      {p.avatar_url ? (
+        <img src={p.avatar_url} alt="" className="w-6 h-6 rounded-full object-cover bg-slate-800 shrink-0" />
+      ) : (
+        <span className="w-6 h-6 rounded-full bg-slate-800/60 shrink-0" />
+      )}
       <span className={`flex-1 truncate ${isPodium ? 'font-medium' : ''}`}>
         {p.display_name}
       </span>
@@ -204,8 +209,11 @@ export default function Home() {
                       <p className="text-sm text-white truncate">
                         <Link
                           to={`/players/${a.player_id}`}
-                          className="text-cyan-400 hover:text-cyan-300"
+                          className="inline-flex items-center gap-1.5 text-cyan-400 hover:text-cyan-300 align-middle"
                         >
+                          {a.player_avatar_url && (
+                            <img src={a.player_avatar_url} alt="" className="w-4 h-4 rounded-full object-cover bg-slate-800" />
+                          )}
                           {a.player_name}
                         </Link>
                         {' '}unlocked{' '}
