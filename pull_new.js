@@ -14,48 +14,21 @@
 //   7. Run backup_db.js for a logical Supabase dump under neos-city/backups/.
 // ===========================================================================
 
-const http        = require('http');
-const path        = require('path');
-const fs          = require('fs');
-const readline    = require('readline');
-const { spawn }   = require('child_process');
+const http              = require('http');
+const path              = require('path');
+const readline          = require('readline');
+const { spawn, spawnSync } = require('child_process');
 
 const API_HOST = 'localhost';
 const API_PORT = 3001;
 const ROOT     = __dirname;
 
-// Read ADMIN_TOKEN from backend/.env without pulling in dotenv. Returns null
-// if the file is absent or the line isn't there.
-function readAdminToken() {
-  const envPath = path.join(ROOT, 'backend', '.env');
-  if (!fs.existsSync(envPath)) return null;
-  const content = fs.readFileSync(envPath, 'utf8');
-  const match = content.match(/^\s*ADMIN_TOKEN\s*=\s*['"]?([^'"\r\n]+?)['"]?\s*$/m);
-  return match ? match[1] : null;
-}
-
-// Pipe text to the Windows clipboard via `clip`. Rejects with a useful error
-// on non-Windows platforms so the caller can fall back to a manual-copy hint.
-function copyToClipboard(text) {
-  return new Promise((resolve, reject) => {
-    if (process.platform !== 'win32') {
-      reject(new Error(`clipboard copy not implemented for ${process.platform}`));
-      return;
-    }
-    const proc = spawn('clip');
-    proc.on('error', reject);
-    proc.on('exit', code => {
-      if (code === 0) resolve();
-      else reject(new Error(`clip exited with code ${code}`));
-    });
-    proc.stdin.write(text);
-    proc.stdin.end();
-  });
-}
-
 // Offer to copy a browser-console import script to clipboard, with the
 // ADMIN_TOKEN line pre-filled from backend/.env, and print the target URL
 // (rendered on its own line so Windows Terminal auto-links it).
+//
+// Delegates to prep_console.js so we share its UTF-16LE+BOM clipboard write —
+// emojis and box-drawing chars in the scripts otherwise paste as mojibake.
 async function offerConsoleImport({ label, script, targetUrl, blurb }) {
   console.log(`\n  ${label} - ${blurb}`);
   const ans = await ask(`  Import new ${label} events now? (Y/n): `);
@@ -64,30 +37,13 @@ async function offerConsoleImport({ label, script, targetUrl, blurb }) {
     return;
   }
 
-  const scriptPath = path.join(ROOT, script);
-  let content;
-  try {
-    content = fs.readFileSync(scriptPath, 'utf8');
-  } catch (err) {
-    console.error(`  Could not read ${script}: ${err.message}`);
-    return;
-  }
-
-  const token = readAdminToken();
-  if (token) {
-    content = content.replace(
-      /^(const ADMIN_TOKEN\s*=\s*)['"]['"]\s*;?\s*$/m,
-      (_, prefix) => `${prefix}${JSON.stringify(token)};`
-    );
-  }
-
-  try {
-    await copyToClipboard(content);
-    const tokenNote = token ? ' (with ADMIN_TOKEN pre-filled)' : ' (ADMIN_TOKEN not found in backend/.env — set it manually before running)';
-    console.log(`  Copied ${script} to clipboard${tokenNote}.`);
-  } catch (err) {
-    console.error(`  Could not copy to clipboard: ${err.message}`);
-    console.log(`  Open ${scriptPath} manually and copy its contents.`);
+  const result = spawnSync(
+    process.execPath,
+    [path.join(ROOT, 'prep_console.js'), script],
+    { cwd: ROOT, stdio: 'inherit' }
+  );
+  if (result.status !== 0) {
+    console.error(`  prep_console.js failed; open ${path.join(ROOT, script)} and copy it manually.`);
   }
 
   console.log(`\n  Open this page in Chrome, then F12 -> Console -> paste -> Enter:`);
