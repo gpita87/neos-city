@@ -5,19 +5,29 @@
  * Usage:
  *   node cleanup-worktrees.js              # dry-run: list what would be removed
  *   node cleanup-worktrees.js --apply      # actually remove them
- *   node cleanup-worktrees.js --all        # also consider unmerged worktrees (still dry-run unless --apply)
+ *   node cleanup-worktrees.js --strict     # only treat strict ancestors of main as safe
+ *   node cleanup-worktrees.js --all        # also consider unmerged worktrees (use with care)
  *
  * What it does:
  *   1. Lists every git worktree under .claude/worktrees/ (harness-spawned sandboxes).
  *      Skips the current worktree, neos-city-worktrees/* (those use merge-worktree.js),
  *      and the main worktree itself.
- *   2. For each, checks whether the branch's commits are all reachable from main
- *      (`git log <branch> ^main` is empty → fully merged).
- *   3. In --apply mode: runs `git worktree remove --force` then `git branch -D`.
- *      Failures from OS file locks (a Claude Code session is still open in that
- *      directory) are reported per-line, not fatal — the script continues with
- *      the rest.
- *   4. Runs `git worktree prune` at the end to sweep admin records for any
+ *   2. Classifies each branch:
+ *        merged     — strict ancestor of main
+ *        patch-eq   — every unique commit has a patch-equivalent on main
+ *                     (cherry-picked or rebased onto main; via `git cherry`)
+ *        same-tree  — tip's tree SHA equals main's (identical files)
+ *        N-ahead    — N unique commits not in main (the real WIP bucket)
+ *      Default safe-to-remove set: merged + patch-eq + same-tree.
+ *      --strict narrows this to just `merged`.
+ *   3. In dry-run, prints each N-ahead branch's unique commit subjects and
+ *      its last-commit age, so you can eyeball what would be lost before
+ *      deciding whether to --all-nuke it.
+ *   4. In --apply mode: runs `git worktree remove --force` then `git branch -D`.
+ *      Failures from OS file locks (a Claude Code session is still open in
+ *      that directory) are reported per-line, not fatal — the script keeps
+ *      going with the rest.
+ *   5. Runs `git worktree prune` at the end to sweep admin records for any
  *      directories nuked outside of git.
  *
  * Why this exists:
@@ -69,9 +79,11 @@ function tryRun(cmd, cwd) {
 const args = process.argv.slice(2);
 const apply = args.includes('--apply');
 const all = args.includes('--all');
+const strict = args.includes('--strict');
 
-if (args.some(a => a.startsWith('-') && a !== '--apply' && a !== '--all')) {
-  die(`Unknown flag in: ${args.join(' ')}\nUsage: node cleanup-worktrees.js [--apply] [--all]`);
+const KNOWN_FLAGS = new Set(['--apply', '--all', '--strict']);
+if (args.some(a => a.startsWith('-') && !KNOWN_FLAGS.has(a))) {
+  die(`Unknown flag in: ${args.join(' ')}\nUsage: node cleanup-worktrees.js [--apply] [--strict] [--all]`);
 }
 
 // ---- preflight: must run from main worktree ----
@@ -129,54 +141,131 @@ if (candidates.length === 0) {
   process.exit(0);
 }
 
-// ---- classify: merged vs unmerged ----
+// ---- classify ----
+
+// NOTE on shell escaping: avoid `^` anywhere in command strings — on Windows,
+// cmd.exe (used by execSync) eats `^` as its escape character. `--not <ref>`
+// replaces `^<ref>`, and `%T` / `%ct` give us tree SHA / commit time without
+// needing `<ref>^{tree}` syntax.
 
 function unmergedCount(branch) {
-  // Commits in <branch> that are NOT reachable from main → 0 means fully merged.
-  // NOTE: avoid `^main` here — on Windows, cmd.exe eats the caret as its escape
-  // character, so `git log <branch> ^main` silently becomes `git log <branch> main`
-  // and returns the full history. `--not main` is the safe equivalent.
   const out = tryCapture(`git rev-list --count ${branch} --not main`);
   if (out === null) return null;
   const n = parseInt(out, 10);
   return Number.isFinite(n) ? n : null;
 }
 
+function patchEquivalentToMain(branch) {
+  // `git cherry main <branch>` prints one line per commit on <branch> not in main:
+  //   `+ <sha>`  no patch-equivalent commit on main → unique work
+  //   `- <sha>`  has patch-equivalent on main (cherry-picked or rebased)
+  // All `-` lines → branch's content is fully represented on main.
+  const out = tryCapture(`git cherry main ${branch}`);
+  if (out === null) return null;
+  if (out === '') return true;                       // no unique commits — also patch-equivalent
+  return out.split('\n').every(l => l.startsWith('-'));
+}
+
+const MAIN_TREE = tryCapture(`git log -1 --format=%T main`);
+
+function sameTreeAsMain(branch) {
+  if (!MAIN_TREE) return null;
+  const t = tryCapture(`git log -1 --format=%T ${branch}`);
+  return t === null ? null : (t === MAIN_TREE);
+}
+
+function relAge(branch) {
+  const out = tryCapture(`git log -1 --format=%ct ${branch}`);
+  if (out === null) return null;
+  const ts = parseInt(out, 10);
+  if (!Number.isFinite(ts)) return null;
+  const days = Math.floor((Date.now() / 1000 - ts) / 86400);
+  if (days < 1) return 'today';
+  if (days === 1) return '1d ago';
+  if (days < 7) return `${days}d ago`;
+  if (days < 30) return `${Math.floor(days / 7)}w ago`;
+  return `${Math.floor(days / 30)}mo ago`;
+}
+
+function uniqueCommits(branch, max = 5) {
+  // Tab-separated to avoid quoting `%h %s` for cmd.exe.
+  const out = tryCapture(`git log --format=%h%x09%s ${branch} --not main`);
+  if (!out) return { shown: [], more: 0 };
+  const lines = out.split('\n');
+  return {
+    shown: lines.slice(0, max).map(l => l.replace('\t', '  ')),
+    more: Math.max(0, lines.length - max),
+  };
+}
+
 const rows = candidates.map(wt => {
   const branch = wt.branch || null;
-  let status, ahead = null;
+  let status = null, ahead = null;
   if (wt.locked) {
     status = 'locked';
   } else if (!branch) {
     status = 'detached';
   } else {
     ahead = unmergedCount(branch);
-    if (ahead === null) status = 'no-branch';
-    else if (ahead === 0) status = 'merged';
-    else status = `${ahead}-ahead`;
+    if (ahead === null) {
+      status = 'no-branch';
+    } else if (ahead === 0) {
+      status = 'merged';
+    } else if (!strict && patchEquivalentToMain(branch)) {
+      status = 'patch-eq';
+    } else if (!strict && sameTreeAsMain(branch)) {
+      status = 'same-tree';
+    } else {
+      status = `${ahead}-ahead`;
+    }
   }
   return { ...wt, status, ahead };
 });
 
 // ---- report ----
 
-const merged = rows.filter(r => r.status === 'merged');
-const unmerged = rows.filter(r => r.status !== 'merged');
+const SAFE_STATUSES = new Set(['merged', 'patch-eq', 'same-tree']);
+const safe = rows.filter(r => SAFE_STATUSES.has(r.status));
+const unsafe = rows.filter(r => !SAFE_STATUSES.has(r.status));
+
+const counts = {};
+for (const r of rows) counts[r.status] = (counts[r.status] || 0) + 1;
 
 console.log(`\n.claude/worktrees/ candidates: ${rows.length}`);
-console.log(`  Merged into main:  ${merged.length}`);
-console.log(`  NOT merged:        ${unmerged.length}\n`);
+console.log(`  Merged (strict ancestor):  ${counts.merged || 0}`);
+if (!strict) {
+  console.log(`  Patch-equivalent to main:  ${counts['patch-eq'] || 0}   (cherry-picked / rebased)`);
+  console.log(`  Same tree as main:         ${counts['same-tree'] || 0}`);
+}
+console.log(`  Unique commits not on main:${' '.repeat(2)}${unsafe.length}\n`);
 
 const dirCol = Math.max(...rows.map(r => path.basename(r.path).length));
 for (const r of rows) {
   const dir = path.basename(r.path).padEnd(dirCol);
-  const action = (r.status === 'merged' || all) ? '✓ remove' : '  skip  ';
+  const safeRow = SAFE_STATUSES.has(r.status);
+  const action = (safeRow || all) ? '✓ remove' : '  skip  ';
   const tag = r.status.padEnd(10);
   const branchTag = r.branch ? `[${r.branch}]` : '[detached]';
   console.log(`  ${tag}  ${action}  ${dir}  ${branchTag}`);
 }
 
-const targets = all ? rows : merged;
+// Show unique work for branches the user might want to inspect before deciding.
+if (!apply && unsafe.length > 0) {
+  console.log(`\nBranches with unique work (would NOT be removed by default):`);
+  for (const r of unsafe) {
+    const dir = path.basename(r.path);
+    const age = r.branch ? relAge(r.branch) : null;
+    const meta = [r.status, age].filter(Boolean).join(', ');
+    console.log(`\n  ${dir}  [${meta}]`);
+    if (r.branch) {
+      const { shown, more } = uniqueCommits(r.branch);
+      for (const line of shown) console.log(`    + ${line}`);
+      if (more > 0) console.log(`    + ... and ${more} more`);
+    }
+  }
+}
+
+const targets = all ? rows : safe;
 
 if (targets.length === 0) {
   console.log('\nNothing to clean.');
@@ -185,8 +274,8 @@ if (targets.length === 0) {
 
 if (!apply) {
   console.log(`\nDry run. Re-run with --apply to remove ${targets.length} worktree(s).`);
-  if (!all && unmerged.length > 0) {
-    console.log(`Pass --all to also consider the ${unmerged.length} unmerged worktree(s) (use with care — branches with unique commits get deleted too).`);
+  if (!all && unsafe.length > 0) {
+    console.log(`Pass --all to also remove the ${unsafe.length} branch(es) with unique commits (those commits get deleted with the branch).`);
   }
   process.exit(0);
 }
