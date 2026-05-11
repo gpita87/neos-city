@@ -1152,8 +1152,10 @@ Run `node recalculate_elo.js` to replay all matches chronologically and correct 
 
 - **Do NOT run Supabase SQL queries via Chrome automation without asking Gabriel first.** Instead, create a Node.js script in the `neos-city` directory and give him the command to run it himself.
 - For quick DB diagnostics, use `check_import_status.js` or similar one-off scripts rather than the Supabase SQL editor.
-- **Static syntax checks — keep them simple, and stay inside cwd.** Plain JS: `node -c <file>`. JSX: `npx esbuild --loader=jsx --log-level=silent <file>` (whitelisted in `.claude/settings.json` so it won't prompt). Exit code 0 = valid, non-zero = error. Four anti-patterns to avoid:
-  - Don't prepend `cd <subdir> &&` — use cwd-relative paths instead (`frontend/src/pages/Foo.jsx`, not `cd frontend && esbuild src/pages/Foo.jsx`). The harness's Bash tool docs say so explicitly.
-  - Don't redirect output to a file just to inspect it (`> /tmp/_out.js; tail … | head …`). The Bash tool already returns stdout+stderr in the tool result. Worse, `/tmp/` is outside cwd, so the write itself prompts.
-  - Don't use `> nul` (Windows) in the Bash tool — `nul` is a literal filename in Git Bash, not the null sink. Use `> /dev/null` if you need to suppress output, or just don't redirect.
-  - Don't echo `$?`. The tool result includes the exit code.
+- **Static syntax checks — keep them simple.** Plain JS: `node -c <file>`. JSX: `npx esbuild --loader=jsx --log-level=silent <file>` (whitelisted for both `Bash` and `PowerShell` so neither prompts). The tool result already contains stdout, stderr, and the exit code — don't reinvent that with shell plumbing. Common mistakes:
+  - **`cd <subdir>` (Bash) / `Set-Location <subdir>` (PowerShell)** — use cwd-relative paths instead (`frontend/src/pages/Foo.jsx`, not `cd frontend && esbuild src/pages/Foo.jsx`). Both shells start at cwd.
+  - **Redirecting to inspect** (`> /tmp/out; tail | head`, `| Out-File`) — the tool result already has stdout+stderr. Plus `/tmp/` is outside cwd, so the write itself prompts.
+  - **`> nul` in Bash** — `nul` is a literal filename in Git Bash, not the null sink. Use `> /dev/null` or just don't redirect.
+  - **`2>&1` on native commands in PowerShell** — Windows PowerShell 5.1 wraps stderr lines in `ErrorRecord` objects and sets `$?` to `$false` even when the exe exited 0. So `npx esbuild ... 2>&1 | Out-Null; if ($?) {"OK"} else {"FAIL"}` reports FAIL on valid JSX whenever esbuild writes anything to stderr. Don't redirect stderr in PowerShell; it's captured for you.
+  - **`echo $?` (Bash) / `if ($?) {"OK"} else {"FAIL"}` (PowerShell)** — the exit code is in the tool result. Reinventing it lies when the `2>&1` trap above corrupts `$?`.
+  - **Mismatched whitelist scope** — `Bash(...)` allow patterns in `.claude/settings.json` do NOT cover the PowerShell tool and vice versa. If a command prompts unexpectedly, check which tool you invoked and whether the matching pattern exists.
