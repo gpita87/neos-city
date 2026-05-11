@@ -32,7 +32,7 @@ const BACKEND_URL    = 'http://localhost:3001';
 // Required — the import endpoint is gated and the script will refuse to run if blank.
 const ADMIN_TOKEN    = '';
 const IFRAME_HOLD_MS = 1000;   // extra settle time after bracket markers appear
-const MAX_WAIT_MS    = 20000;  // give up looking for bracket markers after this
+const MAX_WAIT_MS    = 30000;  // give up looking for bracket markers after this
 const POST_DELAY_MS  = 250;    // breath between backend POSTs
 
 // Re-scrape events that are already in the DB. Use this to backfill avatars
@@ -148,52 +148,57 @@ function scrapeViaIframe(url) {
       if (err) reject(err); else resolve(value);
     };
 
-    iframe.addEventListener('load', () => {
-      const start = Date.now();
-      pollHandle = setInterval(() => {
-        if (settled) return;
-        let doc;
-        try {
-          doc = iframe.contentDocument;
-        } catch (err) {
-          return finish(null, new Error('cross-origin denial: ' + err.message));
-        }
-        if (!doc || !doc.body) return;
-        const text = doc.body.innerText || '';
-        const hasBracket = /#[WL]\d+-\d+/.test(text);
-        const elapsed = Date.now() - start;
+    // Poll from the moment the iframe is appended — don't wait for the `load`
+    // event. Tonamel pages now embed vendor SDKs (Cookiebot, Sentry, Meta Pixel)
+    // that can delay or prevent `load` from firing entirely while the bracket
+    // DOM has already rendered. Waiting for `load` made every event hard-time-
+    // out. The iframe's contentDocument is same-origin, so polling works
+    // immediately; initially it points at about:blank's empty body, so the
+    // bracket-marker check naturally waits until Tonamel's app mounts.
+    const start = Date.now();
+    pollHandle = setInterval(() => {
+      if (settled) return;
+      let doc;
+      try {
+        doc = iframe.contentDocument;
+      } catch (err) {
+        return finish(null, new Error('cross-origin denial: ' + err.message));
+      }
+      if (!doc || !doc.body) return;
+      const text = doc.body.innerText || '';
+      const hasBracket = /#[WL]\d+-\d+/.test(text);
+      const elapsed = Date.now() - start;
 
-        if (hasBracket) {
-          // Bracket markers visible — give the SPA one more beat to finish
-          // rendering trailing rounds, then parse.
-          if (pollHandle) { clearInterval(pollHandle); pollHandle = null; }
-          setTimeout(() => {
-            try {
-              const doc2 = iframe.contentDocument;
-              if (!doc2 || !doc2.body) throw new Error('iframe lost during settle');
-              finish({
-                matches:      parseBracketFromDoc(doc2),
-                participants: parseParticipantsFromDoc(doc2),
-              });
-            } catch (err) {
-              finish(null, err);
-            }
-          }, IFRAME_HOLD_MS);
-        } else if (elapsed > MAX_WAIT_MS) {
-          // Never saw a bracket marker — could be round-robin, empty, or a
-          // load failure. Try parsing anyway (returns [] for the caller to
-          // skip), so we don't hard-fail the run.
+      if (hasBracket) {
+        // Bracket markers visible — give the SPA one more beat to finish
+        // rendering trailing rounds, then parse.
+        if (pollHandle) { clearInterval(pollHandle); pollHandle = null; }
+        setTimeout(() => {
           try {
+            const doc2 = iframe.contentDocument;
+            if (!doc2 || !doc2.body) throw new Error('iframe lost during settle');
             finish({
-              matches:      parseBracketFromDoc(doc),
-              participants: parseParticipantsFromDoc(doc),
+              matches:      parseBracketFromDoc(doc2),
+              participants: parseParticipantsFromDoc(doc2),
             });
           } catch (err) {
             finish(null, err);
           }
+        }, IFRAME_HOLD_MS);
+      } else if (elapsed > MAX_WAIT_MS) {
+        // Never saw a bracket marker — could be round-robin, empty, or a
+        // load failure. Try parsing anyway (returns [] for the caller to
+        // skip), so we don't hard-fail the run.
+        try {
+          finish({
+            matches:      parseBracketFromDoc(doc),
+            participants: parseParticipantsFromDoc(doc),
+          });
+        } catch (err) {
+          finish(null, err);
         }
-      }, 500);
-    });
+      }
+    }, 500);
 
     iframe.addEventListener('error', () => finish(null, new Error('iframe load error')));
     hardTimeout = setTimeout(
