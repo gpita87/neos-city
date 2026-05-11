@@ -84,6 +84,7 @@ const HEAVENS_ARENA = [
 const NEW_EVENT_SLUGS = [
   'heaven-s-arena-29',
   'heaven-s-arena-30',
+  'heaven-s-arena-31',
 ];
 
 // Resolve `heaven-s-arena-N` → { num, pgId, entrants } via start.gg.
