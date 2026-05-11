@@ -22,28 +22,44 @@ const DEFAULT_SERIES = { name: 'Online', color: 'border-slate-500/40', accent: '
 const PLACEMENT_ICONS = ['', '🥇', '🥈', '🥉', '4th', '5th', '6th', '7th', '8th'];
 const REGION_FLAGS = { NA: '🇺🇸', EU: '🇪🇺', JP: '🇯🇵' };
 
-function PlacementRow({ p, index }) {
+function PlacementRow({ p, partialTopN }) {
   const rank = p.final_rank;
-  const isPodium = rank <= 3;
+  const isUnrevealed = rank == null && partialTopN > 0;
+  const isPodium = rank != null && rank <= 3;
+  const isHighlighted = isPodium || isUnrevealed;
+
+  let badge;
+  if (isUnrevealed) {
+    badge = <span className="text-[10px] font-display tracking-wider text-amber-300">TOP {partialTopN}</span>;
+  } else if (rank <= 3) {
+    badge = PLACEMENT_ICONS[rank];
+  } else {
+    badge = <span className="text-xs">{rank}</span>;
+  }
+
+  const rankTint = isUnrevealed
+    ? 'text-amber-300'
+    : rank === 1 ? 'text-yellow-400'
+    : rank === 2 ? 'text-slate-300'
+    : rank === 3 ? 'text-amber-600'
+    : 'text-slate-600';
 
   return (
     <Link
       to={`/players/${p.player_id}`}
       className={`flex items-center gap-3 px-3 py-2 rounded-lg transition-colors hover:bg-white/5 ${
-        isPodium ? 'text-white' : 'text-slate-400'
+        isHighlighted ? 'text-white' : 'text-slate-400'
       }`}
     >
-      <span className={`w-7 text-center text-sm ${
-        rank === 1 ? 'text-yellow-400' : rank === 2 ? 'text-slate-300' : rank === 3 ? 'text-amber-600' : 'text-slate-600'
-      }`}>
-        {rank <= 3 ? PLACEMENT_ICONS[rank] : <span className="text-xs">{rank}</span>}
+      <span className={`w-12 text-center text-sm ${rankTint}`}>
+        {badge}
       </span>
       {p.avatar_url ? (
         <img src={p.avatar_url} alt="" className="w-6 h-6 rounded-full object-cover bg-slate-800 shrink-0" />
       ) : (
         <span className="w-6 h-6 rounded-full bg-slate-800/60 shrink-0" />
       )}
-      <span className={`flex-1 truncate ${isPodium ? 'font-medium' : ''}`}>
+      <span className={`flex-1 truncate ${isHighlighted ? 'font-medium' : ''}`}>
         {p.display_name}
       </span>
       {p.region && REGION_FLAGS[p.region] && (
@@ -55,16 +71,23 @@ function PlacementRow({ p, index }) {
 
 function TournamentCard({ tournament }) {
   const series = SERIES_META[tournament.series] || DEFAULT_SERIES;
+  const isPartial = tournament.is_partial === true;
+  const partialTopN = isPartial ? (tournament.unrevealed_top_n || 0) : 0;
 
   return (
-    <div className={`bg-[#0c1425] border ${series.color} rounded-xl overflow-hidden`}>
+    <div className={`bg-[#0c1425] border ${isPartial ? 'border-amber-500/40' : series.color} rounded-xl overflow-hidden`}>
       {/* Card header */}
-      <div className={`px-5 py-3 ${series.bg} border-b ${series.color}`}>
-        <div className="flex items-center justify-between">
+      <div className={`px-5 py-3 ${series.bg} border-b ${isPartial ? 'border-amber-500/40' : series.color}`}>
+        <div className="flex items-center justify-between gap-3">
           <div className="flex items-center gap-2 min-w-0">
             <span className={`px-2 py-0.5 rounded border text-[10px] font-display tracking-wider ${series.badge}`}>
               {series.name}
             </span>
+            {isPartial && (
+              <span className="px-2 py-0.5 rounded border text-[10px] font-display tracking-wider bg-amber-900/40 text-amber-300 border-amber-700/50 shrink-0">
+                🔒 TOP {partialTopN || 'N'} UNREVEALED
+              </span>
+            )}
             <Link
               to={`/tournaments/${tournament.tournament_id}`}
               className="text-white font-medium text-sm truncate hover:text-cyan-400 transition-colors"
@@ -72,7 +95,7 @@ function TournamentCard({ tournament }) {
               {tournament.name}
             </Link>
           </div>
-          <div className="flex items-center gap-3 text-xs text-slate-500 shrink-0 ml-3">
+          <div className="flex items-center gap-3 text-xs text-slate-500 shrink-0">
             <span>{tournament.participants_count} players</span>
             <span>{formatDate(tournament.completed_at)}</span>
           </div>
@@ -85,8 +108,8 @@ function TournamentCard({ tournament }) {
           <p className="text-slate-600 text-sm px-3 py-2">No placement data available.</p>
         ) : (
           <div className="space-y-0.5">
-            {tournament.placements.map((p, i) => (
-              <PlacementRow key={p.player_id} p={p} index={i} />
+            {tournament.placements.map(p => (
+              <PlacementRow key={p.player_id} p={p} partialTopN={partialTopN} />
             ))}
           </div>
         )}
@@ -180,6 +203,11 @@ export default function Home() {
                       <span className={`px-1.5 py-0.5 rounded border text-[9px] font-display tracking-wider ${series.badge}`}>
                         {series.name}
                       </span>
+                      {t.is_partial && (
+                        <span className="px-1.5 py-0.5 rounded border text-[9px] font-display tracking-wider bg-amber-900/40 text-amber-300 border-amber-700/50">
+                          🔒 PARTIAL
+                        </span>
+                      )}
                       <p className="text-white font-medium text-sm truncate">{t.name}</p>
                     </div>
                     <p className="text-xs text-slate-500 mt-1">

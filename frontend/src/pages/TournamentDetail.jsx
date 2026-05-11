@@ -6,8 +6,14 @@ import AchievementIcon from '../components/AchievementIcon';
 
 // Visual treatment for the top of the bracket. Anything past 8th falls
 // through to the muted "other" style.
-function rankStyle(rank) {
-  if (rank == null)  return { medal: '·', tint: 'text-slate-500', label: '—' };
+function rankStyle(rank, partialTopN) {
+  if (rank == null) {
+    // Partial bracket — the still-alive players are the unrevealed top N.
+    if (partialTopN > 0) {
+      return { medal: '🔒', tint: 'text-amber-300', label: `Top ${partialTopN}` };
+    }
+    return { medal: '·', tint: 'text-slate-500', label: '—' };
+  }
   if (rank === 1)    return { medal: '🥇', tint: 'text-yellow-300', label: '1st' };
   if (rank === 2)    return { medal: '🥈', tint: 'text-slate-200',  label: '2nd' };
   if (rank === 3)    return { medal: '🥉', tint: 'text-amber-400',  label: '3rd' };
@@ -43,13 +49,23 @@ export default function TournamentDetail() {
   if (loading) return <p className="text-slate-400">Loading...</p>;
   if (!tournament) return <p className="text-red-400">Tournament not found.</p>;
 
+  const isPartial = tournament.is_partial === true;
+
   const placements = (tournament.placements || []).slice().sort((a, b) => {
-    // Nulls last; otherwise ascending final_rank.
-    if (a.final_rank == null && b.final_rank == null) return 0;
-    if (a.final_rank == null) return 1;
-    if (b.final_rank == null) return -1;
+    // Partial brackets put the unrevealed top-N (final_rank=null) at the top.
+    // Finalized brackets keep them at the bottom (the legacy fallback for any
+    // stray null we couldn't resolve).
+    if (a.final_rank == null && b.final_rank == null) {
+      return (a.display_name || '').localeCompare(b.display_name || '');
+    }
+    if (a.final_rank == null) return isPartial ? -1 : 1;
+    if (b.final_rank == null) return isPartial ? 1 : -1;
     return a.final_rank - b.final_rank;
   });
+
+  const partialTopN = isPartial
+    ? placements.filter(p => p.final_rank == null).length
+    : 0;
 
   const achievements = tournament.achievements || [];
   const isOffline = tournament.is_offline === true;
@@ -117,6 +133,18 @@ export default function TournamentDetail() {
         )}
       </div>
 
+      {/* ── Partial-bracket banner ────────────────────────────────────────── */}
+      {isPartial && (
+        <div className="rounded-xl border border-amber-500/40 bg-amber-500/10 px-4 py-3 text-sm text-amber-200">
+          <span className="font-display tracking-wider text-amber-300">
+            🔒 TOP {partialTopN || 'N'} UNREVEALED
+          </span>
+          <span className="ml-2 text-amber-200/80">
+            The organizer hasn't streamed the final results yet — placements below {partialTopN ? partialTopN : ''} are derived from the bracket.
+          </span>
+        </div>
+      )}
+
       {/* ── Placements ────────────────────────────────────────────────────── */}
       <section>
         <h2 className="font-display text-sm tracking-widest text-cyan-400 mb-3">PLACEMENTS</h2>
@@ -133,7 +161,7 @@ export default function TournamentDetail() {
               </thead>
               <tbody>
                 {placements.map(p => {
-                  const s = rankStyle(p.final_rank);
+                  const s = rankStyle(p.final_rank, partialTopN);
                   return (
                     <tr key={p.player_id} className="border-b border-[#1a2744] last:border-0 hover:bg-white/5 transition-colors">
                       <td className={`px-4 py-3 font-display tracking-wider ${s.tint}`}>
@@ -183,7 +211,7 @@ export default function TournamentDetail() {
                 return (a.name || '').localeCompare(b.name || '');
               });
               const finishRank = rankByPlayerId.get(group.player_id);
-              const finish = finishRank && finishRank !== 9999 ? rankStyle(finishRank) : null;
+              const finish = finishRank && finishRank !== 9999 ? rankStyle(finishRank, partialTopN) : null;
 
               return (
                 <div

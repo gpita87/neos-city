@@ -59,7 +59,7 @@ router.get('/recent-placements', async (req, res) => {
     // Get recent online tournaments with their top placements
     const { rows: tournaments } = await db.query(
       `SELECT t.id, t.name, t.series, t.completed_at, t.participants_count, t.challonge_url,
-              t.source, t.startgg_slug, t.tonamel_id
+              t.source, t.startgg_slug, t.tonamel_id, t.is_partial
        FROM tournaments t
        WHERE (t.is_offline = FALSE OR t.is_offline IS NULL)
          AND t.completed_at >= NOW() - INTERVAL '1 day' * $1
@@ -67,7 +67,10 @@ router.get('/recent-placements', async (req, res) => {
       [days]
     );
 
-    // For each tournament, fetch top N placements
+    // For each tournament, fetch top N placements. For partial brackets the
+    // unrevealed top-N players sit at final_rank=NULL and we want them ABOVE
+    // the visible 5/6/7/8 rows, so order NULLS FIRST and include the whole
+    // null tier as "Top N".
     const results = [];
     for (const t of tournaments) {
       const { rows: placements } = await db.query(
@@ -75,16 +78,24 @@ router.get('/recent-placements', async (req, res) => {
                 p.display_name, p.challonge_username, p.region, p.avatar_url
          FROM tournament_placements tp
          JOIN players p ON tp.player_id = p.id
-         WHERE tp.tournament_id = $1 AND tp.final_rank <= $2
-         ORDER BY tp.final_rank ASC`,
+         WHERE tp.tournament_id = $1
+           AND (tp.final_rank IS NULL OR tp.final_rank <= $2)
+         ORDER BY tp.final_rank ASC NULLS FIRST, p.display_name ASC`,
         [t.id, placementLimit]
       );
+      // Surface the unrevealed-player count so the frontend can render
+      // "TOP N UNREVEALED" without re-deriving it.
+      const unrevealedTopN = t.is_partial
+        ? placements.filter(p => p.final_rank == null).length
+        : 0;
       results.push({
         tournament_id: t.id,
         name: t.name,
         series: t.series,
         completed_at: t.completed_at,
         participants_count: t.participants_count,
+        is_partial: t.is_partial,
+        unrevealed_top_n: unrevealedTopN,
         placements,
       });
     }
@@ -122,7 +133,7 @@ router.get('/:id', async (req, res) => {
        FROM tournament_placements tp
        JOIN players p ON tp.player_id = p.id
        WHERE tp.tournament_id = $1
-       ORDER BY tp.final_rank`,
+       ORDER BY tp.final_rank ASC NULLS FIRST, p.display_name ASC`,
       [tournament.id]
     );
 
@@ -186,33 +197,49 @@ async function importOne(challonge_id) {
       return { skipped: true, reason: 'no_completed_matches', name: tournamentName, challonge_id };
     }
 
-    // Challonge only stamps participants with `final_rank` after the organizer
-    // hits "Finalize" on the bracket. A tournament with completed matches but
-    // no final_rank on anyone produces a row with NULL completed_at + every
-    // placement at rank=null — invisible on the home feed (which filters
-    // completed_at) and renders as "nullth" on the detail page. Refuse the
-    // import; the next pull_new run will retry once the organizer finalizes
-    // (batch-import re-attempts slugs whose existing DB row has NULL completed_at).
+    // Challonge stamps participants with `final_rank` only after the organizer
+    // hits "Finalize". RTG (and others) routinely sit on a fully-played bracket
+    // for days while they stream the top-N reveal, so a non-finalized state is
+    // legitimate and we want to display what we know. When no participant has
+    // a final_rank yet we treat the tournament as PARTIAL: derive placements
+    // for eliminated players from match data, leave still-alive players with
+    // final_rank=NULL, and flag the row `is_partial=TRUE` so the UI can label
+    // it accordingly. ELO placement bonuses, per-player stat updates and
+    // achievement triggers are skipped on partial imports — a subsequent
+    // re-import (after finalize) refreshes everything cleanly.
     const participantListPreview = participantsData.data || participantsData.participants || participantsData;
     const anyFinalRank = participantListPreview.some(p => {
       const attrs = p.attributes || p.participant || p;
       return attrs.final_rank != null;
     });
-    if (!anyFinalRank) {
-      console.log(`   ⏭️  Skipped "${tournamentName}" (${challonge_id}): bracket not finalized on Challonge`);
-      return { skipped: true, reason: 'not_finalized', name: tournamentName, challonge_id };
+    const isPartial = !anyFinalRank;
+    if (isPartial) {
+      console.log(`   ⚠️  Partial import "${tournamentName}" (${challonge_id}): top placements unrevealed on Challonge`);
     }
+
+    // For partial brackets t.completed_at is null. Fall back to the latest
+    // completed match's timestamp so the row still appears on the home feed
+    // and calendar within the 30-day window. On a finalize re-import, Challonge
+    // supplies a real t.completed_at and we use that.
+    const latestMatchAt = matchListPreview
+      .map(m => (m.attributes || m.match || m))
+      .filter(a => a.state === 'complete' && a.completed_at)
+      .map(a => a.completed_at)
+      .sort()
+      .pop() || null;
+    const completedAt = t.completed_at || latestMatchAt;
 
     // ── Upsert tournament ──────────────────────────────────────────────────
     const { rows: [tournament] } = await db.query(
       `INSERT INTO tournaments
-         (challonge_id, challonge_url, name, series, tournament_type, participants_count, started_at, completed_at)
-       VALUES ($1, $2, $3, $4, $5, $6, $7, $8)
+         (challonge_id, challonge_url, name, series, tournament_type, participants_count, started_at, completed_at, is_partial)
+       VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)
        ON CONFLICT (challonge_id) DO UPDATE SET
          name = EXCLUDED.name,
          series = EXCLUDED.series,
          participants_count = EXCLUDED.participants_count,
-         completed_at = EXCLUDED.completed_at
+         completed_at = EXCLUDED.completed_at,
+         is_partial = EXCLUDED.is_partial
        RETURNING *`,
       [
         challonge_id,
@@ -222,7 +249,8 @@ async function importOne(challonge_id) {
         t.tournament_type,
         t.participants_count,
         t.started_at,
-        t.completed_at
+        completedAt,
+        isPartial
       ]
     );
 
@@ -335,12 +363,15 @@ async function importOne(challonge_id) {
         gamesMap.set(p2.id, (gamesMap.get(p2.id) || 0) + 1);
       }
 
-      // Apply placement bonuses
-      for (const [, player] of playerMap) {
-        if (!player.finalRank) continue;
-        const bonus = placementBonus(player.finalRank, totalParticipants);
-        if (bonus > 0 && eloMap.has(player.id)) {
-          eloMap.set(player.id, eloMap.get(player.id) + bonus);
+      // Apply placement bonuses (skipped for partial imports — real ranks
+      // aren't known yet, and the next finalize re-import will overwrite).
+      if (!isPartial) {
+        for (const [, player] of playerMap) {
+          if (!player.finalRank) continue;
+          const bonus = placementBonus(player.finalRank, totalParticipants);
+          if (bonus > 0 && eloMap.has(player.id)) {
+            eloMap.set(player.id, eloMap.get(player.id) + bonus);
+          }
         }
       }
 
@@ -363,10 +394,18 @@ async function importOne(challonge_id) {
     }
 
     // ── Tournament placements ──────────────────────────────────────────────
-    const tournamentWinnerId = [...playerMap.values()].find(p => p.finalRank === 1)?.id || null;
+    // For partial brackets we derive eliminated-player ranks from the match
+    // graph; still-alive players (the top N who haven't taken their final loss
+    // yet) stay at final_rank=NULL so the UI can label them "Top N".
+    const partialRankByPlayerId = isPartial
+      ? deriveChallongePartialPlacements(matchList, playerMap, t.tournament_type)
+      : null;
+    const tournamentWinnerId = isPartial
+      ? null
+      : ([...playerMap.values()].find(p => p.finalRank === 1)?.id || null);
 
     for (const [, player] of playerMap) {
-      const rank = player.finalRank;
+      const rank = isPartial ? partialRankByPlayerId.get(player.id) ?? null : player.finalRank;
 
       await db.query(
         `INSERT INTO tournament_placements (tournament_id, player_id, final_rank)
@@ -378,9 +417,15 @@ async function importOne(challonge_id) {
     }
 
     // ── Update all involved player stats ───────────────────────────────────
-    const involvedIds = [...new Set([...playerMap.values()].map(p => p.id))];
-    for (const playerId of involvedIds) {
-      await updatePlayerStats(playerId, tournament, playerMap, matchList, tournamentWinnerId, totalParticipants);
+    // Skipped for partial imports — derived ranks could falsely fire
+    // threshold-based achievements (e.g. top-8) that wouldn't roll back on
+    // finalize re-import. recalculate_elo.js (or the next finalize re-import)
+    // recomputes stats from the corrected placement set.
+    if (!isPartial) {
+      const involvedIds = [...new Set([...playerMap.values()].map(p => p.id))];
+      for (const playerId of involvedIds) {
+        await updatePlayerStats(playerId, tournament, playerMap, matchList, tournamentWinnerId, totalParticipants);
+      }
     }
 
     return {
@@ -388,7 +433,8 @@ async function importOne(challonge_id) {
       tournament: tournament.name,
       series,
       participants: totalParticipants,
-      matches_imported: importedMatches
+      matches_imported: importedMatches,
+      partial: isPartial
     };
   } catch (err) {
     console.error('Import error:', err.response?.data || err.message);
@@ -1171,6 +1217,85 @@ router.post('/batch-import-startgg', requireAdmin, async (req, res) => {
 // browser console script (tonamel_import_console.js). No Tonamel account
 // or API token is required — results are scraped from the public page.
 // ══════════════════════════════════════════════════════════════════════════════
+
+/**
+ * Derive partial placements for an unfinalized Challonge bracket.
+ *
+ * Challonge match `round` is positive for winners' bracket, negative for
+ * losers' bracket. WB and LB rounds interleave chronologically, so:
+ *   W-round n → weight 2n-1     L-round n → weight 2n
+ * giving W1 < L1 < W2 < L2 < … < grand finals.
+ *
+ * A player is eliminated once they've taken `elimThreshold` total losses
+ * (1 for single elim, 2 for double elim). Eliminated players are sorted by
+ * the weight of their last loss (later = better placement) and grouped into
+ * tiers: every player who lost at the same weight shares the lowest rank in
+ * that tier (Challonge's standard "5-6 tied at 5" convention). Still-alive
+ * players — the unrevealed top N — get final_rank = null.
+ *
+ * @param {Array} matchList     Challonge matchList in v1 or v2 shape
+ * @param {Map}   playerMap     challonge participant id → { id, ...DB row }
+ * @param {string} tournamentType  e.g. 'single elimination', 'double elimination'
+ * @returns {Map<number, number|null>} DB player id → rank (null = still alive)
+ */
+function deriveChallongePartialPlacements(matchList, playerMap, tournamentType) {
+  const isDE = (tournamentType || '').toLowerCase().includes('double');
+  const elimThreshold = isDE ? 2 : 1;
+
+  const weightOf = (round) =>
+    round > 0 ? round * 2 - 1 : Math.abs(round) * 2;
+
+  const dbIdByChalId = new Map();
+  for (const [chalId, p] of playerMap) dbIdByChalId.set(chalId, p.id);
+
+  const stat = new Map(); // DB player id → { lossCount, lastLossWeight }
+  for (const [, p] of playerMap) stat.set(p.id, { lossCount: 0, lastLossWeight: 0 });
+
+  for (const m of matchList) {
+    const attrs = m.attributes || m.match || m;
+    if (attrs.state !== 'complete') continue;
+    if (attrs.round == null) continue;
+
+    const p1Id     = dbIdByChalId.get(String(attrs.player1_id));
+    const p2Id     = dbIdByChalId.get(String(attrs.player2_id));
+    const winnerId = dbIdByChalId.get(String(attrs.winner_id));
+    if (!p1Id || !p2Id || !winnerId) continue;
+
+    const loserId = winnerId === p1Id ? p2Id : p1Id;
+    const w = weightOf(attrs.round);
+    const s = stat.get(loserId);
+    s.lossCount += 1;
+    if (w > s.lastLossWeight) s.lastLossWeight = w;
+  }
+
+  const eliminated = [];
+  const aliveIds   = [];
+  for (const [, p] of playerMap) {
+    const s = stat.get(p.id);
+    if (s.lossCount >= elimThreshold) {
+      eliminated.push({ playerId: p.id, weight: s.lastLossWeight });
+    } else {
+      aliveIds.push(p.id);
+    }
+  }
+
+  eliminated.sort((a, b) => b.weight - a.weight);
+  const result = new Map();
+  for (const id of aliveIds) result.set(id, null);
+
+  let rank = aliveIds.length + 1;
+  let i = 0;
+  while (i < eliminated.length) {
+    const w = eliminated[i].weight;
+    let j = i;
+    while (j < eliminated.length && eliminated[j].weight === w) j++;
+    for (let k = i; k < j; k++) result.set(eliminated[k].playerId, rank);
+    rank += (j - i);
+    i = j;
+  }
+
+  return result;
+}
 
 /**
  * Derive final placements from a double-elimination bracket.
