@@ -114,11 +114,27 @@ function parseArgs() {
   // ── 3. Filter to genuinely new ones ────────────────────────────────────
   const seen = new Set();
   const fresh = [];
+  let belowThreshold = 0;
+  let offSeries = 0;
   for (const item of discovered) {
     if (known.has(item.phaseGroupId)) continue;
     if (seen.has(item.phaseGroupId)) continue; // de-dupe within this run
+    if (SERIES_PATTERNS.length > 0 && !SERIES_PATTERNS.some(p => p.test(item.name))) {
+      offSeries++;
+      continue;
+    }
+    if (typeof item.numEntrants === 'number' && item.numEntrants < MIN_ENTRANTS) {
+      belowThreshold++;
+      continue;
+    }
     seen.add(item.phaseGroupId);
     fresh.push(item);
+  }
+  if (offSeries) {
+    console.log(`Skipped ${offSeries} new event(s) not matching the series allowlist`);
+  }
+  if (belowThreshold) {
+    console.log(`Skipped ${belowThreshold} new event(s) with <${MIN_ENTRANTS} entrants (locals threshold)`);
   }
 
   if (fresh.length === 0) {
