@@ -298,7 +298,51 @@ Backend uses `nodemon` for hot reload. Changes to `.js` files in `backend/src/` 
 
 ## ⚡ NEXT AGENT: What to Do First
 
-### Current state (as of May 10 2026 — DEPLOYED TO RENDER + offline-row fetch fix)
+### Current state (as of May 11 2026 — custom domain `neos-city.com` wired up)
+
+#### What this session shipped
+
+The Render deployment now has a real domain. Canonical URLs:
+
+- **Frontend:** https://www.neos-city.com  (apex `https://neos-city.com` 301-redirects to www)
+- **API:** https://api.neos-city.com
+
+The old `neos-city-web.onrender.com` / `neos-city-api.onrender.com` URLs are still alive (Render doesn't unbind them), but the new domain is canonical. The onrender.com frontend URL will look broken from a browser because `FRONTEND_URL` no longer matches it for CORS — that's fine, only Gabriel knew the URL existed. The onrender.com API URL still works for direct `curl` testing since CORS doesn't apply to non-browser callers.
+
+#### Domain + DNS
+
+- **Domain:** `neos-city.com`, registered at **Cloudflare Registrar** 2026-05-11 (~$10/yr, auto-renew ON, renewed through 2027-05-11).
+- **DNS:** Cloudflare DNS. Three CNAMEs, all **DNS-only (gray cloud, not proxied)**:
+  - `@` → `neos-city-web.onrender.com` (apex via Cloudflare's CNAME flattening)
+  - `www` → `neos-city-web.onrender.com`
+  - `api` → `neos-city-api.onrender.com`
+- **Do not flip the CNAMEs to proxied (orange cloud) without first reading Render's docs on Cloudflare proxy mode.** Render's Let's Encrypt cert renewal expects direct ingress; turning on the proxy can cause silent renewal failures and break the cert flow.
+
+#### Env-var changes during cutover
+
+- `neos-city-api` → `FRONTEND_URL` = `https://www.neos-city.com` (was `https://neos-city-web.onrender.com`). Note the `www` — required because the canonical frontend URL is www-prefixed (Render auto-set up apex→www redirect when both were added). CORS code in [app.js](backend/src/app.js) is a single-origin allow-list; if a second origin is ever needed (staging, etc.) the code needs to parse `FRONTEND_URL` as comma-separated.
+- `neos-city-web` → `VITE_API_URL` = `https://api.neos-city.com` (was `https://neos-city-api.onrender.com`). Triggered a static-site rebuild because Vite envs are baked in at build time.
+
+#### Apex-vs-www: why www-canonical
+
+Render set up apex→www redirect by default when both custom domains were added. Forcing apex-canonical instead would have required (a) removing Render's redirect, (b) flipping the www CNAME to proxied, (c) adding a Cloudflare Redirect Rule for www→apex. Took the no-friction path. If apex-canonical is ever preferred for cosmetic reasons, that's the playbook.
+
+#### Verified
+
+- `curl https://api.neos-city.com/api/health` → `{"status":"ok","app":"Neos City"}`
+- Homepage at `https://www.neos-city.com` renders with data (CORS path is working end-to-end).
+
+#### Follow-ups worth doing
+
+- **Hard-refresh `https://www.neos-city.com/players/1`** to confirm Render's SPA rewrite works on the custom domain — should NOT 404 even on direct navigation. (Wasn't tested this session.)
+- **`http://neos-city.com` (no TLS) behavior** — Render redirects HTTP→HTTPS automatically, so this should work, but worth a one-time check.
+- **Email on `neos-city.com`** — currently no MX records, so nothing receives mail at `@neos-city.com`. If wanted, Cloudflare Email Routing is free and 5 minutes of setup.
+- **Cloudflare proxy/CDN** — currently off everywhere. Turning on for `www` and `api` would add edge caching + DDoS protection, but requires coordinating with Render's cert flow (see above). Not urgent — this site's traffic is tiny.
+- **Update any external links** (Discord pinned posts, profile bios, etc.) from the old onrender.com URLs to `https://www.neos-city.com`.
+
+---
+
+### Prior state (as of May 10 2026 — DEPLOYED TO RENDER + offline-row fetch fix)
 
 #### What this session shipped
 
