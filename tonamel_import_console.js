@@ -28,8 +28,12 @@
 
 const ORG_URL        = 'https://tonamel.com/organization/OhUc2?game=pokken';
 const BACKEND_URL    = 'http://localhost:3001';
-// Paste your ADMIN_TOKEN here (the same value as backend/.env ADMIN_TOKEN).
 // Required — the import endpoint is gated and the script will refuse to run if blank.
+// Easiest path: from the project root, run
+//   node prep_console.js tonamel_import_console.js
+// which reads ADMIN_TOKEN from backend/.env, inlines it, and copies the
+// populated script to the clipboard. Then Ctrl+V into DevTools. Avoids
+// pasting the token into source. The literal below stays empty in git.
 const ADMIN_TOKEN    = '';
 const IFRAME_HOLD_MS = 1000;   // extra settle time after bracket markers appear
 const MAX_WAIT_MS    = 30000;  // give up looking for bracket markers after this
