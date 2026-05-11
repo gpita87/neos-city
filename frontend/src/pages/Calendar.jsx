@@ -223,7 +223,15 @@ function EventPill({ event, compact = false }) {
   );
 
   if (!event.isPlaceholder && event.id && !String(event.id).startsWith('placeholder')) {
-    return <Link to={`/tournaments/${event.id}`} className="block">{inner}</Link>;
+    return (
+      <Link
+        to={`/tournaments/${event.id}`}
+        className="block"
+        onClick={(e) => e.stopPropagation()}
+      >
+        {inner}
+      </Link>
+    );
   }
   if (event.isPlaceholder && landingUrl) {
     return (
