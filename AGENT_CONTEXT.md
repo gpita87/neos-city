@@ -736,7 +736,7 @@ ELO is fully intact in the backend. To re-expose:
   - **Monthly grid view** — traditional calendar, click a day to jump to weekly view for that week
   - **Weekly view** — time-slot grid (10:00–23:00 UTC) for seeing exactly when tournaments happen
   - **Series color coding** — each series has its own color (FFC=purple, RTG NA=blue, RTG EU=green, DCM=orange, TCC=pink, EOTR=yellow, Nezumi=rose, Rookies=amber, HA=cyan). Offline tiers also color-coded.
-  - **Recurring placeholders** — dashed-outline pills for future scheduled events, generated from `SERIES_SCHEDULES` array at top of file. Currently set to: FFC biweekly Sat, RTG NA biweekly Sat, RTG EU biweekly Sat, DCM monthly Sat, TCC biweekly Sat, Nezumi monthly Sun. **These patterns are Gabriel's best guess and may need tuning.**
+  - **Recurring placeholders** — dashed-outline pills for future scheduled events, generated from `SERIES_SCHEDULES` array at top of file. Currently set to: FFC biweekly Sat, RTG NA weekly Sat, RTG EU biweekly Sat, DCM monthly Sat, TCC biweekly Sat, Nezumi monthly Sun. **These patterns are Gabriel's best guess and may need tuning.**
   - **Series filter** — toggle buttons to show/hide specific series
   - **Past events link** to `/tournaments/:id`; placeholders are non-clickable
   - **Today highlight** — indigo circle in month view, column highlight in week view

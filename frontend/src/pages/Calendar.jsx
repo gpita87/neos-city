@@ -71,7 +71,7 @@ const TZ_ABBR = (() => {
 const SERIES_SCHEDULES = [
   // FFC: Sundays at 11am PDT (18:00 UTC during DST)
   { series: 'ffc',        dayOfWeek: 0, weekInterval: 1, hour: 18, minute: 0,  anchorDate: '2026-04-26' },
-  { series: 'rtg_na',     dayOfWeek: 6, weekInterval: 2, hour: 20, minute: 0,  anchorDate: '2026-03-07' },
+  { series: 'rtg_na',     dayOfWeek: 6, weekInterval: 1, hour: 20, minute: 0,  anchorDate: '2026-03-07' },
   { series: 'dcm',        dayOfWeek: 6, weekInterval: 4, hour: 20, minute: 0,  anchorDate: '2026-03-07' },
   // TCC: biweekly Saturday at 8am PDT / 7am PST (15:00 UTC year-round). Confirmed dates: 2-14 (7am PST), 2-28 (7am PST), 3-14 (8am PDT), 3-28 (8am PDT)
   { series: 'tcc',        dayOfWeek: 6, weekInterval: 2, hour: 15, minute: 0,  anchorDate: '2026-03-28' },
