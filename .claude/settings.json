@@ -36,7 +36,11 @@
       "Bash(git -C * rev-parse:*)",
       "Bash(git -C * ls-tree:*)",
       "Bash(git -C * merge-tree:*)",
-      "Bash(git -C * worktree list)"
+      "Bash(git -C * worktree list)",
+      "Bash(git add:*)",
+      "Bash(git commit:*)",
+      "Bash(git -C * add:*)",
+      "Bash(git -C * commit:*)"
     ],
     "deny": [
       "Bash(node pull_new.js)",
