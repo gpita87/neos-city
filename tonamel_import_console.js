@@ -173,37 +173,36 @@ function scrapeViaIframe(url) {
       const hasBracket = /#[WL]\d+-\d+/.test(text);
       const elapsed = Date.now() - start;
 
-        if (hasBracket) {
-          // Bracket markers visible — give the SPA one more beat to finish
-          // rendering trailing rounds, then parse.
-          if (pollHandle) { clearInterval(pollHandle); pollHandle = null; }
-          setTimeout(() => {
-            try {
-              const doc2 = iframe.contentDocument;
-              if (!doc2 || !doc2.body) throw new Error('iframe lost during settle');
-              finish({
-                matches:      parseBracketFromDoc(doc2),
-                participants: parseParticipantsFromDoc(doc2),
-              });
-            } catch (err) {
-              finish(null, err);
-            }
-          }, IFRAME_HOLD_MS);
-        } else if (elapsed > MAX_WAIT_MS) {
-          // Never saw a bracket marker — could be round-robin, empty, or a
-          // load failure. Try parsing anyway (returns [] for the caller to
-          // skip), so we don't hard-fail the run.
+      if (hasBracket) {
+        // Bracket markers visible — give the SPA one more beat to finish
+        // rendering trailing rounds, then parse.
+        if (pollHandle) { clearInterval(pollHandle); pollHandle = null; }
+        setTimeout(() => {
           try {
+            const doc2 = iframe.contentDocument;
+            if (!doc2 || !doc2.body) throw new Error('iframe lost during settle');
             finish({
-              matches:      parseBracketFromDoc(doc),
-              participants: parseParticipantsFromDoc(doc),
+              matches:      parseBracketFromDoc(doc2),
+              participants: parseParticipantsFromDoc(doc2),
             });
           } catch (err) {
             finish(null, err);
           }
+        }, IFRAME_HOLD_MS);
+      } else if (elapsed > MAX_WAIT_MS) {
+        // Never saw a bracket marker — could be round-robin, empty, or a
+        // load failure. Try parsing anyway (returns [] for the caller to
+        // skip), so we don't hard-fail the run.
+        try {
+          finish({
+            matches:      parseBracketFromDoc(doc),
+            participants: parseParticipantsFromDoc(doc),
+          });
+        } catch (err) {
+          finish(null, err);
         }
-      }, 500);
-    });
+      }
+    }, 500);
 
     iframe.addEventListener('error', () => finish(null, new Error('iframe load error')));
     hardTimeout = setTimeout(
