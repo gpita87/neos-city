@@ -1,6 +1,6 @@
 import { useEffect, useState } from 'react';
 import { Link, useNavigate, useSearchParams } from 'react-router-dom';
-import { getTournaments, importTournament } from '../lib/api';
+import { getTournaments, getTournament, importTournament } from '../lib/api';
 import { formatDate } from '../lib/utils';
 
 const TABS = [
@@ -341,9 +341,7 @@ function OfflineRow({ tournament: t }) {
   const navigate = useNavigate();
 
   useEffect(() => {
-    // Fetch the tournament detail to get 1st/2nd place names
-    fetch(`/api/tournaments/${t.id}`)
-      .then(r => r.json())
+    getTournament(t.id)
       .then(data => {
         const p1 = data.placements?.find(p => p.final_rank === 1);
         const p2 = data.placements?.find(p => p.final_rank === 2);
