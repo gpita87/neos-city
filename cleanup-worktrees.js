@@ -12,6 +12,13 @@
  *   1. Lists every git worktree under .claude/worktrees/ (harness-spawned sandboxes).
  *      Skips the current worktree, neos-city-worktrees/* (those use merge-worktree.js),
  *      and the main worktree itself.
+ *      Also detects ORPHAN DIRECTORIES — folders under .claude/worktrees/ with
+ *      no git admin record. These typically appear after a prior --apply where
+ *      `git worktree remove` deleted the contents (including the .git link
+ *      file) but Windows blocked the final rmdir on the top-level directory
+ *      (process-CWD lock, Defender handle, etc.); a subsequent `git worktree
+ *      prune` then drops the admin record, leaving an empty dir on disk.
+ *      Orphans are swept directly via fs.rmSync with retry.
  *   2. Classifies each branch:
  *        merged     — strict ancestor of main
  *        patch-eq   — every unique commit has a patch-equivalent on main
@@ -136,8 +143,28 @@ const candidates = allWorktrees.filter(wt => {
   return wtNorm.startsWith(CLAUDE_PREFIX);             // only .claude/worktrees/*
 });
 
-if (candidates.length === 0) {
-  console.log('No .claude/worktrees/ candidates found.');
+// ---- orphan directories (no git admin record) ----
+
+function findOrphanDirs() {
+  const claudeDir = path.join(REPO_ROOT, '.claude', 'worktrees');
+  if (!fs.existsSync(claudeDir)) return [];
+  const knownNorm = new Set(allWorktrees.map(w => norm(w.path)));
+  const orphans = [];
+  for (const ent of fs.readdirSync(claudeDir, { withFileTypes: true })) {
+    if (!ent.isDirectory()) continue;
+    const full = path.resolve(claudeDir, ent.name);
+    const fullNorm = norm(full);
+    if (knownNorm.has(fullNorm)) continue;            // valid git worktree → not an orphan
+    if (fullNorm === CWD_NORM) continue;              // Windows refuses to rmdir our own CWD
+    orphans.push(full);
+  }
+  return orphans;
+}
+
+const orphanDirs = findOrphanDirs();
+
+if (candidates.length === 0 && orphanDirs.length === 0) {
+  console.log('Nothing to clean — no .claude/worktrees/ candidates or orphan directories.');
   process.exit(0);
 }
 
@@ -249,6 +276,13 @@ for (const r of rows) {
   console.log(`  ${tag}  ${action}  ${dir}  ${branchTag}`);
 }
 
+if (orphanDirs.length > 0) {
+  console.log(`\nOrphan directories (no git admin record — leftover from previous --apply): ${orphanDirs.length}`);
+  for (const d of orphanDirs) {
+    console.log(`  orphan      ✓ remove  ${path.basename(d)}`);
+  }
+}
+
 // Show unique work for branches the user might want to inspect before deciding.
 if (!apply && unsafe.length > 0) {
   console.log(`\nBranches with unique work (would NOT be removed by default):`);
@@ -267,13 +301,16 @@ if (!apply && unsafe.length > 0) {
 
 const targets = all ? rows : safe;
 
-if (targets.length === 0) {
+if (targets.length === 0 && orphanDirs.length === 0) {
   console.log('\nNothing to clean.');
   process.exit(0);
 }
 
 if (!apply) {
-  console.log(`\nDry run. Re-run with --apply to remove ${targets.length} worktree(s).`);
+  const parts = [];
+  if (targets.length) parts.push(`${targets.length} worktree(s)`);
+  if (orphanDirs.length) parts.push(`${orphanDirs.length} orphan dir(s)`);
+  console.log(`\nDry run. Re-run with --apply to remove ${parts.join(' + ')}.`);
   if (!all && unsafe.length > 0) {
     console.log(`Pass --all to also remove the ${unsafe.length} branch(es) with unique commits (those commits get deleted with the branch).`);
   }
@@ -282,10 +319,32 @@ if (!apply) {
 
 // ---- apply ----
 
-console.log(`\nRemoving ${targets.length} worktree(s)...\n`);
-
 const failed = [];
 const removed = [];
+
+if (orphanDirs.length > 0) {
+  console.log(`\nRemoving ${orphanDirs.length} orphan director(y/ies)...\n`);
+  for (const d of orphanDirs) {
+    const name = path.basename(d);
+    try {
+      fs.rmSync(d, { recursive: true, force: true, maxRetries: 3, retryDelay: 200 });
+      console.log(`  ✓  ${name} (orphan)`);
+      removed.push(name);
+    } catch (e) {
+      const code = e.code || '';
+      const lockish = code === 'EBUSY' || code === 'EPERM' || code === 'EACCES'
+        || /resource busy|process cannot access|access is denied/i.test(e.message);
+      const note = lockish ? 'IN USE (a process has this dir as CWD?)' : `rm failed: ${code || e.message.split('\n')[0]}`;
+      console.log(`  ✗  ${name} (orphan) — ${note}`);
+      if (process.env.DEBUG) console.log(`     ${e.message.split('\n')[0]}`);
+      failed.push({ dir: name, error: e.message });
+    }
+  }
+}
+
+if (targets.length > 0) {
+  console.log(`\nRemoving ${targets.length} worktree(s)...\n`);
+}
 
 for (const r of targets) {
   const dir = path.basename(r.path);
