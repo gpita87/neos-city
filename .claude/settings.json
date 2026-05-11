@@ -25,7 +25,18 @@
       "Bash(git branch:*)",
       "Bash(git worktree list)",
       "Bash(git stash list)",
-      "Bash(git config --get:*)"
+      "Bash(git config --get:*)",
+      "Bash(git ls-tree:*)",
+      "Bash(git merge-tree:*)",
+      "Bash(git -C * status:*)",
+      "Bash(git -C * log:*)",
+      "Bash(git -C * diff:*)",
+      "Bash(git -C * show:*)",
+      "Bash(git -C * branch:*)",
+      "Bash(git -C * rev-parse:*)",
+      "Bash(git -C * ls-tree:*)",
+      "Bash(git -C * merge-tree:*)",
+      "Bash(git -C * worktree list)"
     ],
     "deny": [
       "Bash(node pull_new.js)",
