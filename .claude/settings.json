@@ -40,7 +40,10 @@
       "Bash(git add:*)",
       "Bash(git commit:*)",
       "Bash(git -C * add:*)",
-      "Bash(git -C * commit:*)"
+      "Bash(git -C * commit:*)",
+      "Read(//c/Users/pitag/Documents/neos-city/**)",
+      "Glob(//c/Users/pitag/Documents/neos-city/**)",
+      "Grep(//c/Users/pitag/Documents/neos-city/**)"
     ],
     "deny": [
       "Bash(node pull_new.js)",

@@ -71,6 +71,7 @@ This creates branch `agent/<agent-name>` off `main`, materializes a worktree at 
 - **Do NOT run the dev server** (`npm run dev` in `backend/` or `frontend/`). Ports 3001 and 5173 are bound by whichever worktree is the "live" one — usually main. If you need to test something live, ask Gabriel to do it from main, or describe what to spot-check in the SUMMARY.
 - **Do NOT run migrations, `recalculate_elo.js`, `pull_new.js`, `seed_*.js`, or anything that mutates the Supabase DB.** The DB is shared across all worktrees — there is no "branch isolation" for state. Flag DB-mutating work in the SUMMARY's "How to verify" section so Gabriel can run it after the merge.
 - **Static analysis only:** `node -c <file>` for syntax, `node --check` for parsing, reading code, writing code. Anything that hits the network or the DB belongs on the main worktree.
+- **Read main, never edit it.** Reading files in the main checkout at `C:\Users\pitag\Documents\neos-city\...` is allowed (settings.json permits Read/Glob/Grep there without prompts) — useful for comparing against `main`'s state during a handoff. But never Edit/Write a file via a main-tree absolute path; all edits go through the worktree (`backend/...` cwd-relative, or the worktree's own absolute path). Edits to main will prompt, and you should reject them. To get work onto main: commit to your branch and leave a `git cherry-pick <branch-or-sha>` command in the handoff.
 
 **Merging back.** When the worktree is ready, Gabriel runs (from the main directory):
 
