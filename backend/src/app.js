@@ -66,31 +66,31 @@ app.use('/api/organizers', organizersRouter);
 
 app.get('/api/health', (req, res) => res.json({ status: 'ok', app: 'Neos City' }));
 
-// Diagnostic: tests Challonge OAuth token acquisition and a basic API call
+// Diagnostic: tests the Challonge integration as production uses it (v1 API via CHALLONGE_V1_KEY).
+// The previous version hit /v2.1/application/tournaments which requires user-level OAuth and is
+// known to 401 under client_credentials — production never uses that path.
 app.get('/api/health/challonge', async (req, res) => {
   const challonge = require('./services/challonge');
   const steps = {};
 
-  // Step 1: try to get a token
-  let token;
-  try {
-    token = await challonge._getAccessToken();
-    steps.token = { ok: true, token_prefix: token ? token.slice(0, 8) + '…' : null };
-  } catch (err) {
-    steps.token = { ok: false, error: err.message, status: err.response?.status };
+  // Step 1: confirm the v1 key is configured
+  if (!process.env.CHALLONGE_V1_KEY) {
+    steps.config = { ok: false, error: 'CHALLONGE_V1_KEY not set' };
     return res.status(200).json({ challonge_ok: false, steps });
   }
+  steps.config = { ok: true };
 
-  // Step 2: try /application/tournaments
+  // Step 2: hit the v1 tournaments list — proves auth + outbound reachability to api.challonge.com.
+  // An empty array still counts as healthy (v1 key may own no tournaments under its account).
   try {
-    const data = await challonge.listTournaments({ page: 1, perPage: 1 });
-    const count = Array.isArray(data) ? data.length : (data?.data?.length ?? 0);
-    steps.application_tournaments = { ok: true, returned: count };
+    const data = await challonge._v1Get('/tournaments.json', { per_page: 1 });
+    const returned = Array.isArray(data) ? data.length : 0;
+    steps.v1_api = { ok: true, returned };
   } catch (err) {
-    steps.application_tournaments = { ok: false, error: err.message, status: err.response?.status };
+    steps.v1_api = { ok: false, error: err.message, status: err.response?.status };
   }
 
-  res.json({ challonge_ok: steps.application_tournaments?.ok ?? false, steps });
+  res.json({ challonge_ok: steps.v1_api?.ok ?? false, steps });
 });
 
 const PORT = process.env.PORT || 3001;

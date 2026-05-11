@@ -511,6 +511,7 @@ async function listAllTournamentsByUser(_username) {
 
 module.exports = {
   _getAccessToken: getAccessToken,   // exposed for diagnostics only
+  _v1Get: v1Get,                     // exposed for diagnostics only
   listTournaments,
   listAllApplicationTournaments,
   listAllTournamentsByUser,  // legacy alias
