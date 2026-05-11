@@ -43,7 +43,8 @@
       "Bash(git -C * commit:*)",
       "Read(//c/Users/pitag/Documents/neos-city/**)",
       "Glob(//c/Users/pitag/Documents/neos-city/**)",
-      "Grep(//c/Users/pitag/Documents/neos-city/**)"
+      "Grep(//c/Users/pitag/Documents/neos-city/**)",
+      "Bash(npx esbuild:*)"
     ],
     "deny": [
       "Bash(node pull_new.js)",

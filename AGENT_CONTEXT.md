@@ -1152,3 +1152,8 @@ Run `node recalculate_elo.js` to replay all matches chronologically and correct 
 
 - **Do NOT run Supabase SQL queries via Chrome automation without asking Gabriel first.** Instead, create a Node.js script in the `neos-city` directory and give him the command to run it himself.
 - For quick DB diagnostics, use `check_import_status.js` or similar one-off scripts rather than the Supabase SQL editor.
+- **Static syntax checks — keep them simple, and stay inside cwd.** Plain JS: `node -c <file>`. JSX: `npx esbuild --loader=jsx --log-level=silent <file>` (whitelisted in `.claude/settings.json` so it won't prompt). Exit code 0 = valid, non-zero = error. Four anti-patterns to avoid:
+  - Don't prepend `cd <subdir> &&` — use cwd-relative paths instead (`frontend/src/pages/Foo.jsx`, not `cd frontend && esbuild src/pages/Foo.jsx`). The harness's Bash tool docs say so explicitly.
+  - Don't redirect output to a file just to inspect it (`> /tmp/_out.js; tail … | head …`). The Bash tool already returns stdout+stderr in the tool result. Worse, `/tmp/` is outside cwd, so the write itself prompts.
+  - Don't use `> nul` (Windows) in the Bash tool — `nul` is a literal filename in Git Bash, not the null sink. Use `> /dev/null` if you need to suppress output, or just don't redirect.
+  - Don't echo `$?`. The tool result includes the exit code.
