@@ -30,6 +30,11 @@ const startgg = require('./backend/src/services/startgg');
 
 const HARVESTED_FILE = path.join(__dirname, 'harvested_tournaments.txt');
 
+// Locals threshold — events with fewer entrants are skipped at harvest time.
+// 8 keeps the floor at "at least a top 8 worth of bracket" and drops the long
+// tail of 2–6 entrant weekly micro-events that would otherwise pollute stats.
+const MIN_ENTRANTS = 8;
+
 function parseArgs() {
   const args = process.argv.slice(2);
   const out = { sinceDays: 90 };
@@ -100,11 +105,19 @@ function parseArgs() {
   // ── 3. Filter to genuinely new ones ────────────────────────────────────
   const seen = new Set();
   const fresh = [];
+  let belowThreshold = 0;
   for (const item of discovered) {
     if (known.has(item.phaseGroupId)) continue;
     if (seen.has(item.phaseGroupId)) continue; // de-dupe within this run
+    if (typeof item.numEntrants === 'number' && item.numEntrants < MIN_ENTRANTS) {
+      belowThreshold++;
+      continue;
+    }
     seen.add(item.phaseGroupId);
     fresh.push(item);
+  }
+  if (belowThreshold) {
+    console.log(`Skipped ${belowThreshold} new event(s) with <${MIN_ENTRANTS} entrants (locals threshold)`);
   }
 
   if (fresh.length === 0) {
