@@ -79,6 +79,14 @@ const SERIES_SCHEDULES = [
   { series: 'nezumi',     kind: 'monthlyNth', nth: 3, dayOfWeek: 6, hour: 11, minute: 0,  anchorDate: '2026-04-18' },
   // Heaven's Arena: Tuesdays at 4pm PDT (23:00 UTC during DST). Per the DST TODO above, the UTC hour will need a -1 shift in standard time if HA stays at 4pm wall-clock PT year-round.
   { series: 'ha',         dayOfWeek: 2, weekInterval: 1, hour: 23, minute: 0,  anchorDate: '2026-05-05' },
+  // EOTR (End of the Road): quarterly Saturday at the same UTC slot as RTG NA.
+  // EOTR replaces the RTG NA event that week, so `replaces: ['rtg_na']` suppresses
+  // the RTG NA placeholder on EOTR dates. Cadence drifts between ~12 and ~13 weeks
+  // in practice (recent dates: 2025-07-05, 2025-09-27, 2025-12-21, 2026-03-14), so
+  // when a real EOTR lands off-schedule the runtime detection below (see
+  // `useEffect` in the Calendar component) logs a console.warn naming the new
+  // anchor. Bump `anchorDate` here to the latest event after the warning fires.
+  { series: 'eotr',       dayOfWeek: 6, weekInterval: 13, hour: 20, minute: 0, anchorDate: '2026-03-14', replaces: ['rtg_na'] },
 ];
 
 /* ── Helpers ────────────────────────────────────────────────────────── */
@@ -475,6 +483,42 @@ export default function Calendar() {
       .finally(() => setLoading(false));
   }, []);
 
+  // Cadence drift detection (per-schedule, anchor + interval based).
+  // If a real tournament lands on a date that doesn't match the predicted
+  // schedule, log a console.warn naming the new anchor to bump. This is most
+  // useful for EOTR (~quarterly, drifts 12 vs 13 weeks in practice) but runs
+  // for any schedule with a weekInterval. Only post-anchor events are checked
+  // so historical mismatches don't spam the console.
+  useEffect(() => {
+    if (!tournaments.length) return;
+    const TOLERANCE_MS = 24 * 60 * 60 * 1000; // ±1 day absorbs time-of-day diffs
+    for (const sched of SERIES_SCHEDULES) {
+      if (sched.kind === 'monthlyNth' || !sched.weekInterval) continue;
+      const [ay, am, ad] = sched.anchorDate.split('-').map(Number);
+      const anchorMs = Date.UTC(ay, am - 1, ad, sched.hour ?? 0, sched.minute ?? 0);
+      const intervalMs = sched.weekInterval * 7 * 24 * 60 * 60 * 1000;
+      for (const t of tournaments) {
+        if ((t.series || 'other') !== sched.series) continue;
+        const tsRaw = t.completed_at || t.started_at;
+        if (!tsRaw) continue;
+        const eventMs = new Date(tsRaw).getTime();
+        if (eventMs < anchorMs) continue; // skip pre-anchor history
+        const steps = Math.round((eventMs - anchorMs) / intervalMs);
+        const predictedMs = anchorMs + steps * intervalMs;
+        if (Math.abs(eventMs - predictedMs) > TOLERANCE_MS) {
+          const actual = new Date(eventMs).toISOString().slice(0, 10);
+          const predicted = new Date(predictedMs).toISOString().slice(0, 10);
+          console.warn(
+            `[Calendar] ${sched.series} cadence drift: "${t.name}" on ${actual} ` +
+            `is off the predicted ${predicted} (anchor ${sched.anchorDate} + ` +
+            `${steps}×${sched.weekInterval} weeks). Update SERIES_SCHEDULES ` +
+            `entry's anchorDate to "${actual}" to re-align future placeholders.`
+          );
+        }
+      }
+    }
+  }, [tournaments]);
+
   // Determine visible range
   const range = useMemo(() => {
     if (view === 'month') {
@@ -523,12 +567,32 @@ export default function Calendar() {
       existingDatesBySeries[e.series].add(dateKey(e.date));
     }
 
-    // Generate recurring placeholders
-    const placeholders = SERIES_SCHEDULES.flatMap(schedule =>
-      generateRecurring(schedule, range.start, range.end, existingDatesBySeries[schedule.series] || new Set())
-    );
+    // Generate recurring placeholders. Two-pass so `replaces` works: a schedule
+    // with `replaces: ['rtg_na']` (e.g. EOTR) generates first, and the dates it
+    // occupies are added to RTG NA's suppression set so the regular RTG NA
+    // placeholder for that Saturday doesn't render alongside it.
+    const replacingSchedules = SERIES_SCHEDULES.filter(s => s.replaces && s.replaces.length);
+    const regularSchedules = SERIES_SCHEDULES.filter(s => !s.replaces || !s.replaces.length);
+    const suppressByReplace = {}; // { [replacedSeries]: Set<dateKey> }
 
-    return [...realEvents, ...placeholders];
+    const replacingPlaceholders = replacingSchedules.flatMap(schedule => {
+      const generated = generateRecurring(schedule, range.start, range.end, existingDatesBySeries[schedule.series] || new Set());
+      for (const replacedSeries of schedule.replaces) {
+        if (!suppressByReplace[replacedSeries]) suppressByReplace[replacedSeries] = new Set();
+        for (const p of generated) suppressByReplace[replacedSeries].add(dateKey(p.date));
+      }
+      return generated;
+    });
+
+    const regularPlaceholders = regularSchedules.flatMap(schedule => {
+      const existing = new Set([
+        ...(existingDatesBySeries[schedule.series] || new Set()),
+        ...(suppressByReplace[schedule.series] || new Set()),
+      ]);
+      return generateRecurring(schedule, range.start, range.end, existing);
+    });
+
+    return [...realEvents, ...replacingPlaceholders, ...regularPlaceholders];
   }, [tournaments, range]);
 
   // Filter by series
