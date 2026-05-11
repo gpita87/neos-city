@@ -208,11 +208,14 @@ export default function AchievementTournamentsModal({ achievement, playerId = nu
 
   // For meta achievements, the natural unit is the unique opponent — you
   // earn 8 Badges by defeating eight different Gym Leaders, and the modal
-  // should reflect that. The backend now returns a structured `meta` payload
-  // for meta achievements in player mode; older responses (or aggregate
-  // mode) still go through the legacy `tournaments[]` path.
-  const isMeta = achievement.category === 'meta';
-  const useMetaView = mode === 'player' && isMeta && meta && Array.isArray(meta.opponents);
+  // should reflect that. The backend returns a structured `meta` payload
+  // for every meta achievement in player mode — global ('meta' category)
+  // AND series-scoped ('series_ha', 'series_ffc', etc.). The presence of
+  // `meta.opponents` is the authoritative signal; gating on category here
+  // hid the modal for HA / FFC / RTG / DCM / TCC / EOTR / nezumi /
+  // worlds / major / regional Dark Horse + 8 Badges + Elite Trainer + …
+  // variants, so they fell through to the empty `tournaments[]` branch.
+  const useMetaView = mode === 'player' && meta && Array.isArray(meta.opponents);
 
   let displayRows = tournaments;
 

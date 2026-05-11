@@ -66,8 +66,10 @@ async function getPhaseGroup(phaseGroupId) {
             winnerId
             fullRoundText
             round
+            displayScore
             slots {
               entrant { id name }
+              standing { stats { score { value } } }
             }
           }
         }
@@ -91,9 +93,10 @@ async function getAllSets(phaseGroupId) {
         phaseGroup(id: $id) {
           sets(page: $page, perPage: 64, sortType: STANDARD) {
             nodes {
-              id state winnerId fullRoundText round
+              id state winnerId fullRoundText round displayScore
               slots {
                 entrant { id name }
+                standing { stats { score { value } } }
               }
             }
           }

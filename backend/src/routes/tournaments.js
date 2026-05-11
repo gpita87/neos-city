@@ -1022,26 +1022,42 @@ async function importOneStartgg(phaseGroupId) {
 
       const winnerId = set.winnerId === p1Slot.entrant.id ? p1.id : p2.id;
 
+      // start.gg per-slot game count lives under slot.standing.stats.score.value.
+      // Coerce to int; null when start.gg hasn't reported a numeric score
+      // (some round-robin / unfinished sets leave it null or -1).
+      const rawP1 = p1Slot.standing?.stats?.score?.value;
+      const rawP2 = p2Slot.standing?.stats?.score?.value;
+      const p1Score = (rawP1 == null || rawP1 < 0) ? null : parseInt(rawP1);
+      const p2Score = (rawP2 == null || rawP2 < 0) ? null : parseInt(rawP2);
+
+      // ON CONFLICT upsert with COALESCE so a re-import fills in NULL scores
+      // (e.g. on rows imported before scores were fetched from the GQL query)
+      // without clobbering anything else. xmax = 0 distinguishes a fresh insert
+      // from an update so we only count truly-new matches as "imported".
       const { rows: [inserted] } = await db.query(
         `INSERT INTO matches
            (tournament_id, challonge_match_id, player1_id, player2_id, winner_id,
-            round, bracket_section, state, played_at)
-         VALUES ($1, $2, $3, $4, $5, $6, $7, 'complete', $8)
-         ON CONFLICT (tournament_id, challonge_match_id) DO NOTHING
-         RETURNING id`,
+            player1_score, player2_score, round, bracket_section, state, played_at)
+         VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, 'complete', $10)
+         ON CONFLICT (tournament_id, challonge_match_id) DO UPDATE
+           SET player1_score = COALESCE(matches.player1_score, EXCLUDED.player1_score),
+               player2_score = COALESCE(matches.player2_score, EXCLUDED.player2_score)
+         RETURNING id, (xmax = 0) AS inserted`,
         [
           t.id,
           String(set.id),        // use start.gg set id as match identifier
           p1.id,
           p2.id,
           winnerId,
+          p1Score,
+          p2Score,
           set.round || null,
           bracketSection(set.fullRoundText),
           startedAt,             // best available date for individual matches
         ]
       );
 
-      if (inserted) {
+      if (inserted?.inserted) {
         insertedMatchIds.push(inserted.id);
         importedMatches++;
       }
