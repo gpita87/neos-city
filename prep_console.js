@@ -56,7 +56,13 @@ if (PRINT) {
   process.exit(0);
 }
 
-const clip = spawnSync('clip', [], { input: populated });
+// clip.exe stores stdin verbatim. If we pipe raw UTF-8 bytes, the clipboard
+// ends up as CF_TEXT (ANSI), and paste targets decode it via the system OEM
+// code page — which mangles every emoji and non-ASCII char in the script.
+// Encoding as UTF-16LE with a BOM tells clip.exe to store it as CF_UNICODETEXT,
+// which Chrome reads natively without re-decoding.
+const utf16 = Buffer.from('﻿' + populated, 'utf16le');
+const clip = spawnSync('clip', [], { input: utf16 });
 if (clip.status !== 0) {
   console.error('clip.exe failed. Re-run with --print to dump to stdout.');
   if (clip.stderr) console.error(clip.stderr.toString());
