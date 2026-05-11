@@ -132,12 +132,14 @@ if (candidates.length === 0) {
 // ---- classify: merged vs unmerged ----
 
 function unmergedCount(branch) {
-  // `git log <branch> ^main` lists commits in branch but NOT in main.
-  // Empty output → branch is fully reachable from main.
-  const out = tryCapture(`git log --oneline ${branch} ^main`);
-  if (out === null) return null;             // branch missing or other error
-  if (out === '') return 0;
-  return out.split('\n').length;
+  // Commits in <branch> that are NOT reachable from main → 0 means fully merged.
+  // NOTE: avoid `^main` here — on Windows, cmd.exe eats the caret as its escape
+  // character, so `git log <branch> ^main` silently becomes `git log <branch> main`
+  // and returns the full history. `--not main` is the safe equivalent.
+  const out = tryCapture(`git rev-list --count ${branch} --not main`);
+  if (out === null) return null;
+  const n = parseInt(out, 10);
+  return Number.isFinite(n) ? n : null;
 }
 
 const rows = candidates.map(wt => {
