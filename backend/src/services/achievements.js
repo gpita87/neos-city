@@ -159,9 +159,29 @@ const ONLINE_SERIES = [
   { id: 'ha',     name: "Heaven's Arena",    statPrefix: 'ha' },
 ];
 
+// Offline-tier scopes that participate in placement + meta achievements.
+// `other` is intentionally excluded — small one-off locals would inflate the
+// catalog with achievements that are too easy to earn (a 2-player local
+// would mint Rivals and Champions from a coin-flip). nezumi_rookies is also
+// excluded by being absent from ONLINE_SERIES.
+const OFFLINE_TIER_SCOPES = [
+  { id: 'worlds',   name: 'Worlds',   statPrefix: 'offline_worlds',   kind: 'offline' },
+  { id: 'major',    name: 'Major',    statPrefix: 'offline_major',    kind: 'offline' },
+  { id: 'regional', name: 'Regional', statPrefix: 'offline_regional', kind: 'offline' },
+];
+
 const SCOPES = [
   { id: 'global', name: '',  statPrefix: null },
   ...ONLINE_SERIES,
+];
+
+// All scopes that host placement + meta achievements (global + online + offline tier).
+// Participation is restricted to SCOPES (no offline-tier participation achievements —
+// "entered N offline majors" doesn't have a clean per-tier stat).
+const ALL_SCOPES = [
+  { id: 'global', name: '',  statPrefix: null, kind: 'global' },
+  ...ONLINE_SERIES.map(s => ({ ...s, kind: 'online' })),
+  ...OFFLINE_TIER_SCOPES,
 ];
 
 // Reserved for future count-scaled achievements. Currently empty: the rival
@@ -200,15 +220,24 @@ function _times(n) { return n === 1 ? '' : ` ${n} times`; }
 function _events(n) { return n === 1 ? 'an event' : `${n} events`; }
 
 // ── 1. Placement ─────────────────────────────────────────────────────────────
-for (const scope of SCOPES) {
+// Generated for every scope in ALL_SCOPES: global + 8 online series + 3 offline
+// tiers (worlds/major/regional). Offline-tier placement achievements exist so
+// that meta achievements at those scopes have something to check opponents
+// against (e.g. "Worlds Elite Trainer" needs opponents who hold the
+// `worlds_elite_four_*` placement achievement).
+for (const scope of ALL_SCOPES) {
   for (const tier of PLACEMENT_TIERS) {
     for (const region of REGIONS) {
       const isGlobal = scope.id === 'global';
       const id = `${scope.id}_${tier.id}_${region.id}`;
       const scopeLabel = isGlobal ? '' : `${scope.name} `;
       const name = `${region.name} ${scopeLabel}${tier.name}`;
-      const where = isGlobal ? 'in any tournament' : `in ${scope.name}`;
-      const description = `Finish ${tier.desc}${_times(region.threshold)} ${where}.`;
+      const whereLabel = isGlobal
+        ? 'in any tournament'
+        : scope.kind === 'offline'
+          ? `at offline ${scope.name}s`
+          : `in ${scope.name}`;
+      const description = `Finish ${tier.desc}${_times(region.threshold)} ${whereLabel}.`;
 
       const statKey = isGlobal ? tier.globalStat : `${scope.statPrefix}_${tier.statSuffix}`;
 
@@ -284,20 +313,40 @@ for (const mt of MATCH_TYPES) {
 }
 
 // ── 5. Meta (Pass 2) ────────────────────────────────────────────────────────
-for (const meta of META_TYPES) {
-  for (const region of REGIONS) {
-    const id = `${meta.id}_${region.id}`;
-    const regionLabel = region.id === 'kanto' ? '' : ` (${region.name}+)`;
-    _add({
-      id,
-      name: `${region.name} ${meta.name}`,
-      description: `${meta.desc}${regionLabel}.`,
-      icon: meta.icon,
-      category: 'meta',
-      scope: 'global', tier: meta.id, region: region.id,
-      pass: 2,
-      metaType: meta,
-    });
+// Meta achievements are now generated per scope. Each meta scope requires:
+//   • Opponents who hold the qualifying placement achievement IN THAT SCOPE
+//     (e.g. FFC eight_badges requires opponents with `ffc_gym_leader_*`).
+//   • Matches played at tournaments IN THAT SCOPE (e.g. FFC eight_badges only
+//     counts wins at FFC events).
+//
+// Global meta keeps the bare `<meta>_<region>` ID for backward compatibility
+// with existing rows in `player_achievements` and `achievement_defeated_opponents`.
+// Series/offline-tier meta uses `<scope>_<meta>_<region>`.
+for (const scope of ALL_SCOPES) {
+  const isGlobal = scope.id === 'global';
+  for (const meta of META_TYPES) {
+    for (const region of REGIONS) {
+      const id = isGlobal
+        ? `${meta.id}_${region.id}`
+        : `${scope.id}_${meta.id}_${region.id}`;
+      const scopeLabel = isGlobal ? '' : `${scope.name} `;
+      const regionLabel = region.id === 'kanto' ? '' : ` (${region.name}+)`;
+      const whereLabel = isGlobal
+        ? ''
+        : scope.kind === 'offline'
+          ? ` at offline ${scope.name}s`
+          : ` in ${scope.name}`;
+      _add({
+        id,
+        name: `${region.name} ${scopeLabel}${meta.name}`,
+        description: `${meta.desc}${whereLabel}${regionLabel}.`,
+        icon: meta.icon,
+        category: isGlobal ? 'meta' : `series_${scope.id}`,
+        scope: scope.id, tier: meta.id, region: region.id,
+        pass: 2,
+        metaType: meta,
+      });
+    }
   }
 }
 
@@ -342,91 +391,143 @@ function checkAchievementsPass1(stats, alreadyUnlocked = []) {
  * Pure (no-DB) version of Pass 2 achievement checks.
  * Takes pre-fetched data instead of a db connection.
  *
+ * Meta achievements are now scope-aware:
+ *   • Match filter: only matches at tournaments matching the scope count.
+ *     - global  → every match counts.
+ *     - online series (ffc, rtg_na, …)   → matches where tournaments.series === scope.id.
+ *     - offline tier (worlds, major, …) → matches where tournaments.series === scope.id
+ *       (which by construction are offline events).
+ *   • Opponent filter: opponent must hold `<scope>_<targetTier>_<region>+`.
+ *     For global scope that's `global_<targetTier>_<region>+`. For series
+ *     scope it's that series's placement achievement specifically.
+ *
  * @param {number}  playerId
- * @param {object[]} playerMatches — matches involving this player (id, player1_id, player2_id, winner_id, player1_score, player2_score)
- * @param {Object<number, Set<string>>} globalOppAchMap — map of playerId → Set of achievement IDs (for ALL players)
+ * @param {object[]} playerMatches — matches involving this player
+ * @param {Object<number, Set<string>>} globalOppAchMap — playerId → Set of achievement IDs
  * @param {string[]} alreadyUnlocked — achievement IDs the player already has
+ * @param {Object<number, string>} [matchSeriesById] — match.id → tournament.series.
+ *   Omit (or pass empty) only for legacy callers that want global-only behavior.
  * @returns {AchievementResult[]} newly earned achievements with contributor metadata
  */
-function checkAchievementsPass2Pure(playerId, playerMatches, globalOppAchMap, alreadyUnlocked = []) {
+function checkAchievementsPass2Pure(playerId, playerMatches, globalOppAchMap, alreadyUnlocked = [], matchSeriesById = {}) {
   const already = new Set(alreadyUnlocked);
   const newAch = [];
   const matches = playerMatches;
 
   if (!matches || matches.length === 0) return newAch;
 
-  // Build local oppAchMap (only opponents of this player)
   const oppAchMap = globalOppAchMap;
 
-  /** Does opponent hold a specific tier at minRegion or higher? */
-  function oppHasTierAtRegion(oppId, tierStr, minRegionId) {
+  /**
+   * Does opponent hold a qualifying placement achievement at this scope and
+   * region (or higher)?
+   *
+   *   • Global scope → opponent holds ANY `<scope>_<tier>_<region>+`. In real
+   *     data this is equivalent to requiring `global_<tier>_<region>+`
+   *     specifically (anyone with `ffc_top8 >= 1` also has `top8_finishes >= 1`
+   *     since the global stat sums everything), so this loose check just
+   *     accommodates test mocks that only set a series-specific tier.
+   *   • Series / offline-tier scope → strict scope-prefix match. "FFC 8 Badges"
+   *     requires opponent to be specifically an FFC Gym Leader.
+   */
+  function oppHasTierAtRegion(oppId, scope, tierStr, minRegionId) {
     const achs = oppAchMap[oppId];
     if (!achs) return false;
     const validRegions = regionsAtOrAbove(minRegionId);
-    for (const a of achs) {
-      for (const rg of validRegions) {
-        if (a.endsWith(`_${tierStr}_${rg}`)) return true;
+    const hasAch = (id) => (typeof achs.has === 'function' ? achs.has(id) : achs.includes(id));
+
+    if (scope === 'global') {
+      // Loose match: any scope's <tier>_<region> qualifies.
+      const iter = typeof achs.values === 'function' ? achs : achs;
+      for (const a of iter) {
+        for (const rg of validRegions) {
+          if (a.endsWith(`_${tierStr}_${rg}`)) return true;
+        }
       }
+      return false;
+    }
+
+    // Strict scope-prefix match.
+    for (const rg of validRegions) {
+      if (hasAch(`${scope}_${tierStr}_${rg}`)) return true;
     }
     return false;
   }
 
-  // ── Build per-opponent earliest-match maps ─────────────────────────────────
+  // ── Build per-scope, per-opponent earliest-match maps ─────────────────────
   //
-  // For each meta achievement we only care about UNIQUE opponents. These two
-  // maps record the earliest match in which each opponent qualified — game
-  // mode (we took >= 1 game) vs match mode (we won the entire match). The
-  // match_id rides along so the modal can deep-link the user straight to the
-  // bracket where each badge was earned.
-  const earliestGameByOpp = new Map();   // we took >= 1 game off opp
-  const earliestWinByOpp  = new Map();   // we won the entire match
+  // For each scope, the meta check needs:
+  //   • earliest match where we took >= 1 game off each opponent (game mode)
+  //   • earliest match where we won the match against each opponent (match mode)
+  // ...considering only matches at tournaments in that scope.
+  //
+  // The 'global' scope considers every match. Scoped versions filter on
+  // matchSeriesById[match.id] === scope.id.
+  const scopeMaps = {}; // scope.id → { earliestGameByOpp, earliestWinByOpp }
+  for (const scope of ALL_SCOPES) {
+    scopeMaps[scope.id] = {
+      earliestGameByOpp: new Map(),
+      earliestWinByOpp:  new Map(),
+    };
+  }
 
   for (const m of matches) {
     const opp = m.player1_id === playerId ? m.player2_id : m.player1_id;
     if (!opp) continue;
     const myScore = m.player1_id === playerId ? m.player1_score : m.player2_score;
     const iWon = m.winner_id === playerId;
+    const matchScope = matchSeriesById[m.id] || null;
 
-    if (myScore >= 1 && !earliestGameByOpp.has(opp)) {
-      earliestGameByOpp.set(opp, { opponent_id: opp, match_id: m.id });
-    }
-    if (iWon && !earliestWinByOpp.has(opp)) {
-      earliestWinByOpp.set(opp, { opponent_id: opp, match_id: m.id });
+    for (const scope of ALL_SCOPES) {
+      if (scope.id !== 'global' && matchScope !== scope.id) continue;
+      const maps = scopeMaps[scope.id];
+      if (myScore >= 1 && !maps.earliestGameByOpp.has(opp)) {
+        maps.earliestGameByOpp.set(opp, { opponent_id: opp, match_id: m.id });
+      }
+      if (iWon && !maps.earliestWinByOpp.has(opp)) {
+        maps.earliestWinByOpp.set(opp, { opponent_id: opp, match_id: m.id });
+      }
     }
   }
 
   // ── (Optional) count-scaled match achievements ─────────────────────────────
   // MATCH_TYPES is currently empty — every Pass-2 achievement is now meta.
-  // The loop is left in place in case a future achievement needs to scale by
-  // raw match count again (e.g. "win 50 matches against anyone").
   for (const mt of MATCH_TYPES) {
-    void mt; // no-op — see comment above
+    void mt; // no-op
   }
 
-  // ── Meta achievements (all of them — see META_TYPES) ───────────────────────
+  // ── Meta achievements (per scope × meta type × region) ─────────────────────
   //
-  // For each meta type we walk the appropriate per-opponent map and collect
-  // every unique opponent at the region's target tier or higher. The
-  // achievement unlocks once the unique-opponent count meets `required`. We
-  // keep ALL qualifying contributors (not just `required`) so the modal can
-  // show ongoing progress past the unlock — same behavior as before, but now
-  // with match_id attached for tournament linking.
-  for (const meta of META_TYPES) {
-    const oppMatchMap = meta.mode === 'game' ? earliestGameByOpp : earliestWinByOpp;
+  // ID convention (matches the catalog builder above):
+  //   • global scope → `<meta.id>_<region.id>`  (back-compat with old IDs)
+  //   • other scopes → `<scope.id>_<meta.id>_<region.id>`
+  //
+  // Each scope has its own opponent-match maps (built above) so we both
+  // restrict which matches count AND which opponent placement achievements
+  // qualify.
+  for (const scope of ALL_SCOPES) {
+    const isGlobal = scope.id === 'global';
+    const maps = scopeMaps[scope.id];
 
-    for (const region of REGIONS) {
-      const achId = `${meta.id}_${region.id}`;
-      if (already.has(achId)) continue;
+    for (const meta of META_TYPES) {
+      const oppMatchMap = meta.mode === 'game' ? maps.earliestGameByOpp : maps.earliestWinByOpp;
 
-      const qualifyingOpponents = [];
-      for (const [oppId, info] of oppMatchMap) {
-        if (oppHasTierAtRegion(oppId, meta.targetTier, region.id)) {
-          qualifyingOpponents.push({ opponent_id: oppId, match_id: info.match_id });
+      for (const region of REGIONS) {
+        const achId = isGlobal
+          ? `${meta.id}_${region.id}`
+          : `${scope.id}_${meta.id}_${region.id}`;
+        if (already.has(achId)) continue;
+
+        const qualifyingOpponents = [];
+        for (const [oppId, info] of oppMatchMap) {
+          if (oppHasTierAtRegion(oppId, scope.id, meta.targetTier, region.id)) {
+            qualifyingOpponents.push({ opponent_id: oppId, match_id: info.match_id });
+          }
         }
-      }
 
-      if (qualifyingOpponents.length >= meta.required) {
-        newAch.push({ id: achId, contributors: qualifyingOpponents });
+        if (qualifyingOpponents.length >= meta.required) {
+          newAch.push({ id: achId, contributors: qualifyingOpponents });
+        }
       }
     }
   }
@@ -436,17 +537,29 @@ function checkAchievementsPass2Pure(playerId, playerMatches, globalOppAchMap, al
 
 /**
  * DB-backed wrapper for checkAchievementsPass2Pure.
- * Fetches matches and opponent achievements from DB, then delegates to the pure function.
- * Used by single-tournament import flow. For bulk recalculation, use the Pure version directly.
+ * Fetches matches, tournament series, and opponent achievements from DB,
+ * then delegates to the pure function.
+ * Used by single-tournament import flow. For bulk recalculation, use the Pure
+ * version directly (recalculate_elo.js builds matchSeriesById once across all
+ * matches rather than per-player).
  */
 async function checkAchievementsPass2(playerId, db, alreadyUnlocked = []) {
-  // Fetch matches for this player
+  // Fetch matches + their tournament series in one round trip so the meta
+  // match-series filter has the data it needs.
   const { rows: matches } = await db.query(`
-    SELECT id, tournament_id, player1_id, player2_id, winner_id, player1_score, player2_score
-    FROM matches
-    WHERE (player1_id = $1 OR player2_id = $1)
-      AND winner_id IS NOT NULL
+    SELECT m.id, m.tournament_id, m.player1_id, m.player2_id, m.winner_id,
+           m.player1_score, m.player2_score, t.series AS tournament_series
+    FROM matches m
+    LEFT JOIN tournaments t ON t.id = m.tournament_id
+    WHERE (m.player1_id = $1 OR m.player2_id = $1)
+      AND m.winner_id IS NOT NULL
   `, [playerId]);
+
+  // Build match.id → tournament.series
+  const matchSeriesById = {};
+  for (const m of matches) {
+    if (m.tournament_series) matchSeriesById[m.id] = m.tournament_series;
+  }
 
   // Unique opponent IDs
   const opponentIdSet = new Set();
@@ -471,7 +584,7 @@ async function checkAchievementsPass2(playerId, db, alreadyUnlocked = []) {
     oppAchMap[r.player_id].add(r.achievement_id);
   }
 
-  return checkAchievementsPass2Pure(playerId, matches, oppAchMap, alreadyUnlocked);
+  return checkAchievementsPass2Pure(playerId, matches, oppAchMap, alreadyUnlocked, matchSeriesById);
 }
 
 // ═══════════════════════════════════════════════════════════════════════════════
@@ -482,36 +595,55 @@ async function checkAchievementsPass2(playerId, db, alreadyUnlocked = []) {
  * Compute meta-achievement progress for a player.
  * Returns an object like { eight_badges_kanto: { current: 5, required: 8 }, … }
  * for every meta achievement the player does NOT yet have.
+ *
+ * Scope-aware (mirrors checkAchievementsPass2Pure semantics):
+ *   • global → all opponents who hold `global_<targetTier>_<region>+`
+ *   • non-global → opponents the player has played in tournaments of that
+ *     scope AND who hold `<scope>_<targetTier>_<region>+`.
  */
 async function computeMetaProgress(playerId, db, alreadyUnlocked = []) {
   const already = new Set(alreadyUnlocked);
   const progress = {};
 
-  // Pull every completed match this player was in. We need both the matches
-  // they WON (for match-mode meta: 8 Badges, Elite Trainer, Dark Horse) and
-  // the matches where they took at least one game (for game-mode meta:
-  // Foreshadowing). A single SELECT here is cheaper than two round-trips.
+  // Pull every completed match this player was in, with the tournament's series.
   const { rows: matches } = await db.query(`
-    SELECT player1_id, player2_id, winner_id, player1_score, player2_score
-    FROM matches
-    WHERE (player1_id = $1 OR player2_id = $1)
-      AND winner_id IS NOT NULL
+    SELECT m.id, m.player1_id, m.player2_id, m.winner_id,
+           m.player1_score, m.player2_score, t.series AS tournament_series
+    FROM matches m
+    LEFT JOIN tournaments t ON t.id = m.tournament_id
+    WHERE (m.player1_id = $1 OR m.player2_id = $1)
+      AND m.winner_id IS NOT NULL
   `, [playerId]);
 
-  const tookGameFromIds = new Set();
-  const defeatedIds = new Set();
+  // Per-scope sets of opponents the player took a game from / defeated.
+  const scopeSets = {};
+  for (const scope of ALL_SCOPES) {
+    scopeSets[scope.id] = { tookGameFrom: new Set(), defeated: new Set() };
+  }
+
   for (const m of matches) {
     const opp = m.player1_id === playerId ? m.player2_id : m.player1_id;
     if (!opp) continue;
     const myScore = m.player1_id === playerId ? m.player1_score : m.player2_score;
-    if (myScore >= 1) tookGameFromIds.add(opp);
-    if (m.winner_id === playerId) defeatedIds.add(opp);
+    const iWon = m.winner_id === playerId;
+    const matchScope = m.tournament_series || null;
+
+    for (const scope of ALL_SCOPES) {
+      if (scope.id !== 'global' && matchScope !== scope.id) continue;
+      const sets = scopeSets[scope.id];
+      if (myScore >= 1) sets.tookGameFrom.add(opp);
+      if (iWon)         sets.defeated.add(opp);
+    }
   }
 
-  const allOppIds = new Set([...tookGameFromIds, ...defeatedIds]);
+  // Collect every opponent we might need across all scopes
+  const allOppIds = new Set();
+  for (const scope of ALL_SCOPES) {
+    for (const id of scopeSets[scope.id].tookGameFrom) allOppIds.add(id);
+    for (const id of scopeSets[scope.id].defeated)     allOppIds.add(id);
+  }
   if (allOppIds.size === 0) return progress;
 
-  // Get achievements for every opponent we'll need to consider
   const { rows: oppAchRows } = await db.query(`
     SELECT player_id, achievement_id
     FROM player_achievements
@@ -524,34 +656,48 @@ async function computeMetaProgress(playerId, db, alreadyUnlocked = []) {
     oppAchMap[r.player_id].add(r.achievement_id);
   }
 
-  for (const meta of META_TYPES) {
-    const oppSet = meta.mode === 'game' ? tookGameFromIds : defeatedIds;
+  for (const scope of ALL_SCOPES) {
+    const isGlobal = scope.id === 'global';
+    const sets = scopeSets[scope.id];
 
-    for (const region of REGIONS) {
-      const achId = `${meta.id}_${region.id}`;
-      if (already.has(achId)) continue;
+    for (const meta of META_TYPES) {
+      const oppSet = meta.mode === 'game' ? sets.tookGameFrom : sets.defeated;
 
-      const validRegions = regionsAtOrAbove(region.id);
-      let qualifying = 0;
-      const qualifyingOppIds = [];
-      for (const oppId of oppSet) {
-        const achs = oppAchMap[oppId];
-        if (!achs) continue;
-        let found = false;
-        for (const a of achs) {
-          for (const rg of validRegions) {
-            if (a.endsWith(`_${meta.targetTier}_${rg}`)) { found = true; break; }
+      for (const region of REGIONS) {
+        const achId = isGlobal
+          ? `${meta.id}_${region.id}`
+          : `${scope.id}_${meta.id}_${region.id}`;
+        if (already.has(achId)) continue;
+
+        const validRegions = regionsAtOrAbove(region.id);
+        let qualifying = 0;
+        const qualifyingOppIds = [];
+        for (const oppId of oppSet) {
+          const achs = oppAchMap[oppId];
+          if (!achs) continue;
+          let found = false;
+          if (isGlobal) {
+            // Loose match — see oppHasTierAtRegion in Pass 2 for rationale.
+            for (const a of achs) {
+              for (const rg of validRegions) {
+                if (a.endsWith(`_${meta.targetTier}_${rg}`)) { found = true; break; }
+              }
+              if (found) break;
+            }
+          } else {
+            for (const rg of validRegions) {
+              if (achs.has(`${scope.id}_${meta.targetTier}_${rg}`)) { found = true; break; }
+            }
           }
-          if (found) break;
+          if (found) {
+            qualifying++;
+            qualifyingOppIds.push(oppId);
+          }
         }
-        if (found) {
-          qualifying++;
-          qualifyingOppIds.push(oppId);
-        }
-      }
 
-      if (qualifying > 0) {
-        progress[achId] = { current: qualifying, required: meta.required, qualifying_opponents: qualifyingOppIds };
+        if (qualifying > 0) {
+          progress[achId] = { current: qualifying, required: meta.required, qualifying_opponents: qualifyingOppIds };
+        }
       }
     }
   }
@@ -611,7 +757,9 @@ module.exports = {
   REGION_INDEX,
   PLACEMENT_TIERS,
   ONLINE_SERIES,
+  OFFLINE_TIER_SCOPES,
   SCOPES,
+  ALL_SCOPES,
   MATCH_TYPES,
   META_TYPES,
   detectSeries,

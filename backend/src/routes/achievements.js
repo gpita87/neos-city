@@ -7,9 +7,13 @@ const {
   REGION_INDEX,
   PLACEMENT_TIERS,
   META_TYPES,
+  ALL_SCOPES,
   regionsAtOrAbove,
   highestRegions,
 } = require('../services/achievements');
+
+// Build a quick lookup: scope id → display name (empty string for global).
+const SCOPE_NAME_BY_ID = Object.fromEntries(ALL_SCOPES.map(s => [s.id, s.name || '']));
 const db = require('../db');
 
 // ─── Helpers ─────────────────────────────────────────────────────────────────
@@ -306,6 +310,10 @@ router.get('/:id/tournaments', async (req, res) => {
         //    region) are dropped. Each opponent carries their highest
         //    qualifying region (most impressive label) and their full
         //    highest-region map across all 4 placement tiers.
+        //
+        //    Scope-aware: for a series/offline-tier meta (e.g. ffc_eight_badges_*)
+        //    we check the opponent's `<scope>_<targetTier>_<region>+` achievement,
+        //    not the global one — the opponent has to be a Gym Leader IN FFC.
         const metaTypeId = ach.tier;
         const metaType = META_TYPES.find(m => m.id === metaTypeId);
         const targetTier = metaType?.targetTier;
@@ -313,6 +321,7 @@ router.get('/:id/tournaments', async (req, res) => {
         const minRegion = ach.region;
         const validRegionIds = regionsAtOrAbove(minRegion);
         const validRegionSet = new Set(validRegionIds);
+        const oppScope = ach.scope || 'global';
 
         // De-dupe by opponent — recalc stores the earliest qualifying match,
         // so usually one row per opp, but be defensive.
@@ -326,13 +335,13 @@ router.get('/:id/tournaments', async (req, res) => {
           const oppAchs = oppAchMap.get(cr.opponent_id) || [];
 
           // Find the highest region this opponent currently holds at the
-          // target tier. We walk REGIONS top-down so we naturally land on
-          // the most impressive qualifying tier.
+          // target tier within the meta's scope. Walk REGIONS top-down so we
+          // naturally land on the most impressive qualifying tier.
           let qualifyingRegionId = null;
           for (let i = REGIONS.length - 1; i >= 0; i--) {
             const region = REGIONS[i];
             if (!validRegionSet.has(region.id)) continue;
-            const expected = `global_${targetTier}_${region.id}`;
+            const expected = `${oppScope}_${targetTier}_${region.id}`;
             if (oppAchs.includes(expected)) {
               qualifyingRegionId = region.id;
               break;
@@ -391,7 +400,7 @@ router.get('/:id/tournaments', async (req, res) => {
               region: qualifyingRegionId,
               region_name: qualifyingRegion?.name || qualifyingRegionId,
               region_numeral: qualifyingRegion?.numeral || '',
-              achievement_id: `global_${targetTier}_${qualifyingRegionId}`,
+              achievement_id: `${oppScope}_${targetTier}_${qualifyingRegionId}`,
             },
             highest_regions: oppHighest,
             match: matchPayload,
@@ -436,6 +445,8 @@ router.get('/:id/tournaments', async (req, res) => {
             kind_label: targetTierMeta?.name
               ? `${targetTierMeta.name}${(metaType?.required ?? 1) > 1 ? 's' : ''}`
               : 'qualifying opponents',
+            scope: oppScope,
+            scope_label: oppScope === 'global' ? null : (SCOPE_NAME_BY_ID[oppScope] || oppScope),
             opponents,
             stale_filtered: contribRows.length - opponents.length,
           },

@@ -421,6 +421,16 @@ const OFFLINE_WEIGHTS = {
     globalOppAchMap[r.player_id].add(r.achievement_id);
   }
 
+  // Build match.id → tournament.series for the scope-aware Pass 2.
+  // For online tournaments series is 'ffc', 'rtg_na', etc.; for offline it's
+  // 'worlds', 'major', 'regional', 'other'. Meta achievements at non-global
+  // scopes use this to restrict which matches count toward unique opponents.
+  const matchSeriesById = {};
+  for (const m of dbMatches) {
+    const t = tournamentById[m.tournament_id];
+    if (t && t.series) matchSeriesById[m.id] = t.series;
+  }
+
   const pass2Rows = [];
   const contributorRows = [];
 
@@ -428,7 +438,7 @@ const OFFLINE_WEIGHTS = {
     const playerMatches = wonMatchesByPlayer[p.id] || [];
     const alreadyUnlocked = globalOppAchMap[p.id] ? [...globalOppAchMap[p.id]] : [];
 
-    const newOnes = checkAchievementsPass2Pure(p.id, playerMatches, globalOppAchMap, alreadyUnlocked);
+    const newOnes = checkAchievementsPass2Pure(p.id, playerMatches, globalOppAchMap, alreadyUnlocked, matchSeriesById);
     for (const ach of newOnes) {
       // Keep contributors attached to the row so we can derive unlocked_at later
       pass2Rows.push({
@@ -462,22 +472,27 @@ const OFFLINE_WEIGHTS = {
     unova: 20, kalos: 40, alola: 80, galar: 150, paldea: 250,
   };
 
-  // Sort each player's placements by tournament completed_at ASC (online only —
-  // achievements are online-only). Pre-attach the tournament row for cheap lookup.
+  // Sort each player's placements (online AND offline) by tournament completed_at
+  // ASC. Pre-attach the tournament row for cheap lookup.
+  //
+  // Offline placements are included because offline-tier placement achievements
+  // now exist (worlds_gym_leader_*, major_champion_*, etc.) and global stats
+  // count offline placements too — so deriveUnlockedAt needs access to them to
+  // date a global achievement earned via offline play.
   //
   // We require completed_at to be non-null. A NULL completed_at (sometimes
-  // produced by importer edge cases on round-robin or never-finished Challonge
-  // events) used to anchor filtered[0] in deriveUnlockedAt — `null || ''`
-  // sorts before any real date — which made the truthiness fallback chain
-  // return the player's most-recent placement date as the "unlock" date for
-  // every threshold. Filtering them out here means an undated placement
-  // simply doesn't count toward the chronology; the achievement gets dated
-  // from the player's earliest *dated* qualifying placement instead.
+  // produced by importer edge cases on round-robin or never-finished events)
+  // used to anchor filtered[0] in deriveUnlockedAt — `null || ''` sorts before
+  // any real date — which made the truthiness fallback chain return the
+  // player's most-recent placement date as the "unlock" date for every
+  // threshold. Filtering them out here means an undated placement simply
+  // doesn't count toward the chronology; the achievement gets dated from the
+  // player's earliest *dated* qualifying placement instead.
   const placementsByPlayerSorted = {};
   for (const pid of Object.keys(placementsByPlayer)) {
     placementsByPlayerSorted[pid] = placementsByPlayer[pid]
       .map(pl => ({ ...pl, _t: tournamentById[pl.tournament_id] }))
-      .filter(pl => pl._t && !pl._t.is_offline && pl._t.completed_at)
+      .filter(pl => pl._t && pl._t.completed_at)
       .sort((a, b) => {
         const da = a._t.completed_at;
         const db_ = b._t.completed_at;
@@ -485,8 +500,8 @@ const OFFLINE_WEIGHTS = {
       });
   }
 
-  // Most-recent online tournament date per player — fallback when a precise
-  // crossing date can't be derived.
+  // Most-recent tournament date per player — fallback when a precise crossing
+  // date can't be derived.
   const lastTourneyDateByPlayer = {};
   for (const pid of Object.keys(placementsByPlayerSorted)) {
     const list = placementsByPlayerSorted[pid];
@@ -563,17 +578,24 @@ const OFFLINE_WEIGHTS = {
     //   • rival_battle / smell_ya_later           — N=1 qualifying Rival
     //   • foreshadowing / dark_horse              — N=1 qualifying Champion
     //
+    // Meta achievements are now scope-prefixed for non-global scopes
+    // (e.g. `ffc_eight_badges_kanto`, `worlds_dark_horse_johto`), so we match
+    // on substring rather than prefix. Global meta keeps the bare form
+    // (`eight_badges_kanto`) for back-compat — `_eight_badges_` doesn't
+    // start-anchor it, hence the includes check below normalizes both.
+    //
     // Each contributor carries match_id (preferred — gives the precise
     // tournament date). The opponent_id firstDefeats fallback covers
     // match-mode metas (8 Badges, Elite Trainer, Smell Ya Later, Dark Horse).
     // Game-mode metas (Rival Battle, Foreshadowing) can be earned in matches
     // the player LOST, so the match_id path is the only reliable source.
-    const metaPrefixes = [
+    const metaTokens = [
       'eight_badges_', 'elite_trainer_',
       'rival_battle_', 'smell_ya_later_',
       'foreshadowing_', 'dark_horse_',
     ];
-    if (metaPrefixes.some(pre => achievementId.startsWith(pre))) {
+    const isMeta = metaTokens.some(t => achievementId.startsWith(t) || achievementId.includes(`_${t}`));
+    if (isMeta) {
       if (!threshold) return lastTourneyDateByPlayer[playerId] || null;
       const firstDefeats = firstDefeatByPlayer[playerId] || {};
       const dates = (contributors || [])
@@ -591,9 +613,9 @@ const OFFLINE_WEIGHTS = {
         .sort();
 
       let required = 1;
-      if      (achievementId.startsWith('eight_badges_'))    required = 8;
-      else if (achievementId.startsWith('elite_trainer_'))   required = 4;
-      // foreshadowing_ / dark_horse_ stay at 1
+      if      (achievementId.includes('eight_badges_'))    required = 8;
+      else if (achievementId.includes('elite_trainer_'))   required = 4;
+      // foreshadowing / dark_horse / rival_battle / smell_ya_later stay at 1
 
       return dates[required - 1] || dates[dates.length - 1] || lastTourneyDateByPlayer[playerId] || null;
     }
