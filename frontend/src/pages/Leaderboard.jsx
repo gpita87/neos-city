@@ -1,7 +1,7 @@
 import { useEffect, useState } from 'react';
 import { Link } from 'react-router-dom';
 import { getLeaderboard, getOfflineLeaderboard } from '../lib/api';
-import { getRankLabel, winRate } from '../lib/utils';
+import { winRate } from '../lib/utils';
 
 const REGIONS = [
   { key: null,  label: 'All',    flag: '🌐' },
@@ -100,7 +100,6 @@ export default function Leaderboard() {
               <tr className="border-b border-[#1a2744] text-slate-500 text-xs font-display tracking-wider">
                 <th className="px-4 py-3 text-left w-10">#</th>
                 <th className="px-4 py-3 text-left">PLAYER</th>
-                <th className="px-4 py-3 text-right">ELO</th>
                 <th className="px-4 py-3 text-right">W</th>
                 <th className="px-4 py-3 text-right">L</th>
                 <th className="px-4 py-3 text-right">WIN%</th>
@@ -108,31 +107,25 @@ export default function Leaderboard() {
               </tr>
             </thead>
             <tbody>
-              {players.map((p, i) => {
-                const rank = getRankLabel(p.elo_rating);
-                return (
-                  <tr key={p.id} className="border-b border-[#1a2744] hover:bg-white/5 transition-colors">
-                    <td className="px-4 py-3 text-slate-500">{i + 1}</td>
-                    <td className="px-4 py-3">
-                      <Link to={`/players/${p.id}`} className="flex items-center gap-2 hover:text-cyan-400">
-                        <span>{rank.icon}</span>
-                        <span className="font-medium text-white">{p.display_name}</span>
-                        <span className={`text-xs ${rank.class}`}>{rank.label}</span>
-                        {p.region && (
-                          <span className="ml-1 text-xs text-slate-500">
-                            {p.region === 'NA' ? '🇺🇸' : p.region === 'EU' ? '🇪🇺' : p.region === 'JP' ? '🇯🇵' : ''}
-                          </span>
-                        )}
-                      </Link>
-                    </td>
-                    <td className={`px-4 py-3 text-right font-display font-bold ${rank.class}`}>{p.elo_rating}</td>
-                    <td className="px-4 py-3 text-right text-green-400">{p.total_match_wins}</td>
-                    <td className="px-4 py-3 text-right text-red-400">{p.total_match_losses}</td>
-                    <td className="px-4 py-3 text-right text-slate-300">{winRate(p.total_match_wins, p.total_match_losses)}</td>
-                    <td className="px-4 py-3 text-right text-slate-400">{p.tournaments_entered}</td>
-                  </tr>
-                );
-              })}
+              {players.map((p, i) => (
+                <tr key={p.id} className="border-b border-[#1a2744] hover:bg-white/5 transition-colors">
+                  <td className="px-4 py-3 text-slate-500">{i + 1}</td>
+                  <td className="px-4 py-3">
+                    <Link to={`/players/${p.id}`} className="flex items-center gap-2 hover:text-cyan-400">
+                      <span className="font-medium text-white">{p.display_name}</span>
+                      {p.region && (
+                        <span className="ml-1 text-xs text-slate-500">
+                          {p.region === 'NA' ? '🇺🇸' : p.region === 'EU' ? '🇪🇺' : p.region === 'JP' ? '🇯🇵' : ''}
+                        </span>
+                      )}
+                    </Link>
+                  </td>
+                  <td className="px-4 py-3 text-right text-green-400">{p.total_match_wins}</td>
+                  <td className="px-4 py-3 text-right text-red-400">{p.total_match_losses}</td>
+                  <td className="px-4 py-3 text-right text-slate-300">{winRate(p.total_match_wins, p.total_match_losses)}</td>
+                  <td className="px-4 py-3 text-right text-slate-400">{p.tournaments_entered}</td>
+                </tr>
+              ))}
             </tbody>
           </table>
           {!loading && players.length === 0 && (

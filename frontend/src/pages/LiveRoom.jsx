@@ -82,7 +82,6 @@ export default function LiveRoom() {
           <div className="flex items-center justify-center gap-8">
             <div className="text-center flex-1">
               <p className="font-medium text-white text-lg">{room.player1_name}</p>
-              <p className="text-slate-500 text-xs">{room.player1_elo} ELO</p>
               <p className={`font-display text-5xl font-bold mt-3 ${complete && room.winner_id === room.player1_id ? 'text-cyan-400' : 'text-white'}`}>
                 {room.player1_games}
               </p>
@@ -90,7 +89,6 @@ export default function LiveRoom() {
             <div className="text-slate-600 font-display text-xl">VS</div>
             <div className="text-center flex-1">
               <p className="font-medium text-white text-lg">{room.player2_name}</p>
-              <p className="text-slate-500 text-xs">{room.player2_elo} ELO</p>
               <p className={`font-display text-5xl font-bold mt-3 ${complete && room.winner_id === room.player2_id ? 'text-cyan-400' : 'text-white'}`}>
                 {room.player2_games}
               </p>
@@ -160,7 +158,7 @@ export default function LiveRoom() {
             >
               <option value="">Select player...</option>
               {players.map(p => (
-                <option key={p.id} value={p.id}>{p.display_name} ({p.elo_rating})</option>
+                <option key={p.id} value={p.id}>{p.display_name}</option>
               ))}
             </select>
           </div>
@@ -173,7 +171,7 @@ export default function LiveRoom() {
             >
               <option value="">Select player...</option>
               {players.filter(p => String(p.id) !== p1).map(p => (
-                <option key={p.id} value={p.id}>{p.display_name} ({p.elo_rating})</option>
+                <option key={p.id} value={p.id}>{p.display_name}</option>
               ))}
             </select>
           </div>
