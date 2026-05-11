@@ -116,6 +116,23 @@ function isPast(d) {
   return d < today;
 }
 
+/** Pull the iteration number out of a tournament title (e.g. "Ferrum Fist
+ *  Challenge 15" → "15", "RTG NA #23 (Apr 2024)" → "23"). Returns the first
+ *  numeric token that isn't a four-digit calendar year, or null if none. */
+function extractEventNumber(name) {
+  if (!name) return null;
+  const matches = String(name).match(/\d+/g);
+  if (!matches) return null;
+  for (const n of matches) {
+    if (n.length === 4) {
+      const num = parseInt(n, 10);
+      if (num >= 1900 && num <= 2099) continue;
+    }
+    return n;
+  }
+  return null;
+}
+
 /** Day-of-month (1-31) of the Nth occurrence of dayOfWeek in a given UTC
  *  year/month. Returns null if the month doesn't have N occurrences. */
 function nthWeekdayOfMonthUtc(year, month, n, dayOfWeek) {
@@ -211,7 +228,7 @@ function EventPill({ event, compact = false }) {
     >
       <span className={`w-2 h-2 rounded-full flex-shrink-0 ${m.color}`} />
       {compact
-        ? <span className="truncate">{m.label}</span>
+        ? <span className="truncate">{m.label}{event.number ? ` ${event.number}` : ''}</span>
         : <span className="truncate">{event.name}</span>
       }
       {event.hour != null && !compact && (
@@ -488,6 +505,7 @@ export default function Calendar() {
         return {
           id: t.id,
           name: t.name,
+          number: extractEventNumber(t.name),
           series: t.series || 'other',
           date: d,
           hour: hasTime ? d.getHours() : null,
