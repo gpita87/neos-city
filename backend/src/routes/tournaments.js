@@ -486,20 +486,20 @@ router.post('/preview-dates', requireAdmin, async (req, res) => {
   const knownStartgg = new Map();
   if (challongeSlugs.length) {
     const { rows } = await db.query(
-      'SELECT challonge_id, started_at, completed_at, created_at FROM tournaments WHERE challonge_id = ANY($1)',
+      'SELECT challonge_id, started_at, completed_at, imported_at FROM tournaments WHERE challonge_id = ANY($1)',
       [challongeSlugs]
     );
     for (const r of rows) {
-      knownChallonge.set(r.challonge_id, r.started_at || r.completed_at || r.created_at || null);
+      knownChallonge.set(r.challonge_id, r.started_at || r.completed_at || r.imported_at || null);
     }
   }
   if (startggPhaseIds.length) {
     const { rows } = await db.query(
-      'SELECT startgg_phase_group_id, started_at, completed_at, created_at FROM tournaments WHERE startgg_phase_group_id = ANY($1)',
+      'SELECT startgg_phase_group_id, started_at, completed_at, imported_at FROM tournaments WHERE startgg_phase_group_id = ANY($1)',
       [startggPhaseIds]
     );
     for (const r of rows) {
-      knownStartgg.set(r.startgg_phase_group_id, r.started_at || r.completed_at || r.created_at || null);
+      knownStartgg.set(r.startgg_phase_group_id, r.started_at || r.completed_at || r.imported_at || null);
     }
   }
 
