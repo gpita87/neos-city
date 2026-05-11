@@ -186,6 +186,23 @@ async function importOne(challonge_id) {
       return { skipped: true, reason: 'no_completed_matches', name: tournamentName, challonge_id };
     }
 
+    // Challonge only stamps participants with `final_rank` after the organizer
+    // hits "Finalize" on the bracket. A tournament with completed matches but
+    // no final_rank on anyone produces a row with NULL completed_at + every
+    // placement at rank=null — invisible on the home feed (which filters
+    // completed_at) and renders as "nullth" on the detail page. Refuse the
+    // import; the next pull_new run will retry once the organizer finalizes
+    // (batch-import re-attempts slugs whose existing DB row has NULL completed_at).
+    const participantListPreview = participantsData.data || participantsData.participants || participantsData;
+    const anyFinalRank = participantListPreview.some(p => {
+      const attrs = p.attributes || p.participant || p;
+      return attrs.final_rank != null;
+    });
+    if (!anyFinalRank) {
+      console.log(`   ⏭️  Skipped "${tournamentName}" (${challonge_id}): bracket not finalized on Challonge`);
+      return { skipped: true, reason: 'not_finalized', name: tournamentName, challonge_id };
+    }
+
     // ── Upsert tournament ──────────────────────────────────────────────────
     const { rows: [tournament] } = await db.query(
       `INSERT INTO tournaments
@@ -425,8 +442,14 @@ router.post('/batch-import', requireAdmin, async (req, res) => {
     return res.status(400).json({ error: 'No valid slugs found in urls' });
   }
 
-  // Check which slugs are already in the DB
-  const { rows: existing } = await db.query(`SELECT challonge_id FROM tournaments`);
+  // Check which slugs are already in the DB. Only fully-imported rows
+  // (completed_at not null) are skipped — slugs whose existing row has
+  // NULL completed_at are unfinalized stubs from a prior pre-finalize
+  // import, and we want to retry them so the next pull_new can refresh
+  // them once Challonge stamps the bracket.
+  const { rows: existing } = await db.query(
+    `SELECT challonge_id FROM tournaments WHERE completed_at IS NOT NULL`
+  );
   const existingIds = new Set(existing.map(r => r.challonge_id));
 
   for (const slug of slugs) {

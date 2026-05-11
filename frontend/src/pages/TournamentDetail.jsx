@@ -7,12 +7,13 @@ import AchievementIcon from '../components/AchievementIcon';
 // Visual treatment for the top of the bracket. Anything past 8th falls
 // through to the muted "other" style.
 function rankStyle(rank) {
-  if (rank === 1) return { medal: '🥇', tint: 'text-yellow-300', label: '1st' };
-  if (rank === 2) return { medal: '🥈', tint: 'text-slate-200',  label: '2nd' };
-  if (rank === 3) return { medal: '🥉', tint: 'text-amber-400',  label: '3rd' };
-  if (rank <= 4)  return { medal: '🏅', tint: 'text-cyan-300',   label: `${rank}th` };
-  if (rank <= 8)  return { medal: '⭐', tint: 'text-teal-300',   label: `${rank}th` };
-  return { medal: '·', tint: 'text-slate-500', label: rank ? `${rank}th` : '—' };
+  if (rank == null)  return { medal: '·', tint: 'text-slate-500', label: '—' };
+  if (rank === 1)    return { medal: '🥇', tint: 'text-yellow-300', label: '1st' };
+  if (rank === 2)    return { medal: '🥈', tint: 'text-slate-200',  label: '2nd' };
+  if (rank === 3)    return { medal: '🥉', tint: 'text-amber-400',  label: '3rd' };
+  if (rank <= 4)     return { medal: '🏅', tint: 'text-cyan-300',   label: `${rank}th` };
+  if (rank <= 8)     return { medal: '⭐', tint: 'text-teal-300',   label: `${rank}th` };
+  return { medal: '·', tint: 'text-slate-500', label: `${rank}th` };
 }
 
 const CATEGORY_ORDER = [
