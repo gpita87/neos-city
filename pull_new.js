@@ -16,12 +16,84 @@
 
 const http        = require('http');
 const path        = require('path');
+const fs          = require('fs');
 const readline    = require('readline');
 const { spawn }   = require('child_process');
 
 const API_HOST = 'localhost';
 const API_PORT = 3001;
 const ROOT     = __dirname;
+
+// Read ADMIN_TOKEN from backend/.env without pulling in dotenv. Returns null
+// if the file is absent or the line isn't there.
+function readAdminToken() {
+  const envPath = path.join(ROOT, 'backend', '.env');
+  if (!fs.existsSync(envPath)) return null;
+  const content = fs.readFileSync(envPath, 'utf8');
+  const match = content.match(/^\s*ADMIN_TOKEN\s*=\s*['"]?([^'"\r\n]+?)['"]?\s*$/m);
+  return match ? match[1] : null;
+}
+
+// Pipe text to the Windows clipboard via `clip`. Rejects with a useful error
+// on non-Windows platforms so the caller can fall back to a manual-copy hint.
+function copyToClipboard(text) {
+  return new Promise((resolve, reject) => {
+    if (process.platform !== 'win32') {
+      reject(new Error(`clipboard copy not implemented for ${process.platform}`));
+      return;
+    }
+    const proc = spawn('clip');
+    proc.on('error', reject);
+    proc.on('exit', code => {
+      if (code === 0) resolve();
+      else reject(new Error(`clip exited with code ${code}`));
+    });
+    proc.stdin.write(text);
+    proc.stdin.end();
+  });
+}
+
+// Offer to copy a browser-console import script to clipboard, with the
+// ADMIN_TOKEN line pre-filled from backend/.env, and print the target URL
+// (rendered on its own line so Windows Terminal auto-links it).
+async function offerConsoleImport({ label, script, targetUrl, blurb }) {
+  console.log(`\n  ${label} - ${blurb}`);
+  const ans = await ask(`  Import new ${label} events now? (Y/n): `);
+  if (ans === 'n' || ans === 'no' || ans === 'skip') {
+    console.log(`  Skipping ${label}.`);
+    return;
+  }
+
+  const scriptPath = path.join(ROOT, script);
+  let content;
+  try {
+    content = fs.readFileSync(scriptPath, 'utf8');
+  } catch (err) {
+    console.error(`  Could not read ${script}: ${err.message}`);
+    return;
+  }
+
+  const token = readAdminToken();
+  if (token) {
+    content = content.replace(
+      /^(const ADMIN_TOKEN\s*=\s*)['"]['"]\s*;?\s*$/m,
+      (_, prefix) => `${prefix}${JSON.stringify(token)};`
+    );
+  }
+
+  try {
+    await copyToClipboard(content);
+    const tokenNote = token ? ' (with ADMIN_TOKEN pre-filled)' : ' (ADMIN_TOKEN not found in backend/.env — set it manually before running)';
+    console.log(`  Copied ${script} to clipboard${tokenNote}.`);
+  } catch (err) {
+    console.error(`  Could not copy to clipboard: ${err.message}`);
+    console.log(`  Open ${scriptPath} manually and copy its contents.`);
+  }
+
+  console.log(`\n  Open this page in Chrome, then F12 -> Console -> paste -> Enter:`);
+  console.log(`  ${targetUrl}\n`);
+  await ask(`  Press Enter when the ${label} import is finished: `);
+}
 
 function ask(question) {
   const rl = readline.createInterface({ input: process.stdin, output: process.stdout });
@@ -120,23 +192,23 @@ function banner(title) {
 
   // 4. Browser-console steps (manual, not automatable from Node)
   console.log('\nStep 4/7: Browser-console imports (manual)');
-  console.log('  These sources need a real Chrome tab to run their scrapers:');
-  console.log('    - Tonamel    -> tonamel_import_console.js   (paste in any Tonamel bracket page)');
-  console.log('    - Liquipedia -> liquipedia_import_console.js (paste on any liquipedia.net page)');
+  console.log('  These sources need a real Chrome tab to run their scrapers.');
+  console.log('  For each one I can copy the script (with ADMIN_TOKEN pre-filled) to');
+  console.log('  your clipboard and print the page to open.');
 
-  const tonamelAnswer = await ask('  Have you imported new Tonamel events this session? (y/n/skip): ');
-  if (tonamelAnswer === 'n' || tonamelAnswer === 'no') {
-    console.log('  Skipping Tonamel import. If you need new events later, see AGENT_CONTEXT.md.');
-  } else if (tonamelAnswer === 'y' || tonamelAnswer === 'yes') {
-    console.log('  Tonamel imports already done - new JP players auto-tagged via importOneTonamel().');
-  }
+  await offerConsoleImport({
+    label:    'Tonamel',
+    script:   'tonamel_import_console.js',
+    targetUrl: 'https://tonamel.com/organization/OhUc2?game=pokken',
+    blurb:    'Imports ねずみ杯 / Mouse Cup / Rookies events. New JP players auto-tagged.',
+  });
 
-  const liquipediaAnswer = await ask('  Have you imported new Liquipedia bracket data this session? (y/n/skip): ');
-  if (liquipediaAnswer === 'n' || liquipediaAnswer === 'no') {
-    console.log('  Skipping Liquipedia bracket import.');
-  } else if (liquipediaAnswer === 'y' || liquipediaAnswer === 'yes') {
-    console.log('  Liquipedia bracket data already imported.');
-  }
+  await offerConsoleImport({
+    label:    'Liquipedia',
+    script:   'liquipedia_import_console.js',
+    targetUrl: 'https://liquipedia.net/fighters/Pokk%C3%A9n_Tournament/Tournaments',
+    blurb:    'Imports offline bracket data for events already created by offline_import.js.',
+  });
 
   // 5. Full ELO + Pass-2 achievement recalculation
   console.log('\nStep 5/7: Recalculating ELO and re-running achievements');
