@@ -35,6 +35,15 @@ const HARVESTED_FILE = path.join(__dirname, 'harvested_tournaments.txt');
 // tail of 2–6 entrant weekly micro-events that would otherwise pollute stats.
 const MIN_ENTRANTS = 8;
 
+// Series allowlist — events whose tournament/event name doesn't match any
+// of these patterns are skipped. Mirrors harvest_new.js's per-organizer model
+// for Challonge: start.gg has no central "series" organizer, so we curate by
+// name. Add more patterns as new series get blessed for inclusion. Set to []
+// to disable the filter entirely.
+const SERIES_PATTERNS = [
+  /heaven'?s arena/i,
+];
+
 function parseArgs() {
   const args = process.argv.slice(2);
   const out = { sinceDays: 90 };
@@ -106,15 +115,23 @@ function parseArgs() {
   const seen = new Set();
   const fresh = [];
   let belowThreshold = 0;
+  let offSeries = 0;
   for (const item of discovered) {
     if (known.has(item.phaseGroupId)) continue;
     if (seen.has(item.phaseGroupId)) continue; // de-dupe within this run
+    if (SERIES_PATTERNS.length > 0 && !SERIES_PATTERNS.some(p => p.test(item.name))) {
+      offSeries++;
+      continue;
+    }
     if (typeof item.numEntrants === 'number' && item.numEntrants < MIN_ENTRANTS) {
       belowThreshold++;
       continue;
     }
     seen.add(item.phaseGroupId);
     fresh.push(item);
+  }
+  if (offSeries) {
+    console.log(`Skipped ${offSeries} new event(s) not matching the series allowlist`);
   }
   if (belowThreshold) {
     console.log(`Skipped ${belowThreshold} new event(s) with <${MIN_ENTRANTS} entrants (locals threshold)`);
