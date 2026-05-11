@@ -1230,12 +1230,23 @@ function deriveTonamelPlacements(matches) {
  *   participants_count - number of entrants
  *   matches          - array of { matchId, winner, loser, p1, p1Score, p2, p2Score }
  *                      where p1/p2/winner/loser are Tonamel display names
+ *   participants     - optional array of { name, avatar_url } for avatar capture;
+ *                      name matches the display name used in matches[]
  */
 async function importOneTonamel(payload) {
-  const { tonamel_id, name, series, date, participants_count, matches } = payload;
+  const { tonamel_id, name, series, date, participants_count, matches, participants } = payload;
 
   if (!tonamel_id) throw new Error('tonamel_id is required');
   if (!Array.isArray(matches) || matches.length === 0) throw new Error('matches array is required');
+
+  // Optional participants[] side-channel: { name, avatar_url } per entrant.
+  // Keyed on the display name we'll see in matches[], so resolution is direct.
+  const avatarByName = new Map();
+  if (Array.isArray(participants)) {
+    for (const p of participants) {
+      if (p && p.name && p.avatar_url) avatarByName.set(p.name, p.avatar_url);
+    }
+  }
 
   // ── Derive placements ───────────────────────────────────────────────────────
   const placements = deriveTonamelPlacements(matches);
@@ -1275,14 +1286,16 @@ async function importOneTonamel(payload) {
     // Tonamel sources are JP-only — auto-tag region on insert, fill in if NULL on update.
     // Players who already have a non-NULL region (e.g. someone manually flagged elsewhere)
     // are left alone via COALESCE.
+    const avatarUrl = avatarByName.get(displayName) || null;
     const { rows: [player] } = await db.query(
-      `INSERT INTO players (challonge_username, display_name, region)
-       VALUES ($1, $2, 'JP')
+      `INSERT INTO players (challonge_username, display_name, region, avatar_url)
+       VALUES ($1, $2, 'JP', $3)
        ON CONFLICT (challonge_username) DO UPDATE SET
          display_name = EXCLUDED.display_name,
-         region       = COALESCE(players.region, 'JP')
+         region       = COALESCE(players.region, 'JP'),
+         avatar_url   = COALESCE(players.avatar_url, EXCLUDED.avatar_url)
        RETURNING *`,
-      [username, displayName]
+      [username, displayName, avatarUrl]
     );
     playerMap.set(displayName, player);
   }
@@ -1424,7 +1437,8 @@ async function importOneTonamel(payload) {
 }
 
 // POST /api/tournaments/import-tonamel — import a single Tonamel bracket
-// Body: { tonamel_id, name, series, date, participants_count, matches: [...] }
+// Body: { tonamel_id, name, series, date, participants_count, matches: [...],
+//         participants?: [{ name, avatar_url }, ...] }
 router.post('/import-tonamel', requireAdmin, async (req, res) => {
   try {
     const result = await importOneTonamel(req.body);

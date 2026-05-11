@@ -35,6 +35,13 @@ const IFRAME_HOLD_MS = 1000;   // extra settle time after bracket markers appear
 const MAX_WAIT_MS    = 20000;  // give up looking for bracket markers after this
 const POST_DELAY_MS  = 250;    // breath between backend POSTs
 
+// Re-scrape events that are already in the DB. Use this to backfill avatars
+// (or anything else added to the participants side-channel) onto historical
+// imports without re-running the rest of the pipeline. The backend uses
+// COALESCE on avatar_url, so re-runs only fill NULLs — manually set values
+// stay put.
+const FORCE_RESCRAPE = false;
+
 // ── Series detection ──────────────────────────────────────────────────────────
 function detectSeries(name) {
   const n = name.toLowerCase();
@@ -96,6 +103,30 @@ function parseBracketFromDoc(doc) {
   return matches;
 }
 
+// ── Collect { name → avatar_url } from each matchup card's competitor rows ────
+// Tonamel renders avatars on img.tonamel.com (or *.imageflux.jp) with an
+// ImageFlux transform path:
+//   //<host>/c!/h=200,w=200,a=2,g=5/upload_images/player/<id>/<sha256>.jpg
+// We strip the /c!/<params>/ segment so the stored URL is the raw source and
+// the frontend can choose its own size by re-templating later.
+function parseParticipantsFromDoc(doc) {
+  const out = new Map();
+  const slots = doc.querySelectorAll('.competitor-list .competitor');
+  for (const slot of slots) {
+    const nameEl = slot.querySelector('.entry-name__text');
+    const imgEl  = slot.querySelector('.profile__icon');
+    const name = nameEl?.textContent?.trim();
+    const src  = imgEl?.getAttribute('src') || '';
+    if (!name || !src) continue;
+    // Only keep URLs that look like a real uploaded player avatar; Tonamel's
+    // default placeholder doesn't go through /upload_images/player/.
+    if (!/\/upload_images\/player\//.test(src)) continue;
+    const raw = src.replace(/\/c!\/[^/]+\//, '/');
+    if (!out.has(name)) out.set(name, raw);
+  }
+  return [...out.entries()].map(([name, avatar_url]) => ({ name, avatar_url }));
+}
+
 // ── Hidden-iframe loader: polls for bracket markers, parses, disposes ─────────
 function scrapeViaIframe(url) {
   return new Promise((resolve, reject) => {
@@ -140,7 +171,10 @@ function scrapeViaIframe(url) {
             try {
               const doc2 = iframe.contentDocument;
               if (!doc2 || !doc2.body) throw new Error('iframe lost during settle');
-              finish(parseBracketFromDoc(doc2));
+              finish({
+                matches:      parseBracketFromDoc(doc2),
+                participants: parseParticipantsFromDoc(doc2),
+              });
             } catch (err) {
               finish(null, err);
             }
@@ -150,7 +184,10 @@ function scrapeViaIframe(url) {
           // load failure. Try parsing anyway (returns [] for the caller to
           // skip), so we don't hard-fail the run.
           try {
-            finish(parseBracketFromDoc(doc));
+            finish({
+              matches:      parseBracketFromDoc(doc),
+              participants: parseParticipantsFromDoc(doc),
+            });
           } catch (err) {
             finish(null, err);
           }
@@ -212,9 +249,13 @@ async function runTonamelImport({ skipIds = [] } = {}) {
   const alreadyImported = await getAlreadyImported();
   console.log(`📥 Backend already has ${alreadyImported.size} Tonamel tournaments imported`);
 
-  const skipSet  = new Set([...skipIds, ...alreadyImported]);
+  const skipSet  = new Set([...skipIds, ...(FORCE_RESCRAPE ? [] : alreadyImported)]);
   const toScrape = events.filter(e => !skipSet.has(e.id));
-  console.log(`🎯 ${toScrape.length} new tournaments to scrape`);
+  if (FORCE_RESCRAPE) {
+    console.log(`♻️  FORCE_RESCRAPE on — re-scraping ${toScrape.length} tournaments (backend COALESCE preserves existing data)`);
+  } else {
+    console.log(`🎯 ${toScrape.length} new tournaments to scrape`);
+  }
 
   if (toScrape.length === 0) {
     console.log('✅ Nothing to do — everything is already imported.');
@@ -237,7 +278,7 @@ async function runTonamelImport({ skipIds = [] } = {}) {
     console.log(`⏳ [${i + 1}/${toScrape.length}] ${ev.name} (${ev.id})…`);
     const url = `https://tonamel.com/competition/${ev.id}/tournament`;
     try {
-      const matches = await scrapeViaIframe(url);
+      const { matches, participants } = await scrapeViaIframe(url);
       if (matches.length === 0) {
         console.warn(`   ⚠️  No matches parsed — skipping (likely round-robin or empty bracket)`);
         skipped++;
@@ -250,10 +291,12 @@ async function runTonamelImport({ skipIds = [] } = {}) {
         date:               ev.date,
         participants_count: ev.participants,
         matches,
+        participants,
       });
       alreadyCollected.add(ev.id);
       scraped++;
-      console.log(`   → ${matches.length} matches collected`);
+      const withAvatar = participants.filter(p => p.avatar_url).length;
+      console.log(`   → ${matches.length} matches, ${participants.length} participants (${withAvatar} with avatars)`);
     } catch (err) {
       errored++;
       console.error(`   ❌ Scrape failed: ${err.message}`);
