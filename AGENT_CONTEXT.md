@@ -320,15 +320,9 @@ After deploy, `/tournaments?tab=offline` rendered with blank winner/runner-up co
 
 #### Known imperfections to clean up
 
-1. **`/api/health/challonge` returns `challonge_ok: false`** even though imports work fine. The diagnostic checks `/v2.1/application/tournaments`, which is documented elsewhere in this file as known-broken (requires user OAuth, not client_credentials). False alarm — prod uses v1 API via `CHALLONGE_V1_KEY`. Worth rewriting to hit a v1 endpoint instead.
+1. **`/api/players?region=NA` returns `[]` in prod** — no players have `region='NA'` set. NA/EU region tagging requires manual SQL (only JP is auto-tagged via Tonamel imports). Pre-existing gap, surfaced during smoke test. Could be auto-derived from organizer associations (FFC/RTG-NA/DCM/EOTR → NA; RTG-EU/TCC → EU).
 
-2. **`/api/players?region=NA` returns `[]` in prod** — no players have `region='NA'` set. NA/EU region tagging requires manual SQL (only JP is auto-tagged via Tonamel imports). Pre-existing gap, surfaced during smoke test. Could be auto-derived from organizer associations (FFC/RTG-NA/DCM/EOTR → NA; RTG-EU/TCC → EU).
-
-3. **Junk tournament in the DB: "X-Division Championship".** Imported when I tested the admin gate locally with `challonge_id: "x"` — that slug happens to match a real non-Pokkén tournament. 44 participants, 43 matches. Should be cleaned up; verify cascade across `matches`, `tournament_placements`, `player_achievements` before a raw `DELETE FROM tournaments WHERE challonge_id = 'x'`.
-
-4. **`DEPLOYMENT_RUNBOOK.md` and `DEPLOY_HANDOFF.md` are uncommitted in `.claude/worktrees/elegant-wescoff-f6aa32/`** — exactly the failure mode this file warns about. They guided this session but will vanish on the next harness cleanup. Worth committing to `main` (root or `docs/`) so the deploy story stays findable.
-
-5. **Supabase free-tier pauses after 7 days of inactivity.** The API will 503 until manually unpaused. Either upgrade Supabase or set up a tiny GitHub Action that pings `/api/health` daily.
+2. **Supabase free-tier pauses after 7 days of inactivity.** The API will 503 until manually unpaused. Either upgrade Supabase or set up a tiny GitHub Action that pings `/api/health` daily.
 
 #### Reminders for future agents
 
@@ -425,89 +419,6 @@ mess have been fixed (commit `2423b3c`). Same fixes applied to the parallel
 these, the next bracket-import run would recreate similar duplicates and
 mis-classify any newly-created rows. If you see this section grow back into
 "still open", something has regressed.
-
----
-
-### Current state (as of May 4 2026 — offline placements: parser still dropping tied players, HANDOFF)
-
-#### Symptom
-
-Tournament 554 (Vortex Gallery at Frosty Faustings XVIII) has 24 entrants. Liquipedia's canonical Prize Pool table ties them as 1, 2, 3, 4, 5–6, 7–8, 9–12, 13–16, 17–24. After running the new placements importer (added this session), the DB has 9 rows for the tournament — one per tier, each with a single player — instead of the expected 24 with proper ties:
-
-```
-rank  1  Jukem               ← correct
-rank  2  Shadowcat           ← correct
-rank  3  Jin                 ← correct
-rank  4  Kamaal              ← correct
-rank  5  Virtigris           ← missing pitaguy
-rank  7  Super EpicGuy       ← missing NxD
-rank  9  Oreo                ← missing Mins, Rina the Stampede, Alpha
-rank 13  Oltownbonkrs        ← missing Wes, Son_Dula, Zenkuri
-rank 17  ProdiiJey           ← missing Stars, Santa, GARZON, The Librarian, Juice, Blueshift, Smoothie
-```
-
-The leaked `place 9 to 24` expander row from the first iteration is gone — the regex/anchor filter took care of it. What remains is that every tied tier ends up with exactly one survivor, and not consistently the alphabetically first one. We don't yet know which row of Liquipedia's HTML the parser is actually picking up for those tiers.
-
-#### What's wired up vs broken
-
-Working:
-- `importOneLiquipediaBracket` deletes existing placements before INSERT (no more duplicate rank-1/2 from old buggy parses).
-- `reset_bracket_placements.js` wipes ALL ranks (rank-1/2 included).
-- New backend route `POST /api/tournaments/import-liquipedia-placements` and exported `importOneLiquipediaPlacements` (find-or-create tournament, upsert players with alias resolution, DELETE-then-INSERT placements, refresh per-player offline tier stats).
-- New `liquipedia_import_console.js` flow: per event it fetches BOTH the main page (placements table) AND `/Bracket` (matches), POSTs to both endpoints. Skip cache only applies to the bracket pass.
-- New `reapply_placements_from_matches.js`: derives placements from the matches table when the import path can't be re-run. Caveat below.
-- New `diagnose_tournament.js`: prints tournament row + placements + match summary for one tournament. Use this every time you change something to see actual DB state.
-
-Broken / lossy:
-- The placements scraper in `liquipedia_import_console.js` (`findPlacementRows` / `extractPlayerNames` / `reducePlacements`) returns one player per tied tier and we don't know why. The two failure modes I worked through this session were the `place 9 to 24` expander leak (fixed) and `querySelector('.csstable-widget-cell-content')` returning only the first wrapper (changed to `cells[cells.length - 1]`). Neither change fully solved it.
-- `reapply_placements_from_matches.js` runs the v2 algorithm against the matches table and produces distinct ranks for everyone — it can't reconstruct ties because the legacy bracket parser flattened the bracket structure into sequential round numbers (every match has `bracket_section='winners'`, `round = 1..N` in DOM order). The matches table is genuinely lossy here. Don't expect this script to give canonical placements for legacy-parsed events; it's a fallback.
-#### Why I'm flagging this as a circle
-
-I changed two things that should have moved the needle (anchor filter + last-cell pick) and the symptom is the same shape (one player per tier) with a different "winner" each time, suggesting the parser's row-selection is wrong, not just the cell-selection. Without DOM access (Liquipedia is on the fetch-block list — see the `web_fetch` failure earlier in this thread's history), I'm guessing at the structure.
-
-#### Concrete next steps for whoever picks this up
-
-1. Get the actual HTML. Ask Gabriel to paste the outerHTML of the `.csstable-widget` block from `https://liquipedia.net/fighters/Vortex_Gallery/2026/Frosty_Faustings/PokkenDX` — specifically one tied tier (e.g. `9th-12th`). Or have him add a `console.log(modern.outerHTML.substring(0, 5000))` to `findPlacementRows` and re-run with one event. The selector strategy currently assumes one of two structures; the real DOM may be neither.
-2. Once the DOM is known, the simpler patch may be to switch from fetched HTML + DOMParser to navigating the live tab. If the page renders tied tiers via JS into the live DOM (and Liquipedia uses lazy expanders for `9 to 24`), `fetch()` of the page source won't have what we need. The fix is either (a) navigate the tab to each event URL and read `document` directly, or (b) call Liquipedia's MediaWiki API (`https://liquipedia.net/fighters/api.php?action=parse&page=...&prop=text`) which renders the page server-side.
-3. Hardcoded fallback. `offline_import.js` already has authoritative winner/runner_up per event. Extending its records with a `placements: [{rank, players}]` array and routing that through `importOneLiquipediaPlacements` from the Node.js side eliminates the parser entirely. Tedious for 76 events, but reliable, and makes the "one tournament page is wrong" issue trivially fixable in code review without a live browser. Best for events where the table format is unusual or pre-2020 wiki markup.
-4. Verbose-debug pass. Before next iteration, add a per-tier `console.log` inside `reducePlacements` printing `(rank, players.length, players)` so the next person can immediately see whether the parser is producing one row per tier with N players, or N rows per tier with one player each. The right fix for those two cases is different and we currently can't tell which it is.
-5. After the parser actually works on FF XVIII, re-run `node reset_bracket_placements.js && node offline_import.js`, then paste the console importer with `FORCE_REIMPORT = true`, then `node recalculate_elo.js`. Spot-check via `node diagnose_tournament.js 554`.
-
-#### Files touched this session
-
-- `backend/src/routes/tournaments.js` — DELETE-before-INSERT in `importOneLiquipediaBracket`; new `importOneLiquipediaPlacements` + `POST /api/tournaments/import-liquipedia-placements`.
-- `liquipedia_import_console.js` — added placements scraper (parsePlaceString, extractPlayerNames, findPlacementRows, reducePlacements); main loop now does main-page + /Bracket fetches per event and POSTs to both endpoints.
-- `liquipedia_placements_console.js` — standalone placements-only console script created mid-session before merging into the main one. Redundant; safe to delete with `Remove-Item C:\Users\pitag\Documents\neos-city\liquipedia_placements_console.js`.
-- `reset_bracket_placements.js` — wipes all ranks (not just > 2); doc + console output rewritten to reflect the new workflow.
-- `reapply_placements_from_matches.js` — new repair script that derives placements from the matches table. Useful when the import flow can't be re-run, but produces distinct ranks (no ties) for legacy-parsed brackets.
-- `diagnose_tournament.js` — read-only diagnostic helper. Use whenever you're sanity-checking a single tournament's DB state.
-
----
-
-### Current state (as of May 4 2026 — duplicate offline placements fix)
-
-#### What just shipped this session
-
-Frosty Faustings XVIII (and presumably the other 15 bracket-imported offline events) was rendering with two players at rank 1 (Jukem + Twixxie) and two at rank 2 (Shadowcat + slippingbug). Root cause: the original `reset_bracket_placements.js` preserved rank ≤ 2 on the assumption those rows came from `offline_import.js`, but the buggy pre-v2 bracket parser had ALSO written its own rank-1/rank-2 rows for *different* `player_id`s on the same tournaments. The `(tournament_id, player_id)` upsert had no way to clean those up, so post-reset events kept the duplicates.
-
-Two changes:
-
-1. **`backend/src/routes/tournaments.js`** — `importOneLiquipediaBracket` now `DELETE FROM tournament_placements WHERE tournament_id = $1` immediately before the placement INSERT loop. Bracket data covers every entrant (we just upserted players for every name in `matches[]`), so the delete + insert is a complete repopulation. Future bracket re-imports are now self-cleaning regardless of what was in the table before.
-
-2. **`reset_bracket_placements.js`** — wipes ALL placements on candidate tournaments (rank 1 and 2 included). Header comment, console output, and post-script instructions all updated to reflect the new workflow.
-
-**Run this to actually fix the live data:**
-
-```powershell
-cd C:\Users\pitag\Documents\neos-city
-node reset_bracket_placements.js          # wipes placements for the ~16 bracket-imported offline events
-node offline_import.js                    # restores canonical winner/runner-up for every offline event
-# then in Chrome on liquipedia.net:
-# paste liquipedia_import_console.js with FORCE_REIMPORT = true
-node recalculate_elo.js                   # picks up the corrected placements
-```
-
-Spot-check after: `/tournaments/<id>` for Frosty Faustings XVIII should show one rank-1 (Jukem), one rank-2 (Shadowcat), and the rest of the 24-player bracket distributed across ranks 3–24 with no duplicates.
 
 ---
 
@@ -608,22 +519,6 @@ Four import-pipeline improvements landed. All four files syntax-check; nothing h
 4. **`backend/src/services/challonge.js`** — added `validatePokkenSlugs(slugs, {sleepMs})` and `looksLikePokkenTournament(meta)`. `discoverUserTournaments(username, {pages, validate=true})` runs validation by default. Keyword list checks `game_name` (regex `/pokk[eé]n/i`) and `name` against `pokken|pokkén|ferrum|fighting for cheese|neos|road to greatness|rtg|croissant|dcm|end of the road|eotr|heaven's arena|heavens arena|mouse cup|ねずみ`. 404s rejected, transient errors keep slug defensively. Both helpers exported.
 
 5. **`pull_new.js`** (new file at project root) — one-shot orchestrator. Health-checks `localhost:3001/api/health`, runs `batch_import.js`, prompts about Tonamel/Liquipedia browser-console steps, prompts to run `recalculate_elo.js`, then runs `check_import_status.js`. Subprocesses use `stdio: 'inherit'` so output streams live.
-
-#### IMPORTANT: tournaments.js was truncated mid-edit and surgically repaired
-
-During the preview-dates Edit, the on-disk `backend/src/routes/tournaments.js` was truncated at 1751 lines (73492 bytes), ending mid-template-literal at `... DO UPDATE SET final_`. Most likely cause: Windows lock-screen interrupted I/O through the agent mount, leaving the Edit's last buffered chunk unwritten.
-
-**The repair:** appended 52 lines covering the rest of the `ON CONFLICT` clause, the offline-stats loop, `importOneLiquipediaBracket`'s `return {...}`, the `/import-liquipedia-bracket` route handler, and all five `module.exports` lines. Sourced from the Read tool's pre-truncation cache. Final file is 1803 lines, syntax-clean.
-
-**Backup of the truncated state** is at `backend/src/routes/tournaments.js.before_repair` (1751 lines, ends mid-line). Safe to delete via PowerShell once you've confirmed `importOneLiquipediaBracket` works:
-```powershell
-Remove-Item C:\Users\pitag\Documents\neos-city\backend\src\routes\tournaments.js.before_repair
-```
-
-**How to verify the repair is byte-faithful:** start the backend, POST a Liquipedia bracket payload to `/api/tournaments/import-liquipedia-bracket` (or paste `liquipedia_import_console.js` for any one event you've already imported). If matches and placements come back correct, the function body is fine. If `liquipediaUrl`, `importedMatches`, or `playerMap` ReferenceErrors appear, the reconstruction missed a variable name and the function needs another look.
-
-**Recommendation regardless:** `git init` the project. Loss of byte-level history is what made this scary — a baseline commit would have made `git diff` definitive. ~30 seconds to set up, prevents this category of incident permanently.
-**Update 2026-04-30:** done. See `GIT_WORKFLOW.md`. Any future truncation can now be recovered with `git checkout -- <file>`.
 
 #### Top follow-up: make `/preview-dates` skip already-imported slugs
 
