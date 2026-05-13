@@ -669,27 +669,79 @@ const OFFLINE_WEIGHTS = {
   console.log('\n📤  Writing results back to DB …');
   const t1 = Date.now();
 
-  // ── Clear old computed data ───────────────────────────────────────────
-  // Only elo_history is wiped here — ELO is fully recomputed from scratch
-  // every run, so leftover rows would double-count.
+  // ── Clear old computed data + revoke stale achievements ──────────────
+  // elo_history is wiped wholesale — ELO is recomputed from scratch every
+  // run, so leftover rows would double-count.
   //
-  // player_achievements and achievement_defeated_opponents are NOT wiped:
-  // the INSERTs below use ON CONFLICT (player_id, achievement_id) DO UPDATE
-  // SET unlocked_at = COALESCE(EXCLUDED.unlocked_at, existing). This means:
-  //   - first_seen_at is preserved on existing rows (we never write to it
-  //     in the conflict path), so the "first time we ever saw this unlock"
-  //     timestamp stays stable across recalcs.
-  //   - unlocked_at IS refreshed to the freshly-derived date, so stale
-  //     dates from earlier buggy recalcs (e.g. NOW()-stamped rows from
-  //     before deriveUnlockedAt existed) get corrected on the next run.
-  //   - COALESCE protects a known-good unlocked_at from being clobbered by
-  //     NULL when deriveUnlockedAt couldn't resolve a date this run.
-  //
-  // Trade-off: if a tournament/placement is corrected such that a player
-  // should NO LONGER hold an achievement, the recalc won't auto-revoke it.
-  // Manual cleanup is required for those cases (rare).
+  // player_achievements and achievement_defeated_opponents are pruned to
+  // exactly the freshly-computed Pass 1 + Pass 2 set:
+  //   - Stale rows (placements corrected, alias re-routed a player's
+  //     matches elsewhere, threshold no longer holds) are DELETEd.
+  //   - Surviving rows keep their existing first_seen_at and have their
+  //     unlocked_at re-asserted by the INSERT … ON CONFLICT DO UPDATE
+  //     below. first_seen_at is never written in the conflict path, so
+  //     "first time we ever saw this unlock" stays stable; unlocked_at
+  //     gets refreshed from deriveUnlockedAt (COALESCEd so a NULL date
+  //     this run doesn't clobber a known-good one).
   await db.query(`DELETE FROM elo_history`);
-  console.log('   Cleared elo_history; achievements upserted (first_seen_at preserved, unlocked_at refreshed from deriveUnlockedAt)');
+
+  // Build the authoritative set of (player_id, achievement_id) pairs that
+  // should exist post-recalc, then materialize it as a temp table so the
+  // DELETEs can join against it cheaply.
+  const validAchRows = [];
+  const seenValid = new Set();
+  for (const r of pass1Rows) {
+    const key = `${r.player_id}|${r.achievement_id}`;
+    if (seenValid.has(key)) continue;
+    seenValid.add(key);
+    validAchRows.push([r.player_id, r.achievement_id]);
+  }
+  for (const r of pass2Rows) {
+    const key = `${r.player_id}|${r.achievement_id}`;
+    if (seenValid.has(key)) continue;
+    seenValid.add(key);
+    validAchRows.push([r.player_id, r.achievement_id]);
+  }
+
+  await db.query(`
+    CREATE TEMP TABLE _valid_ach (
+      player_id INTEGER,
+      achievement_id TEXT,
+      PRIMARY KEY (player_id, achievement_id)
+    )
+  `);
+
+  for (let i = 0; i < validAchRows.length; i += CHUNK) {
+    const chunk = validAchRows.slice(i, i + CHUNK);
+    const pids = chunk.map(r => r[0]);
+    const aids = chunk.map(r => r[1]);
+    await db.query(
+      `INSERT INTO _valid_ach (player_id, achievement_id)
+       SELECT unnest($1::int[]), unnest($2::text[])
+       ON CONFLICT DO NOTHING`,
+      [pids, aids]
+    );
+  }
+
+  const { rowCount: revokedAch } = await db.query(`
+    DELETE FROM player_achievements pa
+    WHERE NOT EXISTS (
+      SELECT 1 FROM _valid_ach v
+      WHERE v.player_id = pa.player_id
+        AND v.achievement_id = pa.achievement_id
+    )
+  `);
+  const { rowCount: revokedContrib } = await db.query(`
+    DELETE FROM achievement_defeated_opponents ado
+    WHERE NOT EXISTS (
+      SELECT 1 FROM _valid_ach v
+      WHERE v.player_id = ado.player_id
+        AND v.achievement_id = ado.achievement_id
+    )
+  `);
+  await db.query(`DROP TABLE _valid_ach`);
+
+  console.log(`   Cleared elo_history; revoked ${revokedAch} stale player_achievements + ${revokedContrib} orphaned contributor rows`);
 
   // ── Write ELO history (chunked to avoid param limit) ──────────────────
   const CHUNK = 5000; // ~5 params per row, Postgres limit is 65535 params
