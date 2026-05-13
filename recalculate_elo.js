@@ -669,6 +669,11 @@ const OFFLINE_WEIGHTS = {
   console.log('\n📤  Writing results back to DB …');
   const t1 = Date.now();
 
+  // Chunk size for unnest-based bulk INSERTs — kept under Postgres'
+  // 65535-parameter ceiling. Hoisted up here so the revoke block below
+  // (which predates the elo_history writer) can reuse it.
+  const CHUNK = 5000;
+
   // ── Clear old computed data + revoke stale achievements ──────────────
   // elo_history is wiped wholesale — ELO is recomputed from scratch every
   // run, so leftover rows would double-count.
@@ -744,7 +749,6 @@ const OFFLINE_WEIGHTS = {
   console.log(`   Cleared elo_history; revoked ${revokedAch} stale player_achievements + ${revokedContrib} orphaned contributor rows`);
 
   // ── Write ELO history (chunked to avoid param limit) ──────────────────
-  const CHUNK = 5000; // ~5 params per row, Postgres limit is 65535 params
   let histWritten = 0;
   for (let i = 0; i < allHistoryRows.length; i += CHUNK) {
     const chunk = allHistoryRows.slice(i, i + CHUNK);
