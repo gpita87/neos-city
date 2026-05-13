@@ -163,18 +163,42 @@ export default function PlayerProfile() {
         </div>
       </div>
 
-      {/* Stats row */}
-      <div className="grid grid-cols-2 gap-4">
-        {[
-          { label: 'Match Wins', value: player.total_match_wins },
-          { label: 'Events', value: player.tournaments_entered },
-        ].map(s => (
-          <div key={s.label} className="bg-[#0c1425] border border-[#1a2744] rounded-xl p-4 text-center">
-            <p className="text-2xl font-bold text-white">{s.value}</p>
-            <p className="text-xs text-slate-500 mt-1">{s.label}</p>
+      {/* Recent Tournaments */}
+      {(player.recent_tournaments?.length > 0 || player.tournaments_entered > 0) && (
+        <div className="bg-[#0c1425] border border-[#1a2744] rounded-xl p-5">
+          <div className="flex items-baseline justify-between mb-4">
+            <h2 className="font-display text-sm tracking-widest text-cyan-400">RECENT TOURNAMENTS</h2>
+            <span className="text-xs text-slate-500">
+              <span className="text-white font-bold">{player.tournaments_entered}</span> events total
+            </span>
           </div>
-        ))}
-      </div>
+          <div className="space-y-1.5">
+            {player.recent_tournaments?.map(t => {
+              const badge = SERIES_BADGE[t.series] || { name: t.is_offline ? 'Offline' : 'Online', cls: 'bg-slate-800/40 text-slate-400 border-slate-600/50' };
+              const date = t.completed_at || t.started_at;
+              return (
+                <Link
+                  key={t.id}
+                  to={`/tournaments/${t.id}`}
+                  className="flex items-center gap-3 p-2 rounded-lg hover:bg-white/5 transition-colors"
+                >
+                  <span className={`w-10 text-center text-sm font-bold ${rankTint(t.final_rank)}`}>
+                    {rankLabel(t.final_rank)}
+                  </span>
+                  <span className={`shrink-0 px-2 py-0.5 rounded border text-[10px] font-display tracking-wider ${badge.cls}`}>
+                    {badge.name}
+                  </span>
+                  <span className="flex-1 text-sm text-white truncate">{t.name}</span>
+                  {t.participants_count != null && (
+                    <span className="text-xs text-slate-500 shrink-0">{t.participants_count}p</span>
+                  )}
+                  <span className="text-xs text-slate-600 shrink-0 w-20 text-right">{formatDate(date)}</span>
+                </Link>
+              );
+            })}
+          </div>
+        </div>
+      )}
 
       {/* Offline Stats — per-tier breakdown */}
       {(player.offline_score > 0) && (
@@ -343,38 +367,6 @@ export default function PlayerProfile() {
           </div>
         )}
       </div>
-
-      {/* Recent Tournaments */}
-      {player.recent_tournaments?.length > 0 && (
-        <div className="bg-[#0c1425] border border-[#1a2744] rounded-xl p-5">
-          <h2 className="font-display text-sm tracking-widest text-cyan-400 mb-4">RECENT TOURNAMENTS</h2>
-          <div className="space-y-1.5">
-            {player.recent_tournaments.map(t => {
-              const badge = SERIES_BADGE[t.series] || { name: t.is_offline ? 'Offline' : 'Online', cls: 'bg-slate-800/40 text-slate-400 border-slate-600/50' };
-              const date = t.completed_at || t.started_at;
-              return (
-                <Link
-                  key={t.id}
-                  to={`/tournaments/${t.id}`}
-                  className="flex items-center gap-3 p-2 rounded-lg hover:bg-white/5 transition-colors"
-                >
-                  <span className={`w-10 text-center text-sm font-bold ${rankTint(t.final_rank)}`}>
-                    {rankLabel(t.final_rank)}
-                  </span>
-                  <span className={`shrink-0 px-2 py-0.5 rounded border text-[10px] font-display tracking-wider ${badge.cls}`}>
-                    {badge.name}
-                  </span>
-                  <span className="flex-1 text-sm text-white truncate">{t.name}</span>
-                  {t.participants_count != null && (
-                    <span className="text-xs text-slate-500 shrink-0">{t.participants_count}p</span>
-                  )}
-                  <span className="text-xs text-slate-600 shrink-0 w-20 text-right">{formatDate(date)}</span>
-                </Link>
-              );
-            })}
-          </div>
-        </div>
-      )}
 
       <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
         {/* Head to Head */}
