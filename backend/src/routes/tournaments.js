@@ -1023,12 +1023,24 @@ async function importOneStartgg(phaseGroupId) {
       const winnerId = set.winnerId === p1Slot.entrant.id ? p1.id : p2.id;
 
       // start.gg per-slot game count lives under slot.standing.stats.score.value.
-      // Coerce to int; null when start.gg hasn't reported a numeric score
-      // (some round-robin / unfinished sets leave it null or -1).
+      // Two empty-data shapes to handle:
+      //
+      //   • DQ / forfeit (one side null, other side has a real score)
+      //     The "null side" is the player who got DQ'd / no-showed mid-set.
+      //     Coerce null → 0 so the score reads naturally as "2–0".
+      //
+      //   • Walkover / bye (both sides null)
+      //     start.gg recorded an advancement but no game was actually played.
+      //     Leave both NULL so the UI can render "W/O" — writing 0–0 here
+      //     would be a lie about a played-but-tied set and would mislead the
+      //     game-mode meta achievements (Rival Battle / Foreshadowing) into
+      //     treating it as a real chance to take a game.
       const rawP1 = p1Slot.standing?.stats?.score?.value;
       const rawP2 = p2Slot.standing?.stats?.score?.value;
-      const p1Score = (rawP1 == null || rawP1 < 0) ? null : parseInt(rawP1);
-      const p2Score = (rawP2 == null || rawP2 < 0) ? null : parseInt(rawP2);
+      let p1Score = (rawP1 == null || rawP1 < 0) ? null : parseInt(rawP1);
+      let p2Score = (rawP2 == null || rawP2 < 0) ? null : parseInt(rawP2);
+      if (p1Score != null && p2Score == null) p2Score = 0;
+      if (p2Score != null && p1Score == null) p1Score = 0;
 
       // ON CONFLICT upsert with COALESCE so a re-import fills in NULL scores
       // (e.g. on rows imported before scores were fetched from the GQL query)

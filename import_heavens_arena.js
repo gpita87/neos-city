@@ -22,6 +22,7 @@
 require('dotenv').config({ path: __dirname + '/backend/.env' });
 const { importOneStartgg } = require('./backend/src/routes/tournaments');
 const startgg = require('./backend/src/services/startgg');
+const db = require('./backend/src/db');
 
 // ─────────────────────────────────────────────────────────────────────────────
 // Known events with verified main-bracket phase-group IDs.
@@ -173,7 +174,12 @@ async function main() {
   console.log('');
 }
 
-main().catch(err => {
-  console.error('Fatal:', err);
-  process.exit(1);
-});
+main()
+  .catch(err => {
+    console.error('Fatal:', err);
+    process.exitCode = 1;
+  })
+  // Drain the pg pool — `importOneStartgg` holds open DB connections via
+  // backend/src/db, and without ending the pool Node's event loop won't
+  // exit (the process appears to hang after the summary line).
+  .finally(() => db.end());

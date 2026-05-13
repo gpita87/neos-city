@@ -8,5 +8,8 @@ pool.on('error', (err) => {
 
 module.exports = {
   query: (text, params) => pool.query(text, params),
-  pool
+  pool,
+  // Drain the pool so one-shot scripts can exit. The server itself never
+  // calls this — it wants the pool alive for the process lifetime.
+  end: () => pool.end(),
 };

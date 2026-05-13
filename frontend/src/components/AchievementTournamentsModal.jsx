@@ -294,11 +294,22 @@ export default function AchievementTournamentsModal({ achievement, playerId = nu
                 <ul className="space-y-2">
                   {meta.opponents.map((opp, oidx) => {
                     const t = opp.match?.tournament;
-                    const score = opp.match
-                      ? (opp.match.player1_id === playerId
-                          ? `${opp.match.player1_score}–${opp.match.player2_score}`
-                          : `${opp.match.player2_score}–${opp.match.player1_score}`)
-                      : null;
+                    // Score formatting:
+                    //   - both null  → "W/O"  (walkover / bye / forfeit, no
+                    //                          game played but a winner was
+                    //                          recorded; common in start.gg)
+                    //   - everything else → "my–opp" with my score first
+                    let score = null;
+                    if (opp.match) {
+                      const isP1 = opp.match.player1_id === playerId;
+                      const my  = isP1 ? opp.match.player1_score : opp.match.player2_score;
+                      const opp_ = isP1 ? opp.match.player2_score : opp.match.player1_score;
+                      if (my == null && opp_ == null) {
+                        score = 'W/O';
+                      } else {
+                        score = `${my ?? 0}–${opp_ ?? 0}`;
+                      }
+                    }
                     return (
                       <li
                         key={`opp_${opp.opponent_id ?? oidx}`}
