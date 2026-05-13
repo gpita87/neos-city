@@ -192,6 +192,18 @@ router.get('/:id', async (req, res) => {
     // Meta-achievement progress (8 Badges, Elite Trainer)
     const meta_progress = await computeMetaProgress(player.id, db, achIds);
 
+    // Recent tournaments — most recent placements (online + offline)
+    const { rows: recentTournaments } = await db.query(
+      `SELECT t.id, t.name, t.series, t.is_offline, t.participants_count,
+              t.completed_at, t.started_at, tp.final_rank
+       FROM tournament_placements tp
+       JOIN tournaments t ON tp.tournament_id = t.id
+       WHERE tp.player_id = $1
+       ORDER BY COALESCE(t.completed_at, t.started_at) DESC NULLS LAST, t.id DESC
+       LIMIT 10`,
+      [player.id]
+    );
+
     // Head-to-head summary
     const { rows: h2h } = await db.query(
       `SELECT
@@ -211,6 +223,7 @@ router.get('/:id', async (req, res) => {
     res.json({
       ...player,
       recent_matches: recentMatches,
+      recent_tournaments: recentTournaments,
       elo_history: eloHistory,
       achievements,
       highest_regions,
