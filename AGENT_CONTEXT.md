@@ -41,13 +41,12 @@ This file captures decisions, constraints, and community knowledge that aren't o
 Git worktrees share `.git`, so the harness branch is already visible from `main` as a local ref — Gabriel doesn't need a `git push` / `git fetch` to land it. He merges the local branch directly. The reliable pattern:
 
 1. From the worktree, commit (don't push): `git add -A; git commit -m "<summary>"`.
-2. Before writing the handoff, check whether `main` has moved since this session started. From the worktree:
+2. **Always end the session with a cherry-pick command in your final message — don't wait for Gabriel to ask.** Use the commit SHA (not the branch name), so it stays valid even after the harness branch is gone:
+   ```powershell
+   cd C:\Users\pitag\Documents\neos-city; git cherry-pick <sha>
    ```
-   git log --oneline main ^HEAD
-   ```
-   If empty → `main` is at the worktree's base; suggest `git merge --ff-only claude/<slug>` (one new commit, linear history).
-   If non-empty → `main` has new commits the worktree doesn't have; `--ff-only` will fail. Do `git merge-tree --write-tree HEAD main` to confirm no conflicts, then suggest **`git cherry-pick claude/<slug>`** (clean single commit on top of main) or `git merge --squash claude/<slug>` followed by `git commit` (mirrors what `merge-worktree.js` does for the supported flow). If `merge-tree` produced conflict markers, surface them in the handoff — Gabriel will resolve them in IntelliJ before running the migration.
-3. Only AFTER step 2's merge command does the `node run_migration.js …` / `node recalculate_elo.js` / etc. command appear in your handoff.
+   Cherry-pick is the default regardless of whether `main` has moved. It produces a clean single commit on top of main in both cases, which matches Gabriel's review-in-IntelliJ workflow. Before suggesting it, run `git log --oneline main ^HEAD` and `git merge-tree --write-tree HEAD main` — if `merge-tree` produces conflict markers, surface them in the handoff so Gabriel resolves them in IntelliJ before running any follow-up commands.
+3. Only AFTER step 2's cherry-pick command does the `node run_migration.js …` / `node recalculate_elo.js` / etc. command appear in your handoff.
 
 Mentally check before sending: "is every path I'm about to ask Gabriel to run actually on `main` right now?" If you can't answer yes, the handoff is broken and step 2 is missing.
 
