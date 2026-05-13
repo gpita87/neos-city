@@ -263,18 +263,25 @@ async function importOne(challonge_id) {
       const chalId = String(p.id || attrs.id);
       let username = (attrs.challonge_username || attrs.name || `player_${chalId}`).toLowerCase();
       username = await resolveAlias(username);
+      // Only the v1 API's challonge_username field is a real profile URL slug.
+      // attrs.name is a display-name fallback for guest entries and must not
+      // pollute this column.
+      const profileSlug = attrs.challonge_username
+        ? await resolveAlias(String(attrs.challonge_username).toLowerCase())
+        : null;
       const displayName = attrs.display_name || attrs.name || username;
       const finalRank = attrs.final_rank || attrs.final_rank_or_null || null;
       const avatarUrl = attrs.attached_participatable_portrait_url || null;
 
       const { rows: [player] } = await db.query(
-        `INSERT INTO players (challonge_username, display_name, avatar_url)
-         VALUES ($1, $2, $3)
+        `INSERT INTO players (challonge_username, display_name, avatar_url, challonge_profile_slug)
+         VALUES ($1, $2, $3, $4)
          ON CONFLICT (challonge_username) DO UPDATE SET
            display_name = EXCLUDED.display_name,
-           avatar_url = COALESCE(EXCLUDED.avatar_url, players.avatar_url)
+           avatar_url = COALESCE(EXCLUDED.avatar_url, players.avatar_url),
+           challonge_profile_slug = COALESCE(EXCLUDED.challonge_profile_slug, players.challonge_profile_slug)
          RETURNING *`,
-        [username, displayName, avatarUrl]
+        [username, displayName, avatarUrl, profileSlug]
       );
 
       playerMap.set(chalId, { ...player, finalRank: finalRank ? parseInt(finalRank) : null });
