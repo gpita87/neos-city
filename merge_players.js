@@ -91,14 +91,35 @@ async function merge() {
     const r6 = await client.query(`UPDATE player_achievements SET player_id = $1 WHERE player_id = $2`, [canonId, oldId]);
     console.log(`  player_achievements: ${r6.rowCount} rows moved`);
 
-    // 6. Merge defeated opponents tracking
+    // 6. Merge defeated opponents tracking.
+    // PK = (player_id, achievement_id, opponent_id). Both columns can collide
+    // during the merge, so dedup on the full conflict key before each UPDATE
+    // and clean self-rows after. (Earlier versions of this block keyed only
+    // on opponent_id, which both over-deleted on the first step and missed
+    // collisions on the second — triggering PK violations on opponent_id
+    // rewrite. See link_offline_player.js for the parallel logic.)
     await client.query(`
       DELETE FROM achievement_defeated_opponents
       WHERE player_id = $1
-        AND opponent_id IN (SELECT opponent_id FROM achievement_defeated_opponents WHERE player_id = $2)
+        AND (achievement_id, opponent_id) IN (
+          SELECT achievement_id, opponent_id
+          FROM achievement_defeated_opponents WHERE player_id = $2
+        )
     `, [oldId, canonId]);
-    await client.query(`UPDATE achievement_defeated_opponents SET player_id = $1 WHERE player_id = $2`, [canonId, oldId]);
+    await client.query(`UPDATE achievement_defeated_opponents SET player_id  = $1 WHERE player_id  = $2`, [canonId, oldId]);
+    await client.query(`
+      DELETE FROM achievement_defeated_opponents
+      WHERE opponent_id = $1
+        AND (player_id, achievement_id) IN (
+          SELECT player_id, achievement_id
+          FROM achievement_defeated_opponents WHERE opponent_id = $2
+        )
+    `, [oldId, canonId]);
     await client.query(`UPDATE achievement_defeated_opponents SET opponent_id = $1 WHERE opponent_id = $2`, [canonId, oldId]);
+    await client.query(
+      `DELETE FROM achievement_defeated_opponents WHERE player_id = $1 AND opponent_id = $1`,
+      [canonId]
+    );
 
     // 7. Delete old player record
     await client.query(`DELETE FROM players WHERE id = $1`, [oldId]);
