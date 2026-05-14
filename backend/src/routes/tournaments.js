@@ -975,11 +975,29 @@ async function importOneStartgg(phaseGroupId) {
     }
 
     for (const [entrantId, entrantName] of allEntrants) {
-      // Use lowercased display name as the unique key, same as Challonge does.
-      // This naturally merges players who compete on both platforms under the same handle.
-      let username    = entrantName.toLowerCase().replace(/\s+/g, '_');
+      // start.gg doesn't expose the entrant's Challonge slug. Synthesize one
+      // from the display name as a fallback key, then dedupe against any
+      // existing player row that has the same display_name under a different
+      // challonge_username — that prevents start.gg events from manufacturing
+      // a "<name>_lower" duplicate of a player who already exists under their
+      // real Challonge slug.
+      let username = entrantName.toLowerCase().replace(/\s+/g, '_');
       username = await resolveAlias(username);
       const displayName = entrantName;
+
+      const { rows: existing } = await db.query(
+        `SELECT challonge_username FROM players
+         WHERE LOWER(display_name) = LOWER($1)
+           AND challonge_username != $2
+         ORDER BY
+           CASE WHEN challonge_profile_slug IS NOT NULL THEN 0 ELSE 1 END,
+           id ASC
+         LIMIT 1`,
+        [displayName, username]
+      );
+      if (existing.length > 0) {
+        username = existing[0].challonge_username;
+      }
 
       const { rows: [player] } = await db.query(
         `INSERT INTO players (challonge_username, display_name)
