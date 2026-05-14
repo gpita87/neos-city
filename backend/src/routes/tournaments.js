@@ -260,6 +260,12 @@ async function importOne(challonge_id) {
     const participantList = participantsData.data || participantsData.participants || participantsData;
     const playerMap = new Map(); // challonge participant id (string) → our player row
 
+    // Region auto-tag by series. Mirrors the JP auto-tag in importOneTonamel:
+    // tag on insert, COALESCE on conflict so a manually-set region is preserved.
+    // Currently only RTG NA — extend SERIES_REGION as more series get scoped.
+    const SERIES_REGION = { rtg_na: 'NA' };
+    const autoRegion = SERIES_REGION[series] || null;
+
     for (const p of participantList) {
       const attrs = p.attributes || p.participant || p;
       const chalId = String(p.id || attrs.id);
@@ -276,16 +282,17 @@ async function importOne(challonge_id) {
       const avatarUrl = attrs.attached_participatable_portrait_url || null;
 
       const { rows: [player] } = await db.query(
-        `INSERT INTO players (challonge_username, display_name, avatar_url, challonge_profile_slug)
-         VALUES ($1, $2, $3, $4)
+        `INSERT INTO players (challonge_username, display_name, avatar_url, challonge_profile_slug, region)
+         VALUES ($1, $2, $3, $4, $5)
          ON CONFLICT (challonge_username) DO UPDATE SET
            display_name = CASE WHEN players.display_name_locked
                                THEN players.display_name
                                ELSE EXCLUDED.display_name END,
            avatar_url = COALESCE(EXCLUDED.avatar_url, players.avatar_url),
-           challonge_profile_slug = COALESCE(EXCLUDED.challonge_profile_slug, players.challonge_profile_slug)
+           challonge_profile_slug = COALESCE(EXCLUDED.challonge_profile_slug, players.challonge_profile_slug),
+           region = COALESCE(players.region, EXCLUDED.region)
          RETURNING *`,
-        [username, displayName, avatarUrl, profileSlug]
+        [username, displayName, avatarUrl, profileSlug, autoRegion]
       );
 
       playerMap.set(chalId, { ...player, finalRank: finalRank ? parseInt(finalRank) : null });
