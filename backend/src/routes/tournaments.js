@@ -197,22 +197,24 @@ async function importOne(challonge_id) {
       return { skipped: true, reason: 'no_completed_matches', name: tournamentName, challonge_id };
     }
 
-    // Challonge stamps participants with `final_rank` only after the organizer
-    // hits "Finalize". RTG (and others) routinely sit on a fully-played bracket
-    // for days while they stream the top-N reveal, so a non-finalized state is
-    // legitimate and we want to display what we know. When no participant has
-    // a final_rank yet we treat the tournament as PARTIAL: derive placements
-    // for eliminated players from match data, leave still-alive players with
-    // final_rank=NULL, and flag the row `is_partial=TRUE` so the UI can label
-    // it accordingly. ELO placement bonuses, per-player stat updates and
-    // achievement triggers are skipped on partial imports — a subsequent
-    // re-import (after finalize) refreshes everything cleanly.
-    const participantListPreview = participantsData.data || participantsData.participants || participantsData;
-    const anyFinalRank = participantListPreview.some(p => {
-      const attrs = p.attributes || p.participant || p;
-      return attrs.final_rank != null;
-    });
-    const isPartial = !anyFinalRank;
+    // Challonge sets `state='complete'` AND stamps tournament-level
+    // `completed_at` only when the organizer hits "Finalize Tournament".
+    // Until then, even a fully-played bracket sits in 'underway' or
+    // 'awaiting_review'. We can't infer finalization from participants'
+    // `final_rank`: eliminated players get a final_rank as soon as they
+    // take their last loss, so even a one-round-in bracket has non-null
+    // final_ranks. Trusting that as the finalize signal caused partial
+    // brackets (e.g. RTG's stream-the-top-N gap) to be stamped with
+    // completed_at and then permanently skipped by the batch-import
+    // dedupe — matches added afterward never got pulled in.
+    //
+    // Partial imports derive placements for eliminated players from the
+    // match graph, leave still-alive players at final_rank=NULL, and set
+    // `is_partial=TRUE`. ELO placement bonuses, per-player stat updates
+    // and achievement triggers are skipped on partial imports — a
+    // subsequent re-import (after finalize) refreshes everything cleanly.
+    const isFinalized = t.state === 'complete' && t.completed_at != null;
+    const isPartial = !isFinalized;
     if (isPartial) {
       console.log(`   ⚠️  Partial import "${tournamentName}" (${challonge_id}): top placements unrevealed on Challonge`);
     }
@@ -495,13 +497,18 @@ router.post('/batch-import', requireAdmin, async (req, res) => {
     return res.status(400).json({ error: 'No valid slugs found in urls' });
   }
 
-  // Check which slugs are already in the DB. Only fully-imported rows
-  // (completed_at not null) are skipped — slugs whose existing row has
-  // NULL completed_at are unfinalized stubs from a prior pre-finalize
-  // import, and we want to retry them so the next pull_new can refresh
-  // them once Challonge stamps the bracket.
+  // Check which slugs are already in the DB. Skip only fully-finalized
+  // rows. Two kinds of "not done" must remain eligible for re-import:
+  //   - NULL completed_at: unfinalized stub from a prior pre-finalize
+  //     import (no matches were complete yet).
+  //   - is_partial=TRUE: bracket has matches but Challonge hasn't been
+  //     finalized yet (RTG holds top-N for stream reveal; players still
+  //     playing losers-bracket finals when import happened). The next
+  //     pull_new must re-fetch so newly-played matches land.
   const { rows: existing } = await db.query(
-    `SELECT challonge_id FROM tournaments WHERE completed_at IS NOT NULL`
+    `SELECT challonge_id FROM tournaments
+      WHERE completed_at IS NOT NULL
+        AND COALESCE(is_partial, FALSE) = FALSE`
   );
   const existingIds = new Set(existing.map(r => r.challonge_id));
 
