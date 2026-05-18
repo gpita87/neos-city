@@ -5,7 +5,9 @@
 //
 // Replaces the multi-step manual import workflow with a single command:
 //   1. Verify the backend is reachable.
-//   2. Optionally refresh harvested_tournaments.txt via harvest_new.js.
+//   2. Optionally refresh harvested_tournaments.txt via harvest_new.js
+//      (Node), harvest_console.js (browser fallback for Challonge's 403
+//      block), and harvest_startgg.js.
 //   3. Run batch_import.js (Challonge + start.gg, date-sorted).
 //   4. Prompt for any browser-console steps the user still needs to do
 //      (Tonamel and Liquipedia brackets - those need a real Chrome session).
@@ -112,10 +114,14 @@ function banner(title) {
 
   // 2. Optionally refresh harvested_tournaments.txt with new URLs from organizer pages
   console.log('\nStep 2/7: Refresh harvested_tournaments.txt');
-  console.log('  - harvest_new.js     walks each Pokken organizer\'s Challonge profile');
-  console.log('  - harvest_startgg.js queries start.gg for past Pokken (videogameId 447) tournaments');
-  console.log('  Both append newly-discovered URLs to harvested_tournaments.txt.');
-  const harvestAnswer = await ask('  Run both harvest scripts now? (Y/n): ');
+  console.log('  Three harvesters can append new URLs to the file:');
+  console.log('    - harvest_new.js          Node-based scrape of Challonge organizer profiles');
+  console.log('                              (currently 403-blocked by Challonge — usually returns 0)');
+  console.log('    - harvest_console.js      Browser fallback for the above — paste into Chrome');
+  console.log('                              DevTools on challonge.com, uses your session cookies');
+  console.log('                              to bypass the 403. Walks all 7 organizers in one go.');
+  console.log('    - harvest_startgg.js      start.gg GraphQL query for past Pokken tournaments');
+  const harvestAnswer = await ask('  Run all three harvest steps now? (Y/n): ');
   if (harvestAnswer === 'n' || harvestAnswer === 'no') {
     console.log('  Skipping harvest. Importing only URLs already in the file.');
   } else {
@@ -123,9 +129,18 @@ function banner(title) {
       await runScript('harvest_new.js');
     } catch (err) {
       console.error(`\n  harvest_new.js failed: ${err.message}`);
-      const cont = await ask('  Continue with start.gg harvest + import? (Y/n): ');
-      if (cont === 'n' || cont === 'no') process.exit(1);
     }
+
+    // Always offer the browser-console harvest. The Node scrape is almost
+    // always 0-result due to the 403, and asking Y/n is cheap. If the user
+    // hits n, the pipeline continues.
+    await offerConsoleImport({
+      label:     'Challonge profiles',
+      script:    'harvest_console.js',
+      targetUrl: 'https://challonge.com/tournaments',
+      blurb:     'Browser-side scrape of all 7 organizer profiles (rigz_, shean96, wise_, rickythe3rd, __chepestoopid, devlinhartfgc, __auradiance). Bypasses the Node 403.',
+    });
+
     try {
       await runScript('harvest_startgg.js');
     } catch (err) {
