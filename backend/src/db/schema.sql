@@ -6,6 +6,10 @@ CREATE TABLE IF NOT EXISTS players (
   id                          SERIAL PRIMARY KEY,
   challonge_username          TEXT UNIQUE NOT NULL,
   display_name                TEXT NOT NULL,
+  -- When TRUE, importers skip display_name on ON CONFLICT DO UPDATE so
+  -- manual renames via set_display_name.js don't regress. See
+  -- backend/src/db/migrations/add_display_name_locked.sql.
+  display_name_locked         BOOLEAN NOT NULL DEFAULT FALSE,
   elo_rating                  INTEGER NOT NULL DEFAULT 1200,
   peak_elo                    INTEGER NOT NULL DEFAULT 1200,
   games_played                INTEGER NOT NULL DEFAULT 0,

@@ -279,7 +279,9 @@ async function importOne(challonge_id) {
         `INSERT INTO players (challonge_username, display_name, avatar_url, challonge_profile_slug)
          VALUES ($1, $2, $3, $4)
          ON CONFLICT (challonge_username) DO UPDATE SET
-           display_name = EXCLUDED.display_name,
+           display_name = CASE WHEN players.display_name_locked
+                               THEN players.display_name
+                               ELSE EXCLUDED.display_name END,
            avatar_url = COALESCE(EXCLUDED.avatar_url, players.avatar_url),
            challonge_profile_slug = COALESCE(EXCLUDED.challonge_profile_slug, players.challonge_profile_slug)
          RETURNING *`,
@@ -1010,7 +1012,9 @@ async function importOneStartgg(phaseGroupId) {
         `INSERT INTO players (challonge_username, display_name)
          VALUES ($1, $2)
          ON CONFLICT (challonge_username) DO UPDATE SET
-           display_name = EXCLUDED.display_name
+           display_name = CASE WHEN players.display_name_locked
+                               THEN players.display_name
+                               ELSE EXCLUDED.display_name END
          RETURNING *`,
         [username, displayName]
       );
@@ -1499,7 +1503,9 @@ async function importOneTonamel(payload) {
       `INSERT INTO players (challonge_username, display_name, region, avatar_url)
        VALUES ($1, $2, 'JP', $3)
        ON CONFLICT (challonge_username) DO UPDATE SET
-         display_name = EXCLUDED.display_name,
+         display_name = CASE WHEN players.display_name_locked
+                             THEN players.display_name
+                             ELSE EXCLUDED.display_name END,
          region       = COALESCE(players.region, 'JP'),
          avatar_url   = COALESCE(players.avatar_url, EXCLUDED.avatar_url)
        RETURNING *`,
