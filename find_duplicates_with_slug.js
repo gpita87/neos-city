@@ -1,8 +1,8 @@
 #!/usr/bin/env node
 /**
  * find_duplicates_with_slug.js — Surface duplicate-player candidates using
- * three deterministic SQL queries, with canonical-direction suggestions
- * based on `players.challonge_profile_slug`.
+ * four queries, with canonical-direction suggestions based on
+ * `players.challonge_profile_slug`.
  *
  * Background
  * ----------
@@ -32,8 +32,14 @@
  *            from challonge_username. Authoritative mismatch — only
  *            meaningful once the backfill has run.
  *
- * Canonical-direction rules (per pair, Query 1)
- * ---------------------------------------------
+ *   Query 4: Fuzzy handle-overlap pairs (normalized-handle match +
+ *            prefix/suffix overlap). Catches princessknight/princessknight9-
+ *            style duplicates where display names DIFFER but the handle
+ *            structure suggests one human. Pairs already surfaced in
+ *            Query 1 are filtered out so this view is purely additive.
+ *
+ * Canonical-direction rules (Queries 1 and 4)
+ * -------------------------------------------
  *   - Exactly one row has non-NULL challonge_profile_slug → that row is canonical.
  *   - Neither does → flag for manual verification (open both Challonge URLs).
  *   - Both do, same value → both confirm the same human; pick whichever row's
@@ -44,14 +50,21 @@
  * Read-only — never invokes merge_players.js.
  *
  * Usage:
- *   node find_duplicates_with_slug.js          # human-readable report
- *   node find_duplicates_with_slug.js --json   # raw JSON for piping
+ *   node find_duplicates_with_slug.js               # human-readable report
+ *   node find_duplicates_with_slug.js --json        # raw JSON for piping
+ *   node find_duplicates_with_slug.js --q4-limit N  # cap Query 4 rows (default 80)
  */
 
 require('dotenv').config({ path: require('path').join(__dirname, 'backend', '.env') });
 const { Pool } = require('pg');
 
-const AS_JSON = process.argv.includes('--json');
+const args = process.argv.slice(2);
+const AS_JSON = args.includes('--json');
+const Q4_LIMIT = (() => {
+  const i = args.indexOf('--q4-limit');
+  const v = i !== -1 ? parseInt(args[i + 1], 10) : NaN;
+  return Number.isFinite(v) && v > 0 ? v : 80;
+})();
 const APP_BASE = 'https://www.neos-city.com';
 const CHALLONGE_BASE = 'https://challonge.com/users';
 
@@ -86,6 +99,83 @@ function canonicalChoice(a, b) {
   }
   return { keep: null, drop: null, confidence: 'MANUAL',
     reason: 'Neither row has a confirmed Challonge profile slug. Open both Challonge URLs in a browser; the row whose URL resolves to a real profile is canonical.' };
+}
+
+// Alphanumerics-only lowercase, for handle comparison. "TEC_XX" → "tecxx",
+// "princess_knight!" → "princessknight". Mirrors the same helper in
+// find_duplicate_players.js so Q4 here surfaces the same pairs.
+function normHandle(s) {
+  return String(s || '').toLowerCase().replace(/[^a-z0-9]+/g, '');
+}
+
+// Returns pair objects {a, b, heuristic} for the fuzzy-handle duplicate
+// classes from find_duplicate_players.js:
+//   - Normalized handle match (same alphanumerics, different keys)
+//   - Prefix or suffix overlap of ≥3 chars on the normalized handle
+// Edit-distance heuristics are intentionally NOT ported — they produce
+// a lot of low-signal pairs that don't benefit from the slug tiebreaker.
+function findFuzzyPairs(players) {
+  const seen = new Set();
+  const pairKey = (a, b) => {
+    const [x, y] = a.id < b.id ? [a, b] : [b, a];
+    return `${x.id}-${y.id}`;
+  };
+  const out = [];
+  const addPair = (a, b, heuristic) => {
+    if (a.id === b.id) return;
+    const k = pairKey(a, b);
+    if (seen.has(k)) return;
+    seen.add(k);
+    out.push({ a, b, heuristic });
+  };
+
+  // 1. Normalized handle match
+  const byNorm = new Map();
+  for (const p of players) {
+    const n = normHandle(p.challonge_username);
+    if (n.length < 2) continue;
+    if (!byNorm.has(n)) byNorm.set(n, []);
+    byNorm.get(n).push(p);
+  }
+  for (const group of byNorm.values()) {
+    if (group.length < 2) continue;
+    for (let i = 0; i < group.length; i++) {
+      for (let j = i + 1; j < group.length; j++) {
+        if (group[i].challonge_username !== group[j].challonge_username) {
+          addPair(group[i], group[j], 'normalized handle match');
+        }
+      }
+    }
+  }
+
+  // 2. Prefix/suffix overlap (≥3 chars in the overlap segment)
+  const buckets = new Map();
+  const bucket = (k, p) => {
+    if (!buckets.has(k)) buckets.set(k, []);
+    buckets.get(k).push(p);
+  };
+  for (const p of players) {
+    const n = normHandle(p.challonge_username);
+    if (n.length < 3) continue;
+    bucket('p:' + n.slice(0, 3), p);
+    bucket('s:' + n.slice(-3), p);
+  }
+  for (const group of buckets.values()) {
+    for (let i = 0; i < group.length; i++) {
+      const a = normHandle(group[i].challonge_username);
+      for (let j = i + 1; j < group.length; j++) {
+        const b = normHandle(group[j].challonge_username);
+        if (a === b) continue;
+        const minLen = Math.min(a.length, b.length);
+        if (minLen < 3) continue;
+        if (a.startsWith(b) || b.startsWith(a) || a.endsWith(b) || b.endsWith(a)) {
+          addPair(group[i], group[j], 'prefix/suffix overlap');
+        }
+      }
+    }
+  }
+
+  return out;
 }
 
 const pool = new Pool({ connectionString: process.env.DATABASE_URL });
@@ -125,8 +215,51 @@ async function main() {
     ORDER BY challonge_username
   `);
 
+  // ── QUERY 4: fuzzy handle overlap (additive on top of Query 1) ──────────
+  // Pull every player with activity, run the JS-side fuzzy heuristic, then
+  // drop pairs that Query 1 already surfaced so the section is purely
+  // additive. Excluded handles in `player_aliases` are skipped — those have
+  // a prior canonical decision in the DB.
+  const { rows: activePlayers } = await pool.query(`
+    SELECT p.id, p.challonge_username, p.display_name, p.challonge_profile_slug,
+           COALESCE((SELECT COUNT(*)::int FROM tournament_placements WHERE player_id = p.id), 0) AS placements
+    FROM players p
+    WHERE EXISTS (SELECT 1 FROM tournament_placements WHERE player_id = p.id)
+       OR EXISTS (SELECT 1 FROM matches WHERE player1_id = p.id OR player2_id = p.id)
+  `);
+  let aliased = new Set();
+  try {
+    const { rows } = await pool.query(`SELECT alias_username FROM player_aliases`);
+    aliased = new Set(rows.map(r => r.alias_username));
+  } catch { /* player_aliases is optional; safe to skip */ }
+  const eligible = activePlayers.filter(p => p.challonge_username && !aliased.has(p.challonge_username));
+
+  const q1Keys = new Set(pairs.map(r => {
+    const lo = Math.min(r.a_id, r.b_id);
+    const hi = Math.max(r.a_id, r.b_id);
+    return `${lo}-${hi}`;
+  }));
+  const fuzzyAll = findFuzzyPairs(eligible).filter(({ a, b }) => {
+    const lo = Math.min(a.id, b.id);
+    const hi = Math.max(a.id, b.id);
+    return !q1Keys.has(`${lo}-${hi}`);
+  });
+  // HIGH-confidence pairs first (slug evidence settles direction), then by
+  // combined placement activity descending so eyeballs land on the cases
+  // worth your time.
+  fuzzyAll.sort((x, y) => {
+    const xc = canonicalChoice(x.a, x.b).confidence;
+    const yc = canonicalChoice(y.a, y.b).confidence;
+    if (xc !== yc) return xc === 'HIGH' ? -1 : 1;
+    const xa = (x.a.placements || 0) + (x.b.placements || 0);
+    const ya = (y.a.placements || 0) + (y.b.placements || 0);
+    return ya - xa;
+  });
+  const fuzzy = fuzzyAll.slice(0, Q4_LIMIT);
+  const fuzzyHidden = fuzzyAll.length - fuzzy.length;
+
   if (AS_JSON) {
-    console.log(JSON.stringify({ pairs, fallback, mismatch }, null, 2));
+    console.log(JSON.stringify({ pairs, fallback, mismatch, fuzzy, fuzzy_total: fuzzyAll.length }, null, 2));
     await pool.end();
     return;
   }
@@ -135,6 +268,7 @@ async function main() {
   console.log(`Query 1: ${pairs.length} duplicate-display-name pair(s).`);
   console.log(`Query 2: ${fallback.length} likely fallback-derived row(s) (handle = slugify(display_name), no profile slug).`);
   console.log(`Query 3: ${mismatch.length} confirmed slug-mismatch row(s).`);
+  console.log(`Query 4: ${fuzzyAll.length} fuzzy-handle pair(s) not already in Query 1 (showing top ${fuzzy.length}).`);
   console.log('');
 
   // ── Report Query 1 ──────────────────────────────────────────────────────
@@ -208,6 +342,45 @@ async function main() {
       console.log(`    app:  ${appUrl(r.id)}`);
       console.log(`    real: ${chalUrl(r.challonge_profile_slug)}`);
     }
+  }
+
+  // ── Report Query 4 ──────────────────────────────────────────────────────
+  console.log('');
+  console.log('═'.repeat(110));
+  console.log(' QUERY 4 — Fuzzy handle overlap (normalized match + prefix/suffix overlap)');
+  console.log('═'.repeat(110));
+  console.log(' Display names DIFFER (otherwise the pair would be in Query 1), but the handle');
+  console.log(' structure suggests one human. HIGH = slug evidence picks a direction; MANUAL =');
+  console.log(' neither side has slug evidence, browser-verify before merging.');
+  console.log('');
+
+  if (fuzzy.length === 0) {
+    console.log('  None.');
+  }
+
+  for (const { a, b, heuristic } of fuzzy) {
+    const choice = canonicalChoice(a, b);
+    console.log('');
+    console.log(`@${a.challonge_username} ↔ @${b.challonge_username}   [${choice.confidence}]  (${heuristic})`);
+    for (const row of [a, b]) {
+      const slug = row.challonge_profile_slug ? `slug="${row.challonge_profile_slug}"` : 'slug=NULL';
+      console.log(`  id=${String(row.id).padStart(5)}  @${row.challonge_username.padEnd(30)}  ${slug.padEnd(34)}  "${row.display_name}"  placements=${row.placements}`);
+      console.log(`    app:  ${appUrl(row.id)}`);
+      console.log(`    chal: ${chalUrl(row.challonge_username)}`);
+    }
+    console.log(`  ${choice.reason}`);
+    if (choice.keep) {
+      console.log(`  Suggest: node merge_players.js ${choice.drop.challonge_username} ${choice.keep.challonge_username}`);
+    } else {
+      console.log(`  Verify both Challonge URLs above. Then run one of:`);
+      console.log(`    node merge_players.js ${b.challonge_username} ${a.challonge_username}`);
+      console.log(`    node merge_players.js ${a.challonge_username} ${b.challonge_username}`);
+    }
+  }
+
+  if (fuzzyHidden > 0) {
+    console.log('');
+    console.log(`  (${fuzzyHidden} more pair(s) hidden — re-run with --q4-limit ${fuzzyAll.length} to see all.)`);
   }
   console.log('');
 
