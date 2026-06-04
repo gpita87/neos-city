@@ -71,14 +71,26 @@ const TZ_ABBR = (() => {
 const SERIES_SCHEDULES = [
   // FFC: Sundays at 11am PDT (18:00 UTC during DST)
   { series: 'ffc',        dayOfWeek: 0, weekInterval: 1, hour: 18, minute: 0,  anchorDate: '2026-04-26' },
-  { series: 'rtg_na',     dayOfWeek: 6, weekInterval: 1, hour: 20, minute: 0,  anchorDate: '2026-03-07' },
-  { series: 'dcm',        dayOfWeek: 6, weekInterval: 4, hour: 20, minute: 0,  anchorDate: '2026-03-07' },
+  // RTG NA: weekly Saturday at 7pm Eastern = 23:00 UTC during DST. Confirmed by
+  // real event start times (all 23:00:xx UTC Saturday, e.g. #209 2026-05-23, #208
+  // 2026-05-16). The hour MUST match the real events' UTC time, otherwise viewers
+  // east of ~UTC+1 see the placeholder a day earlier than the real result (the
+  // real 23:00 UTC event tips into Sunday local while a 20:00 UTC placeholder
+  // stays on Saturday). Per the DST TODO above, this drifts to 00:00 UTC Sunday in
+  // standard time — older pre-DST events are recorded that way.
+  { series: 'rtg_na',     dayOfWeek: 6, weekInterval: 1, hour: 23, minute: 0,  anchorDate: '2026-05-23' },
+  // DCM: no recurring placeholder. Real Pokkén DCM events run Sat ~01:00-02:00 UTC
+  // but the cadence is too irregular to predict (#34 Sep 2025, #35 Nov, #36 Feb 2026
+  // — roughly every 2-3 months), so we only render the real past events, no guess.
   // TCC: biweekly Saturday at 8am PDT / 7am PST (15:00 UTC year-round). Confirmed dates: 2-14 (7am PST), 2-28 (7am PST), 3-14 (8am PDT), 3-28 (8am PDT)
   { series: 'tcc',        dayOfWeek: 6, weekInterval: 2, hour: 15, minute: 0,  anchorDate: '2026-03-28' },
   // Nezumi (Mouse Cup): 3rd Saturday of each month at 8pm JST (= 11:00 UTC year-round, since JP doesn't observe DST). That's 4am PDT / 3am PST. Confirmed dates: 2/21, 3/21, 4/18.
   { series: 'nezumi',     kind: 'monthlyNth', nth: 3, dayOfWeek: 6, hour: 11, minute: 0,  anchorDate: '2026-04-18' },
-  // Heaven's Arena: Tuesdays at 4pm PDT (23:00 UTC during DST). Per the DST TODO above, the UTC hour will need a -1 shift in standard time if HA stays at 4pm wall-clock PT year-round.
-  { series: 'ha',         dayOfWeek: 2, weekInterval: 1, hour: 23, minute: 0,  anchorDate: '2026-05-05' },
+  // Heaven's Arena: BIWEEKLY Tuesdays at 4pm PDT (23:00 UTC during DST). Confirmed
+  // by real events 14 days apart (e.g. #32 2026-05-19, #31 2026-05-05, #30 2026-04-14).
+  // Per the DST TODO above, the UTC hour will need a -1 shift in standard time if HA
+  // stays at 4pm wall-clock PT year-round (pre-DST events recorded as Wed 00:00 UTC).
+  { series: 'ha',         dayOfWeek: 2, weekInterval: 2, hour: 23, minute: 0,  anchorDate: '2026-05-19' },
   // EOTR (End of the Road): quarterly Saturday at the same UTC slot as RTG NA.
   // EOTR replaces the RTG NA event that week, so `replaces: ['rtg_na']` suppresses
   // the RTG NA placeholder on EOTR dates. Cadence drifts between ~12 and ~13 weeks
@@ -86,7 +98,7 @@ const SERIES_SCHEDULES = [
   // when a real EOTR lands off-schedule the runtime detection below (see
   // `useEffect` in the Calendar component) logs a console.warn naming the new
   // anchor. Bump `anchorDate` here to the latest event after the warning fires.
-  { series: 'eotr',       dayOfWeek: 6, weekInterval: 13, hour: 20, minute: 0, anchorDate: '2026-03-14', replaces: ['rtg_na'] },
+  { series: 'eotr',       dayOfWeek: 6, weekInterval: 13, hour: 23, minute: 0, anchorDate: '2026-03-14', replaces: ['rtg_na'] },
 ];
 
 /* ── Helpers ────────────────────────────────────────────────────────── */
@@ -537,14 +549,19 @@ export default function Calendar() {
 
   // Convert tournaments to calendar events + generate recurring placeholders
   const calendarEvents = useMemo(() => {
-    // Real events from DB. Detect "all-day" events (rows imported with date
+    // Real events from DB. Bin on started_at, NOT completed_at: completed_at is
+    // the Challonge finalization timestamp, which the organizer can click days or
+    // even weeks after the bracket actually ran (e.g. RTG NA #206 started Sat but
+    // was finalized 2 weeks later), so it puts the event on the wrong calendar day.
+    // started_at is the real event time. Fall back to completed_at only if a row
+    // somehow lacks a start time. Detect "all-day" events (rows imported with date
     // only, defaulting to 00:00 UTC) by checking the underlying UTC moment.
     // Otherwise emit hour/minute in the user's local timezone — Date methods
     // (getHours / getDate) already respect the browser TZ.
     const realEvents = tournaments
-      .filter(t => t.completed_at || t.started_at)
+      .filter(t => t.started_at || t.completed_at)
       .map(t => {
-        const d = new Date(t.completed_at || t.started_at);
+        const d = new Date(t.started_at || t.completed_at);
         const hasTime = d.getUTCHours() !== 0 || d.getUTCMinutes() !== 0;
         return {
           id: t.id,
