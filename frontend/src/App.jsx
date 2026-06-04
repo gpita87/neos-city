@@ -9,6 +9,7 @@ import LiveRoom from './pages/LiveRoom';
 import Achievements from './pages/Achievements';
 import Organizers from './pages/Organizers';
 import Calendar from './pages/Calendar';
+import Creators from './pages/Creators';
 
 function NavItem({ to, children }) {
   return (
@@ -44,6 +45,7 @@ export default function App() {
             <NavItem to="/tournaments">Tournaments</NavItem>
             <NavItem to="/calendar">Calendar</NavItem>
             <NavItem to="/achievements">Achievements</NavItem>
+            <NavItem to="/creators">Creators</NavItem>
           </nav>
         </div>
         {/* Neon line under nav */}
@@ -60,6 +62,7 @@ export default function App() {
           <Route path="/tournaments/:id" element={<TournamentDetail />} />
           <Route path="/calendar" element={<Calendar />} />
           <Route path="/achievements" element={<Achievements />} />
+          <Route path="/creators" element={<Creators />} />
           <Route path="/live" element={<LiveRoom />} />
           <Route path="/live/:code" element={<LiveRoom />} />
           <Route path="/organizers" element={<Organizers />} />

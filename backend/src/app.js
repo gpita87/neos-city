@@ -9,6 +9,8 @@ const matchesRouter = require('./routes/matches');
 const achievementsRouter = require('./routes/achievements');
 const liveRouter = require('./routes/live');
 const organizersRouter = require('./routes/organizers');
+const creatorsRouter = require('./routes/creators');
+const resourcesRouter = require('./routes/resources');
 
 const app = express();
 
@@ -63,6 +65,8 @@ app.use('/api/matches', matchesRouter);
 app.use('/api/achievements', achievementsRouter);
 app.use('/api/live', liveRouter);
 app.use('/api/organizers', organizersRouter);
+app.use('/api/creators', creatorsRouter);
+app.use('/api/resources', resourcesRouter);
 
 app.get('/api/health', (req, res) => res.json({ status: 'ok', app: 'Neos City' }));
 

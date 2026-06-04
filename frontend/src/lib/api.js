@@ -60,6 +60,15 @@ export const getRoom = (code) => api.get(`/live/${code}`).then(r => r.data);
 export const reportGame = (code, winner) =>
   api.patch(`/live/${code}/report`, { winner }).then(r => r.data);
 
+// Community pillars (YouTube creators) + resource library
+// Returns { active_days, creators: [...] }; each creator has a derived is_active
+// flag and resource_count. active_days tunes the active/archive threshold.
+export const getCreators = (active_days) =>
+  api.get('/creators', { params: active_days ? { active_days } : {} }).then(r => r.data);
+// params: { kind, character, skill_level, series, creator_id } — all optional
+export const getResources = (params = {}) =>
+  api.get('/resources', { params }).then(r => r.data);
+
 // Organizers
 export const getOrganizers = () => api.get('/organizers').then(r => r.data);
 export const addOrganizer = (data) => api.post('/organizers', data).then(r => r.data);
