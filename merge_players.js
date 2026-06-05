@@ -121,6 +121,30 @@ async function merge() {
       [canonId]
     );
 
+    // 6b. Re-point any account claim from the old player to the canonical one.
+    // Without this, ON DELETE SET NULL on users.player_id would silently orphan
+    // a user's claim when their player gets merged away. Guarded with to_regclass
+    // so this still works on DBs predating the users table.
+    const { rows: [reg] } = await client.query(`SELECT to_regclass('public.users') AS t`);
+    if (reg.t) {
+      // Re-point loser → canonical, but only if the canonical player isn't
+      // already claimed (the one-user-per-player unique index forbids two).
+      const repointed = await client.query(
+        `UPDATE users SET player_id = $1, updated_at = NOW()
+         WHERE player_id = $2
+           AND NOT EXISTS (SELECT 1 FROM users WHERE player_id = $1)`,
+        [canonId, oldId]
+      );
+      // Edge case — both duplicates were claimed: release whoever still points
+      // at the loser rather than violate the unique index. Warn so it's visible.
+      const released = await client.query(
+        `UPDATE users SET player_id = NULL, updated_at = NOW() WHERE player_id = $1`,
+        [oldId]
+      );
+      if (repointed.rowCount) console.log(`  users: re-pointed ${repointed.rowCount} account claim(s) to canonical`);
+      if (released.rowCount) console.warn(`  users: released ${released.rowCount} claim(s) — canonical player was already claimed`);
+    }
+
     // 7. Delete old player record
     await client.query(`DELETE FROM players WHERE id = $1`, [oldId]);
     console.log(`  Deleted old player record (id=${oldId})`);

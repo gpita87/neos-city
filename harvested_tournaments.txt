@@ -260,7 +260,6 @@ https://challonge.com/FFC61
 https://challonge.com/FFC35
 https://challonge.com/FFC34
 https://challonge.com/FFC32
-https://quarterlyrapport.challonge.com/quar2pokken
 https://challonge.com/FFC16
 https://challonge.com/PokkenWeeklyReturn107
 https://challonge.com/PokkenWeeklyReturn106
@@ -284,17 +283,12 @@ https://challonge.com/PokkenWeeklyReturn60
 https://challonge.com/PokkenWeeklyReturn56
 https://challonge.com/PokkenWeeklyReturn31
 https://challonge.com/PokkenWeeklyReturn27
-https://pokkenarena.challonge.com/PEXCS3_6
-https://pokkenarena.challonge.com/PEXCS3_5
 https://challonge.com/PokkenWeeklyReturn26
 https://challonge.com/PokkenWeeklyReturn24
-https://pokkenarena.challonge.com/PEXCS3_3
 https://challonge.com/PokkenWeeklyReturn23
-https://pokkenarena.challonge.com/PEXCS3_2
 https://challonge.com/PokkenWeeklyReturn21
 https://challonge.com/PokkenWeeklyReturn19
 https://challonge.com/PSTBOB
-https://challonge.com/FFC221
 https://challonge.com/rtgna58
 https://challonge.com/PokkenWeeklyReturn48
 https://challonge.com/PokkenWeeklyReturn38
@@ -306,7 +300,6 @@ https://challonge.com/FFC72
 https://challonge.com/FFC69
 https://challonge.com/FFC67
 https://challonge.com/FFC65
-https://quarterlyrapport.challonge.com/quar4pokken
 https://challonge.com/FFC60
 https://challonge.com/FFC59
 https://challonge.com/FFC56
@@ -392,7 +385,6 @@ https://challonge.com/84630h3d
 https://challonge.com/FFC54
 https://challonge.com/FFC47
 https://challonge.com/o9jrnu3t
-https://quarterlyrapport.challonge.com/quar3pokken
 https://challonge.com/FFC41
 https://challonge.com/nce5yfr2
 https://challonge.com/FFC39
@@ -420,7 +412,6 @@ https://challonge.com/dcmrrw3
 https://challonge.com/dcmp36
 https://challonge.com/dcmgb3
 https://challonge.com/dcmp35
-https://challonge.com/FFC260
 https://challonge.com/dcmgb2
 https://challonge.com/dcmp34
 https://challonge.com/dcmgb1
@@ -458,11 +449,7 @@ https://challonge.com/FFC91
 https://challonge.com/FFC87
 https://challonge.com/FFC82
 https://challonge.com/FFC253
-https://challonge.com/FFC250
 https://challonge.com/FFC247
-https://challonge.com/FFC242
-https://challonge.com/FFC230
-https://challonge.com/FFC229
 https://challonge.com/FFC226
 https://challonge.com/FFC224
 https://challonge.com/FFC222
@@ -479,43 +466,26 @@ https://challonge.com/FFC14
 https://challonge.com/PokkenWeeklyReturnRicky2
 https://challonge.com/PokkenWeeklyReturn103
 https://challonge.com/PokkenChess1
-https://pokkenarena.challonge.com/PDEXCS2_F
-https://pokkenarena.challonge.com/pdexcs2_7
-https://challonge.com/fizy3udu
 https://challonge.com/o7tv5q03
-https://pokkenarena.challonge.com/PDEXCS2_3
 https://challonge.com/PokkenWeeklyReturn76
 https://challonge.com/PokkenWeeklyReturnRicky
 https://challonge.com/PokkenWeeklyReturn68
-https://pokkenarena.challonge.com/PDEXCS1_2
-https://pokkenarena.challonge.com/PDEXCS1_1
 https://challonge.com/PEXCS6_1
 https://challonge.com/oo5wnsba
 https://challonge.com/PokkenWeeklyReturn49
-https://pokkenarena.challonge.com/PEXCS5_7
-https://pokkenarena.challonge.com/PEXCS5_6
 https://challonge.com/PokkenWeeklyReturn46
-https://pokkenarena.challonge.com/PEXCS5_4
 https://challonge.com/PokkenWeeklyReturn45
-https://pokkenarena.challonge.com/PEXCS5_2
-https://pokkenarena.challonge.com/PEXCS5_1
 https://challonge.com/PokkenWeeklyReturn41
 https://challonge.com/PokkenWeeklyReturn40
-https://pokkenarena.challonge.com/PEXCS4_7
 https://challonge.com/PokkenWeeklyReturn37
 https://challonge.com/PokkenWeeklyReturn28
 https://challonge.com/PokkenWeeklyReturn25
 https://challonge.com/PokkenWeeklyReturn22
 https://challonge.com/PokkenWeeklyReturn20
-https://pokkenarena.challonge.com/PEXCS2_8
 https://challonge.com/PokkenWeeklyReturn18
 https://challonge.com/PokkenWeeklyReturn17
 https://challonge.com/PokkenWeeklyReturn16
 https://challonge.com/PokkenWeeklyReturn15
-https://pokkenarena.challonge.com/PEXCS2_1
-https://pokkenarena.challonge.com/PEXC5
-https://pokkenarena.challonge.com/PEXC4
-https://pokkenarena.challonge.com/PEXC3
 # Appended via harvest_console.js on 2026-04-30 (organizer: rigz_)
 https://challonge.com/rigz_/rmo8g0d4
 https://challonge.com/rigz_/u3lwc9jq
@@ -525,21 +495,80 @@ https://challonge.com/rigz_/6td2vo6m
 https://challonge.com/rigz_/nayuu8nk
 https://challonge.com/rigz_/ax7dpxbl
 # Appended via harvest_console.js on 2026-05-01 (organizer: community/PokkenFFC, validation: skipped)
-https://challonge.com/followers
-https://challonge.com/announcements
-https://challonge.com/events
-https://challonge.com/rankings
-https://challonge.com/templates
-https://challonge.com/partners
-https://challonge.com/organizedplay
-https://challonge.com/switch_locale
-https://challonge.com/translate
-https://challonge.com/terms_of_service
-https://challonge.com/privacy_policy
-https://challonge.com/bracket_generator
 # Appended via harvest_console.js on 2026-05-06 (organizer: rigz_)
 https://challonge.com/rigz_/e6vyswtc
 https://challonge.com/rigz_/smu2m4a9
 # Appended by harvest_startgg.js on 2026-05-11 (last 90d)
 # 2026-05-05 - Heaven's Arena #31 — Heaven's Arena #31
 https://www.start.gg/tournament/heaven-s-arena-31/events/heaven-s-arena-31/brackets/2280337/3302828
+# Appended via harvest_console.js on 2026-05-18 (organizer: FFC / wise_)
+https://challonge.com/wise_/FFC219
+https://challonge.com/wise_/FFC217
+https://challonge.com/wise_/FFC215
+https://challonge.com/wise_/FFC213
+https://challonge.com/wise_/FFC211
+https://challonge.com/wise_/FFC209
+https://challonge.com/wise_/FFC207
+https://challonge.com/wise_/FFC205
+https://challonge.com/wise_/FFC203
+https://challonge.com/wise_/FFC201
+https://challonge.com/wise_/FFC198
+https://challonge.com/wise_/FFC196
+https://challonge.com/wise_/FFC194
+https://challonge.com/wise_/FFC192
+https://challonge.com/wise_/FFC190
+https://challonge.com/wise_/FFC188
+https://challonge.com/wise_/FFC186
+https://challonge.com/wise_/FFCWiiU
+https://challonge.com/wise_/FFC185
+https://challonge.com/wise_/FFC183
+https://challonge.com/wise_/FFC179
+https://challonge.com/wise_/FFC177
+https://challonge.com/wise_/FFC176
+https://challonge.com/wise_/dcm4
+https://challonge.com/wise_/t2gjer95
+https://challonge.com/wise_/bnp0djjl
+https://challonge.com/wise_/pj6ddj5w
+# Appended via harvest_console.js on 2026-05-18 (organizer: FFC / rickythe3rd)
+https://challonge.com/rickythe3rd/FFC118
+https://challonge.com/rickythe3rd/FFC113
+https://challonge.com/rickythe3rd/FFC95
+https://challonge.com/rickythe3rd/swisscheeseeee
+https://challonge.com/rickythe3rd/weavcordgym2
+https://challonge.com/rickythe3rd/BotBW2
+https://challonge.com/rickythe3rd/weavilegymleaders
+https://challonge.com/rickythe3rd/ojf6ddth
+# Appended via harvest_console.js on 2026-05-18 (organizer: RTG NA / shean96)
+https://challonge.com/shean96/wylspylu
+# Appended via harvest_console.js on 2026-05-18 (organizer: DCM / devlinhartfgc)
+https://challonge.com/devlinhartfgc/dcmp33
+https://challonge.com/devlinhartfgc/dcmp32
+https://challonge.com/devlinhartfgc/dcmp31
+https://challonge.com/devlinhartfgc/dcmp30
+https://challonge.com/devlinhartfgc/dcmp29
+https://challonge.com/devlinhartfgc/dcmp28
+https://challonge.com/devlinhartfgc/dcmp27
+https://challonge.com/devlinhartfgc/dcmp26
+https://challonge.com/devlinhartfgc/dcmp25
+https://challonge.com/devlinhartfgc/dcmp24
+https://challonge.com/devlinhartfgc/dcmp23
+https://challonge.com/devlinhartfgc/dcmp22
+https://challonge.com/devlinhartfgc/TDomeR11
+https://challonge.com/devlinhartfgc/dcmp21
+https://challonge.com/devlinhartfgc/SySD13
+https://challonge.com/devlinhartfgc/dcm20
+https://challonge.com/devlinhartfgc/dcm19
+https://challonge.com/devlinhartfgc/SySD12
+https://challonge.com/devlinhartfgc/SySD11
+https://challonge.com/devlinhartfgc/dcm17
+https://challonge.com/devlinhartfgc/dcm16
+https://challonge.com/devlinhartfgc/SySD10
+https://challonge.com/devlinhartfgc/dcm15
+# Appended via harvest_console.js on 2026-05-29 (organizer: RTG NA / shean96)
+https://challonge.com/shean96/doel0oww
+# Appended by harvest_startgg.js on 2026-05-29 (last 90d)
+# 2026-05-19 - Heaven's Arena #32 — Heaven's Arena #32
+https://www.start.gg/tournament/heaven-s-arena-32/events/heaven-s-arena-32/brackets/2288113/3312910
+# Appended via harvest_console.js on 2026-06-03 (organizer: RTG NA / shean96)
+https://challonge.com/shean96/cm12dhdv
+https://challonge.com/shean96/ys1pj3d2

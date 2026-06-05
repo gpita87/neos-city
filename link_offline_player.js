@@ -413,6 +413,18 @@ async function run() {
       [dst.id]
     );
 
+    // ── Re-point any account claim from source → destination ─────────────
+    // (ON DELETE SET NULL on users.player_id would otherwise orphan the claim.)
+    const { rows: [reg] } = await client.query(`SELECT to_regclass('public.users') AS t`);
+    if (reg.t) {
+      await client.query(
+        `UPDATE users SET player_id = $1, updated_at = NOW()
+         WHERE player_id = $2 AND NOT EXISTS (SELECT 1 FROM users WHERE player_id = $1)`,
+        [dst.id, src.id]
+      );
+      await client.query(`UPDATE users SET player_id = NULL, updated_at = NOW() WHERE player_id = $1`, [src.id]);
+    }
+
     // ── Delete the now-empty source player ───────────────────────────────
     await client.query(`DELETE FROM players WHERE id = $1`, [src.id]);
     console.log(`  Deleted players row id=${src.id}`);

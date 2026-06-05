@@ -101,6 +101,70 @@ const SERIES_SCHEDULES = [
   { series: 'eotr',       dayOfWeek: 6, weekInterval: 13, hour: 23, minute: 0, anchorDate: '2026-03-14', replaces: ['rtg_na'] },
 ];
 
+/* ── Manual one-off upcoming events ─────────────────────────────────── *
+ * Specific future events that aren't part of a recurring series and aren't
+ * (yet) in the DB — e.g. an announced offline local with no bracket, or a
+ * start.gg event that's only a details page so far. Rendered as dashed
+ * placeholder pills, same as recurring ones. Remove an entry once the event
+ * has run and been imported (a real DB row supersedes it).
+ *
+ * Fields:
+ *   date     'YYYY-MM-DD' (the local calendar day the event lands on)
+ *   utcHour/utcMinute  the start time as a UTC moment; OMIT for TBD/all-day.
+ *                      (e.g. 1pm US-Eastern in June = EDT = 17:00 UTC.)
+ *   series   color key from SERIES_META; 'other' for uncategorized one-offs
+ *   url      where the pill links; null = non-clickable announcement
+ */
+const MANUAL_EVENTS = [
+  {
+    id: 'manual_mid_tier_mayhem_2026-06-06',
+    name: 'Mid Tier Mayhem',
+    series: 'other',
+    date: '2026-06-06',
+    utcHour: 17, utcMinute: 0,   // 1:00 PM Eastern (EDT in June, UTC−4)
+    url: 'https://www.start.gg/tournament/mid-tier-mayhem/details',
+  },
+  {
+    id: 'manual_replay_rumble_2026-06-20',
+    name: 'Replay Rumble (Stockton, CA)',
+    series: 'other',
+    date: '2026-06-20',
+    // Time TBD — no utcHour, renders in the all-day row.
+    url: null,
+  },
+];
+
+/** Materialize MANUAL_EVENTS that fall inside the visible range into calendar
+ *  event objects. Timed events anchor on their UTC moment (converted to the
+ *  user's local hour); TBD events use local midnight so they land on the
+ *  intended calendar day in every timezone. Past events are dropped. */
+function generateManualEvents(rangeStart, rangeEnd) {
+  const startMs = rangeStart.getTime();
+  const endMs = rangeEnd.getTime() + 24 * 60 * 60 * 1000; // include last day fully
+  const results = [];
+  for (const ev of MANUAL_EVENTS) {
+    const [y, m, dd] = ev.date.split('-').map(Number);
+    const hasTime = ev.utcHour != null;
+    const d = hasTime
+      ? new Date(Date.UTC(y, m - 1, dd, ev.utcHour, ev.utcMinute ?? 0))
+      : new Date(y, m - 1, dd); // local midnight → same calendar day in any TZ
+    const ms = d.getTime();
+    if (ms < startMs || ms > endMs) continue;
+    if (isPast(d)) continue;
+    results.push({
+      id: ev.id,
+      name: ev.name,
+      series: ev.series || 'other',
+      date: d,
+      hour: hasTime ? d.getHours() : null,
+      minute: hasTime ? d.getMinutes() : null,
+      isPlaceholder: true,
+      url: ev.url || null,
+    });
+  }
+  return results;
+}
+
 /* ── Helpers ────────────────────────────────────────────────────────── */
 const DAYS = ['Sun', 'Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat'];
 const MONTHS = ['January','February','March','April','May','June','July','August','September','October','November','December'];
@@ -227,7 +291,7 @@ function generateRecurring(schedule, rangeStart, rangeEnd, existingDates) {
 /* ── Event pill component ──────────────────────────────────────────── */
 function EventPill({ event, compact = false }) {
   const m = meta(event.series);
-  const landingUrl = SERIES_LANDING_URL[event.series];
+  const landingUrl = event.url || SERIES_LANDING_URL[event.series];
   const isClickable = !event.isPlaceholder || !!landingUrl;
   const baseTitle = `${event.name}${event.hour != null ? ` — ${String(event.hour).padStart(2,'0')}:${String(event.minute ?? 0).padStart(2,'0')} ${TZ_ABBR}` : ''}`;
   const pillTitle = event.isPlaceholder && landingUrl
@@ -609,7 +673,10 @@ export default function Calendar() {
       return generateRecurring(schedule, range.start, range.end, existing);
     });
 
-    return [...realEvents, ...replacingPlaceholders, ...regularPlaceholders];
+    // Manual one-off upcoming events (announced but not yet in the DB).
+    const manualEvents = generateManualEvents(range.start, range.end);
+
+    return [...realEvents, ...replacingPlaceholders, ...regularPlaceholders, ...manualEvents];
   }, [tournaments, range]);
 
   // Filter by series
