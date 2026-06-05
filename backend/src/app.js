@@ -11,6 +11,7 @@ const liveRouter = require('./routes/live');
 const organizersRouter = require('./routes/organizers');
 const creatorsRouter = require('./routes/creators');
 const resourcesRouter = require('./routes/resources');
+const authRouter = require('./routes/auth');
 
 const app = express();
 
@@ -67,6 +68,7 @@ app.use('/api/live', liveRouter);
 app.use('/api/organizers', organizersRouter);
 app.use('/api/creators', creatorsRouter);
 app.use('/api/resources', resourcesRouter);
+app.use('/api/auth', authRouter);
 
 app.get('/api/health', (req, res) => res.json({ status: 'ok', app: 'Neos City' }));
 

@@ -1,6 +1,7 @@
 import { useEffect, useState } from 'react';
 import { useParams, Link } from 'react-router-dom';
-import { getPlayer } from '../lib/api';
+import { getPlayer, linkPlayer } from '../lib/api';
+import { useAuth } from '../contexts/AuthContext';
 import { formatDate } from '../lib/utils';
 import AchievementTournamentsModal from '../components/AchievementTournamentsModal';
 import OfflinePlacementsModal from '../components/OfflinePlacementsModal';
@@ -120,6 +121,62 @@ function RegionTierDisplay({ highestRegions }) {
   );
 }
 
+// Account ↔ player claim control shown in the profile header.
+function ClaimProfileCTA({ playerId }) {
+  const { user, loading, refresh } = useAuth();
+  const [busy, setBusy] = useState(false);
+  const [error, setError] = useState(null);
+  if (loading || !user) return null;
+
+  const pid = Number(playerId);
+
+  // This is the signed-in user's own claimed profile.
+  if (user.player_id === pid) {
+    return (
+      <span className="shrink-0 text-xs px-3 py-1.5 rounded-lg bg-cyan-500/15 text-cyan-300 border border-cyan-500/30">
+        ✓ Your profile
+      </span>
+    );
+  }
+  // User already claimed a different player — nothing to do here.
+  if (user.player_id) return null;
+
+  // Must verify email before claiming.
+  if (!user.email_verified) {
+    return (
+      <Link to="/link" className="shrink-0 text-xs text-amber-300/80 hover:text-amber-200">
+        Verify email to claim →
+      </Link>
+    );
+  }
+
+  const claim = async () => {
+    setBusy(true);
+    setError(null);
+    try {
+      await linkPlayer(pid);
+      await refresh();
+    } catch (err) {
+      setError(err.response?.data?.error || err.message);
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  return (
+    <div className="shrink-0 text-right">
+      <button
+        onClick={claim}
+        disabled={busy}
+        className="bg-cyan-500 hover:bg-cyan-400 disabled:opacity-50 text-white text-xs font-medium px-3 py-1.5 rounded-lg transition-colors"
+      >
+        {busy ? 'Claiming…' : 'This is me — claim profile'}
+      </button>
+      {error && <p className="text-red-400 text-xs mt-1">{error}</p>}
+    </div>
+  );
+}
+
 export default function PlayerProfile() {
   const { id } = useParams();
   const [player, setPlayer] = useState(null);
@@ -161,6 +218,7 @@ export default function PlayerProfile() {
             </div>
           )}
         </div>
+        <ClaimProfileCTA playerId={id} />
       </div>
 
       {/* Recent Tournaments */}

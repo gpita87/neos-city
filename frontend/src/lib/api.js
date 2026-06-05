@@ -14,8 +14,12 @@ const api = axios.create({ baseURL });
 // attach it as `x-admin-token` on every request — read endpoints ignore it.
 api.interceptors.request.use(config => {
   if (typeof window !== 'undefined') {
-    const token = window.localStorage?.getItem('admin_token');
-    if (token) config.headers['x-admin-token'] = token;
+    const adminToken = window.localStorage?.getItem('admin_token');
+    if (adminToken) config.headers['x-admin-token'] = adminToken;
+    // User session token (Discord / email login). Attached as a Bearer header
+    // on every request; read endpoints ignore it, auth-gated routes verify it.
+    const authToken = window.localStorage?.getItem('auth_token');
+    if (authToken) config.headers['Authorization'] = `Bearer ${authToken}`;
   }
   return config;
 });
@@ -68,6 +72,22 @@ export const getCreators = (active_days) =>
 // params: { kind, character, skill_level, series, creator_id } — all optional
 export const getResources = (params = {}) =>
   api.get('/resources', { params }).then(r => r.data);
+
+// ── Auth + account linking ──────────────────────────────────────────────────
+export const registerUser = (data) => api.post('/auth/register', data).then(r => r.data);
+export const loginUser = (data) => api.post('/auth/login', data).then(r => r.data);
+export const getMe = () => api.get('/auth/me').then(r => r.data);
+export const verifyEmail = (token) => api.post('/auth/verify-email', { token }).then(r => r.data);
+export const resendVerification = () => api.post('/auth/resend-verification').then(r => r.data);
+export const requestPasswordReset = (email) =>
+  api.post('/auth/request-password-reset', { email }).then(r => r.data);
+export const resetPassword = (token, password) =>
+  api.post('/auth/reset-password', { token, password }).then(r => r.data);
+export const linkPlayer = (player_id) => api.post('/auth/link', { player_id }).then(r => r.data);
+export const unlinkPlayer = () => api.post('/auth/unlink').then(r => r.data);
+// Discord login is a full-page navigation (not an XHR), so build a raw URL.
+// In dev VITE_API_URL is unset and the Vite proxy forwards /api → backend.
+export const discordLoginUrl = () => `${import.meta.env.VITE_API_URL || ''}/api/auth/discord`;
 
 // Organizers
 export const getOrganizers = () => api.get('/organizers').then(r => r.data);
