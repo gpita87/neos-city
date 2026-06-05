@@ -159,6 +159,7 @@ function generateManualEvents(rangeStart, rangeEnd) {
       hour: hasTime ? d.getHours() : null,
       minute: hasTime ? d.getMinutes() : null,
       isPlaceholder: true,
+      isManual: true,
       url: ev.url || null,
     });
   }
@@ -312,7 +313,7 @@ function EventPill({ event, compact = false }) {
     >
       <span className={`w-2 h-2 rounded-full flex-shrink-0 ${m.color}`} />
       {compact
-        ? <span className="truncate">{m.label}{event.number ? ` ${event.number}` : ''}</span>
+        ? <span className="truncate">{event.isManual ? event.name : `${m.label}${event.number ? ` ${event.number}` : ''}`}</span>
         : <span className="truncate">{event.name}</span>
       }
       {event.hour != null && !compact && (
@@ -676,7 +677,11 @@ export default function Calendar() {
     // Manual one-off upcoming events (announced but not yet in the DB).
     const manualEvents = generateManualEvents(range.start, range.end);
 
-    return [...realEvents, ...replacingPlaceholders, ...regularPlaceholders, ...manualEvents];
+    // Order matters: the month cell caps at 3 pills then shows "+N more".
+    // Real events first, then confirmed manual one-offs, then recurring
+    // guesses — so a crowded day truncates the speculative placeholders, not
+    // the announced events.
+    return [...realEvents, ...manualEvents, ...replacingPlaceholders, ...regularPlaceholders];
   }, [tournaments, range]);
 
   // Filter by series
