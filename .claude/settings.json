@@ -82,5 +82,18 @@
       "Bash(git push -f:*)",
       "Bash(git reset --hard:*)"
     ]
+  },
+  "hooks": {
+    "PreToolUse": [
+      {
+        "matcher": "Write|Edit|NotebookEdit",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "node \"C:\\Users\\pitag\\Documents\\neos-city\\.claude\\hooks\\guard-main-edits.js\""
+          }
+        ]
+      }
+    ]
   }
 }

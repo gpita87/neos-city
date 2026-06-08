@@ -81,7 +81,7 @@ const APPLY = process.argv.includes('--apply');
 
   // 3. Execute in one transaction. Tournaments first (cascades matches), then
   //    phantom players (now unreferenced by any match).
-  const client = await db.connect();
+  const client = await db.pool.connect();
   try {
     await client.query('BEGIN');
     const dt = await client.query(`DELETE FROM tournaments WHERE id = ANY($1)`, [tIds]);

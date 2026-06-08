@@ -120,7 +120,6 @@ export default function Creators() {
   const [creators, setCreators] = useState([]);
   const [resources, setResources] = useState([]);
   const [loading, setLoading] = useState(true);
-  const [showArchive, setShowArchive] = useState(false);
 
   // Resource filters
   const [query, setQuery] = useState('');
@@ -136,9 +135,6 @@ export default function Creators() {
       .catch(() => { /* leave empty states */ })
       .finally(() => setLoading(false));
   }, []);
-
-  const active  = useMemo(() => creators.filter(c => c.is_active), [creators]);
-  const archive = useMemo(() => creators.filter(c => !c.is_active), [creators]);
 
   const characters = useMemo(
     () => [...new Set(resources.map(r => r.character).filter(Boolean))].sort(),
@@ -161,42 +157,26 @@ export default function Creators() {
   return (
     <div>
       <div className="flex items-baseline justify-between mb-6 flex-wrap gap-2">
-        <h1 className="font-display text-2xl tracking-widest text-white">COMMUNITY PILLARS</h1>
+        <h1 className="font-display text-2xl tracking-widest text-white">YOUTUBE CREATORS</h1>
         <span className="text-xs text-slate-500 font-display tracking-wider">
-          {loading ? '…' : `${active.length} ACTIVE · ${resources.length} RESOURCES`}
+          {loading ? '…' : `${creators.length} CHANNELS · ${resources.length} RESOURCES`}
         </span>
       </div>
 
       {loading && <p className="text-slate-400">Loading…</p>}
 
-      {/* ── Active creators ─────────────────────────────────────────────── */}
+      {/* ── Creators (hand-curated order via sort_order) ─────────────────── */}
       {!loading && (
         <section className="mb-10">
-          <h2 className="font-display text-sm tracking-widest text-cyan-400 mb-3">ACTIVE CREATORS</h2>
-          {active.length === 0 ? (
+          <h2 className="font-display text-sm tracking-widest text-cyan-400 mb-3">CHANNELS</h2>
+          {creators.length === 0 ? (
             <p className="text-slate-500 text-sm bg-[#0c1425] border border-[#1a2744] rounded-xl px-4 py-8 text-center">
-              No active creators yet. Seed the pillars with <code className="text-cyan-300">seed_creators.js</code>,
+              No channels yet. Seed them with <code className="text-cyan-300">seed_creators.js</code>,
               then run <code className="text-cyan-300">refresh_creators.js</code> to pull their latest uploads.
             </p>
           ) : (
             <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-4">
-              {active.map(c => <CreatorCard key={c.id} c={c} />)}
-            </div>
-          )}
-
-          {archive.length > 0 && (
-            <div className="mt-4">
-              <button
-                onClick={() => setShowArchive(v => !v)}
-                className="text-xs font-display tracking-wider text-slate-400 hover:text-cyan-300 transition-colors"
-              >
-                {showArchive ? '▾' : '▸'} 💤 ARCHIVE — {archive.length} dormant{showArchive ? '' : ' (no recent uploads)'}
-              </button>
-              {showArchive && (
-                <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-4 mt-3">
-                  {archive.map(c => <CreatorCard key={c.id} c={c} />)}
-                </div>
-              )}
+              {creators.map(c => <CreatorCard key={c.id} c={c} />)}
             </div>
           )}
         </section>

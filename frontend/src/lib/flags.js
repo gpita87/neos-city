@@ -28,6 +28,11 @@ export const FLAGS = {
     description: 'Example flag wired to a "✨ Demo" nav item. Safe to toggle — delete once you add real flags.',
     default: false,
   },
+  creators: {
+    label: 'YouTube Creators',
+    description: 'YouTube creators + resource library page.',
+    default: false,
+  },
 };
 
 // ── Storage ───────────────────────────────────────────────────────────────────

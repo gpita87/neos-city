@@ -129,8 +129,11 @@ const MANUAL_EVENTS = [
     name: 'Replay Rumble (Stockton, CA)',
     series: 'other',
     date: '2026-06-20',
-    // Time TBD — no utcHour, renders in the all-day row.
-    url: null,
+    // 6:00 PM Pacific (Stockton). June = PDT (UTC−7) → 01:00 UTC Jun 21.
+    // hour 25 rolls past midnight UTC; Date.UTC normalizes it, and `date`
+    // stays the local calendar day the event lands on for the PT audience.
+    utcHour: 25, utcMinute: 0,
+    url: 'https://www.start.gg/tournament/replay-rumble-48-you-re-60-years-too-early/details',
   },
 ];
 

@@ -23,10 +23,7 @@ router.get('/', async (req, res) => {
          p.display_name AS player_name
        FROM creators c
        LEFT JOIN players p ON p.id = c.player_id
-       ORDER BY is_active DESC NULLS LAST,
-                c.latest_upload_at DESC NULLS LAST,
-                c.sort_order ASC,
-                c.name ASC`,
+       ORDER BY c.sort_order ASC, c.name ASC`,
       [activeDays]
     );
     res.json({ active_days: activeDays, creators: rows });
@@ -62,7 +59,7 @@ router.post('/', requireAdmin, async (req, res) => {
     const { rows: [creator] } = await db.query(
       `INSERT INTO creators
          (name, channel_url, channel_id, blurb, region, series, player_id, avatar_url, sort_order)
-       VALUES ($1, $2, $3, $4, $5, COALESCE($6, '{}'), $7, $8, COALESCE($9, 0))
+       VALUES ($1, $2, $3, $4, $5, COALESCE($6::text[], '{}'), $7, $8, COALESCE($9, 0))
        ON CONFLICT (channel_id) WHERE channel_id IS NOT NULL DO UPDATE SET
          name        = EXCLUDED.name,
          channel_url = EXCLUDED.channel_url,
