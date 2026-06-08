@@ -1,6 +1,6 @@
 import { useEffect, useMemo, useState } from 'react';
 import { Link, useNavigate } from 'react-router-dom';
-import { getPlayerIndex, linkPlayer, resendVerification } from '../lib/api';
+import { getPlayerIndex, linkPlayer } from '../lib/api';
 import { useAuth } from '../contexts/AuthContext';
 
 function regionFlag(region) {
@@ -17,7 +17,6 @@ export default function ClaimPlayer() {
   const [query, setQuery] = useState('');
   const [claiming, setClaiming] = useState(null); // player id mid-claim
   const [error, setError] = useState(null);
-  const [resent, setResent] = useState(false);
 
   useEffect(() => {
     getPlayerIndex().then(setPlayers).catch(() => {});
@@ -46,10 +45,6 @@ export default function ClaimPlayer() {
     }
   };
 
-  const doResend = async () => {
-    try { await resendVerification(); setResent(true); } catch { /* ignore */ }
-  };
-
   if (loading) return <p className="text-slate-400 text-center py-16">Loading…</p>;
 
   // Gate: must be signed in.
@@ -71,26 +66,6 @@ export default function ClaimPlayer() {
         <Link to={`/players/${user.player_id}`} className="text-cyan-400 hover:text-cyan-300">
           View your profile →
         </Link>
-      </div>
-    );
-  }
-
-  // Gate: must have a verified email before claiming.
-  if (!user.email_verified) {
-    return (
-      <div className="max-w-md mx-auto text-center py-16">
-        <p className="text-3xl mb-3">✉️</p>
-        <h1 className="font-display text-xl tracking-widest text-white mb-2">VERIFY YOUR EMAIL</h1>
-        <p className="text-slate-400 text-sm mb-5">
-          Confirm your email address before claiming a player profile.
-        </p>
-        {resent
-          ? <p className="text-green-400 text-sm">Verification email sent — check your inbox.</p>
-          : (
-            <button onClick={doResend} className="text-cyan-400 hover:text-cyan-300 text-sm">
-              Resend verification email
-            </button>
-          )}
       </div>
     );
   }

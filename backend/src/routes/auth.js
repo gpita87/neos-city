@@ -1,24 +1,23 @@
 const express = require('express');
 const router = express.Router();
 const rateLimit = require('express-rate-limit');
-const bcrypt = require('bcryptjs');
 const jwt = require('jsonwebtoken');
 const axios = require('axios');
 
 const db = require('../db');
 const requireAdmin = require('../middleware/requireAdmin');
-const { requireAuth, USER_COLUMNS } = require('../middleware/requireAuth');
-const { sendVerificationEmail, sendPasswordResetEmail } = require('../services/email');
+const { requireAuth } = require('../middleware/requireAuth');
 
 // ── Config / helpers ────────────────────────────────────────────────────────
+//
+// Login is OAuth-only: Discord and Google. There is no email/password path and
+// no email sending — both providers return a provider-verified email, which is
+// all we need to gate the future ranked identity. See resolveOAuthUser below.
 
 const SESSION_TTL = '30d';
-const VERIFY_TTL = '24h';
-const RESET_TTL = '1h';
 const STATE_TTL = '10m';
-const BCRYPT_COST = 10;
 
-// Tighter limiter for credential endpoints, on top of the global 500/15min.
+// Tighter limiter for the OAuth callbacks, on top of the global 500/15min.
 // Loopback exempt in dev (matches app.js); in prod req.ip is the real client IP.
 const LOOPBACK_IPS = new Set(['127.0.0.1', '::1', '::ffff:127.0.0.1']);
 const authLimiter = rateLimit({
@@ -37,141 +36,115 @@ function ensureSecret(res) {
   }
   return true;
 }
-// Base URL of the frontend — target for emailed links + the Discord redirect.
+// Base URL of the frontend — target for the OAuth callback redirect.
 // FRONTEND_URL is required in prod (app.js enforces); dev falls back to Vite.
 function frontendUrl() {
   return process.env.FRONTEND_URL || 'http://localhost:5173';
 }
-function signSession(userId) {
-  return jwt.sign({ sub: userId }, secret(), { expiresIn: SESSION_TTL });
+// Embeds the user's token_version as `tv`. requireAuth rejects the token once
+// token_version moves past it (logout-all), revoking old sessions. Accepts a
+// row carrying { id, token_version }.
+function signSession(user) {
+  return jwt.sign({ sub: user.id, tv: user.token_version ?? 0 }, secret(), { expiresIn: SESSION_TTL });
 }
 function normalizeEmail(email) {
   return String(email || '').trim().toLowerCase();
 }
-function isValidEmail(email) {
-  return /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email);
-}
 
-// Fetch the public-safe user shape (no password_hash) for response bodies.
-async function fetchPublicUser(id) {
-  const { rows: [user] } = await db.query(
-    `SELECT ${USER_COLUMNS} FROM users WHERE id = $1`, [id]
+// Resolve (or create) the user for an OAuth login, returning a row carrying
+// { id, token_version } for signSession. Shared by both callbacks. Precedence:
+//   1. provider id (discord_id / google_id) — the stable per-provider key.
+//   2. verified-email link — if this provider asserts a verified email and an
+//      existing account already holds that same email *verified*, attach this
+//      provider to it. This is how a Discord login and a Google login on the
+//      same address become one account. Safe ONLY because every email in the
+//      system is provider-verified (no self-registration), so the old
+//      "attacker pre-registers an unverified email" takeover risk is gone.
+//   3. otherwise create a new account; store the email only if it doesn't
+//      collide with an existing row (else NULL), so the partial-unique index
+//      on LOWER(email) can never throw.
+async function resolveOAuthUser({ provider, providerId, email, emailVerified, username, avatarUrl, displayName }) {
+  // Internal constants (not user input) — safe to interpolate into SQL.
+  const idCol = provider === 'discord' ? 'discord_id' : 'google_id';
+  const usernameCol = provider === 'discord' ? 'discord_username' : null; // no google_username column
+
+  // 1. Known provider identity.
+  const { rows: [byId] } = await db.query(
+    `SELECT id, token_version FROM users WHERE ${idCol} = $1`, [providerId]
   );
-  return user || null;
+  if (byId) {
+    if (usernameCol) {
+      await db.query(
+        `UPDATE users SET ${usernameCol} = $1, avatar_url = COALESCE($2, avatar_url), updated_at = NOW()
+         WHERE id = $3`,
+        [username, avatarUrl, byId.id]
+      );
+    } else {
+      await db.query(
+        `UPDATE users SET avatar_url = COALESCE($1, avatar_url), updated_at = NOW() WHERE id = $2`,
+        [avatarUrl, byId.id]
+      );
+    }
+    return byId;
+  }
+
+  const normEmail = email ? normalizeEmail(email) : null;
+
+  // 2. Verified-email link onto an existing verified account (cross-provider merge).
+  if (normEmail && emailVerified) {
+    const { rows: [byEmail] } = await db.query(
+      `SELECT id, token_version FROM users WHERE LOWER(email) = $1 AND email_verified = TRUE`,
+      [normEmail]
+    );
+    if (byEmail) {
+      const setUsername = usernameCol ? `${usernameCol} = COALESCE(${usernameCol}, $3),` : '';
+      // Param order: $1 = provider id, $2 = avatar, [$3 = username], next = display_name, last = id.
+      const params = usernameCol
+        ? [providerId, avatarUrl, username, displayName, byEmail.id]
+        : [providerId, avatarUrl, displayName, byEmail.id];
+      const dnParam = usernameCol ? '$4' : '$3';
+      const idParam = usernameCol ? '$5' : '$4';
+      await db.query(
+        `UPDATE users SET ${idCol} = $1, avatar_url = COALESCE(avatar_url, $2), ${setUsername}
+                display_name = COALESCE(display_name, ${dnParam}), updated_at = NOW()
+         WHERE id = ${idParam}`,
+        params
+      );
+      return byEmail;
+    }
+  }
+
+  // 3. Create a new account. Store the email only if it's free.
+  let emailToStore = null;
+  let storeVerified = false;
+  if (normEmail) {
+    const { rows: [clash] } = await db.query(`SELECT 1 FROM users WHERE LOWER(email) = $1`, [normEmail]);
+    if (!clash) {
+      emailToStore = normEmail;
+      storeVerified = !!emailVerified;
+    }
+  }
+  if (usernameCol) {
+    const { rows: [created] } = await db.query(
+      `INSERT INTO users (${idCol}, ${usernameCol}, avatar_url, email, email_verified, display_name)
+       VALUES ($1, $2, $3, $4, $5, $6) RETURNING id, token_version`,
+      [providerId, username, avatarUrl, emailToStore, storeVerified, displayName]
+    );
+    return created;
+  }
+  const { rows: [created] } = await db.query(
+    `INSERT INTO users (${idCol}, avatar_url, email, email_verified, display_name)
+     VALUES ($1, $2, $3, $4, $5) RETURNING id, token_version`,
+    [providerId, avatarUrl, emailToStore, storeVerified, displayName]
+  );
+  return created;
 }
 
-// ── Email + password ────────────────────────────────────────────────────────
-
-// POST /api/auth/register  { email, password, display_name? }
-router.post('/register', authLimiter, async (req, res) => {
-  if (!ensureSecret(res)) return;
-  const email = normalizeEmail(req.body.email);
-  const password = String(req.body.password || '');
-  const displayName = req.body.display_name ? String(req.body.display_name).trim() : null;
-
-  if (!isValidEmail(email)) return res.status(400).json({ error: 'A valid email is required' });
-  if (password.length < 8) return res.status(400).json({ error: 'Password must be at least 8 characters' });
-
-  try {
-    const passwordHash = await bcrypt.hash(password, BCRYPT_COST);
-    const { rows: [row] } = await db.query(
-      `INSERT INTO users (email, password_hash, display_name)
-       VALUES ($1, $2, $3) RETURNING id`,
-      [email, passwordHash, displayName]
-    );
-
-    // Fire-and-await the verification email (dev fallback logs it to console).
-    const verifyToken = jwt.sign({ sub: row.id, purpose: 'verify_email' }, secret(), { expiresIn: VERIFY_TTL });
-    await sendVerificationEmail(email, `${frontendUrl()}/verify-email#token=${verifyToken}`)
-      .catch(err => console.error('[auth] verification email failed:', err.message));
-
-    res.status(201).json({ token: signSession(row.id), user: await fetchPublicUser(row.id) });
-  } catch (err) {
-    if (err.code === '23505') return res.status(409).json({ error: 'Email already registered' });
-    res.status(500).json({ error: err.message });
-  }
-});
-
-// POST /api/auth/login  { email, password }
-router.post('/login', authLimiter, async (req, res) => {
-  if (!ensureSecret(res)) return;
-  const email = normalizeEmail(req.body.email);
-  const password = String(req.body.password || '');
-  try {
-    const { rows: [row] } = await db.query(
-      `SELECT id, password_hash FROM users WHERE LOWER(email) = $1`, [email]
-    );
-    // Generic message for every failure mode (no user / bad password / no password).
-    const ok = row && row.password_hash && await bcrypt.compare(password, row.password_hash);
-    if (!ok) return res.status(401).json({ error: 'Invalid credentials' });
-    res.json({ token: signSession(row.id), user: await fetchPublicUser(row.id) });
-  } catch (err) {
-    res.status(500).json({ error: err.message });
-  }
-});
+// ── Session ─────────────────────────────────────────────────────────────────
 
 // GET /api/auth/me
 router.get('/me', requireAuth, (req, res) => {
   res.json({ user: req.user });
-});
-
-// POST /api/auth/verify-email  { token }
-router.post('/verify-email', authLimiter, async (req, res) => {
-  if (!ensureSecret(res)) return;
-  try {
-    const payload = jwt.verify(String(req.body.token || ''), secret());
-    if (payload.purpose !== 'verify_email') throw new Error('wrong purpose');
-    await db.query(`UPDATE users SET email_verified = TRUE, updated_at = NOW() WHERE id = $1`, [payload.sub]);
-    res.json({ success: true });
-  } catch {
-    res.status(400).json({ error: 'Invalid or expired verification link' });
-  }
-});
-
-// POST /api/auth/resend-verification
-router.post('/resend-verification', requireAuth, async (req, res) => {
-  if (req.user.email_verified) return res.json({ success: true, already_verified: true });
-  if (!req.user.email) return res.status(400).json({ error: 'No email on file to verify' });
-  const verifyToken = jwt.sign({ sub: req.user.id, purpose: 'verify_email' }, secret(), { expiresIn: VERIFY_TTL });
-  await sendVerificationEmail(req.user.email, `${frontendUrl()}/verify-email#token=${verifyToken}`)
-    .catch(err => console.error('[auth] verification resend failed:', err.message));
-  res.json({ success: true });
-});
-
-// POST /api/auth/request-password-reset  { email }
-// Always 200 — never reveal whether an account exists.
-router.post('/request-password-reset', authLimiter, async (req, res) => {
-  if (!ensureSecret(res)) return;
-  const email = normalizeEmail(req.body.email);
-  try {
-    const { rows: [row] } = await db.query(
-      `SELECT id, email FROM users WHERE LOWER(email) = $1 AND password_hash IS NOT NULL`, [email]
-    );
-    if (row) {
-      const resetToken = jwt.sign({ sub: row.id, purpose: 'pwreset' }, secret(), { expiresIn: RESET_TTL });
-      await sendPasswordResetEmail(row.email, `${frontendUrl()}/reset-password#token=${resetToken}`)
-        .catch(err => console.error('[auth] reset email failed:', err.message));
-    }
-  } catch (err) {
-    console.error('[auth] request-password-reset:', err.message);
-  }
-  res.json({ success: true });
-});
-
-// POST /api/auth/reset-password  { token, password }
-router.post('/reset-password', authLimiter, async (req, res) => {
-  if (!ensureSecret(res)) return;
-  const password = String(req.body.password || '');
-  if (password.length < 8) return res.status(400).json({ error: 'Password must be at least 8 characters' });
-  try {
-    const payload = jwt.verify(String(req.body.token || ''), secret());
-    if (payload.purpose !== 'pwreset') throw new Error('wrong purpose');
-    const passwordHash = await bcrypt.hash(password, BCRYPT_COST);
-    await db.query(`UPDATE users SET password_hash = $1, updated_at = NOW() WHERE id = $2`, [passwordHash, payload.sub]);
-    res.json({ success: true });
-  } catch {
-    res.status(400).json({ error: 'Invalid or expired reset link' });
-  }
 });
 
 // ── Discord OAuth2 ──────────────────────────────────────────────────────────
@@ -232,53 +205,106 @@ router.get('/discord/callback', authLimiter, async (req, res) => {
     const d = me.data; // { id, username, email, verified, avatar }
     const avatarUrl = d.avatar ? `https://cdn.discordapp.com/avatars/${d.id}/${d.avatar}.png` : null;
 
-    // Resolve identity by discord_id ONLY — never merge by email (takeover risk).
-    let userId;
-    const { rows: [existing] } = await db.query(`SELECT id FROM users WHERE discord_id = $1`, [d.id]);
-    if (existing) {
-      await db.query(
-        `UPDATE users SET discord_username = $1, avatar_url = COALESCE($2, avatar_url), updated_at = NOW()
-         WHERE id = $3`,
-        [d.username, avatarUrl, existing.id]
-      );
-      userId = existing.id;
-    } else {
-      // Store the Discord email only if it doesn't collide with an existing
-      // account — otherwise leave it NULL so we never implicitly merge.
-      let emailToStore = null;
-      let emailVerified = false;
-      if (d.email) {
-        const { rows: [clash] } = await db.query(
-          `SELECT 1 FROM users WHERE LOWER(email) = $1`, [normalizeEmail(d.email)]
-        );
-        if (!clash) {
-          emailToStore = normalizeEmail(d.email);
-          emailVerified = !!d.verified;
-        }
-      }
-      const { rows: [created] } = await db.query(
-        `INSERT INTO users (discord_id, discord_username, avatar_url, email, email_verified, display_name)
-         VALUES ($1, $2, $3, $4, $5, $6) RETURNING id`,
-        [d.id, d.username, avatarUrl, emailToStore, emailVerified, d.username]
-      );
-      userId = created.id;
-    }
+    const sessionUser = await resolveOAuthUser({
+      provider: 'discord',
+      providerId: d.id,
+      email: d.email,
+      emailVerified: !!d.verified,
+      username: d.username,
+      avatarUrl,
+      displayName: d.username,
+    });
 
     // Hand the session token to the frontend via URL fragment (not query) so it
     // never lands in server logs / referrers / browser history.
-    res.redirect(`${base}/auth/callback#token=${signSession(userId)}`);
+    res.redirect(`${base}/auth/callback#token=${signSession(sessionUser)}`);
   } catch (err) {
     fail(err.response?.data?.error_description || err.message);
+  }
+});
+
+// ── Google OAuth2 ───────────────────────────────────────────────────────────
+
+// GET /api/auth/google — kick off the flow.
+router.get('/google', (req, res) => {
+  if (!ensureSecret(res)) return;
+  const clientId = process.env.GOOGLE_CLIENT_ID;
+  const redirectUri = process.env.GOOGLE_REDIRECT_URI;
+  if (!clientId || !redirectUri) return res.status(503).json({ error: 'Google login not configured' });
+
+  const state = jwt.sign({ purpose: 'google_state' }, secret(), { expiresIn: STATE_TTL });
+  const url = 'https://accounts.google.com/o/oauth2/v2/auth?' + new URLSearchParams({
+    client_id: clientId,
+    redirect_uri: redirectUri,
+    response_type: 'code',
+    scope: 'openid email profile',
+    state,
+    access_type: 'online',
+    prompt: 'select_account',
+  }).toString();
+  res.redirect(url);
+});
+
+// GET /api/auth/google/callback — exchange code, resolve user, hand back a token.
+router.get('/google/callback', authLimiter, async (req, res) => {
+  const base = frontendUrl();
+  const fail = (msg) => {
+    console.error('[auth] google callback:', msg);
+    res.redirect(`${base}/login?error=google`);
+  };
+  if (!secret()) return fail('JWT_SECRET unset');
+
+  const { code, state } = req.query;
+  try {
+    const sp = jwt.verify(String(state || ''), secret());
+    if (sp.purpose !== 'google_state') throw new Error('bad state');
+  } catch {
+    return fail('invalid state');
+  }
+  if (!code) return fail('missing code');
+
+  try {
+    // Exchange the auth code for an access token.
+    const tokenRes = await axios.post('https://oauth2.googleapis.com/token',
+      new URLSearchParams({
+        client_id: process.env.GOOGLE_CLIENT_ID,
+        client_secret: process.env.GOOGLE_CLIENT_SECRET,
+        grant_type: 'authorization_code',
+        code: String(code),
+        redirect_uri: process.env.GOOGLE_REDIRECT_URI,
+      }).toString(),
+      { headers: { 'Content-Type': 'application/x-www-form-urlencoded' } }
+    );
+
+    // Fetch the Google identity.
+    const me = await axios.get('https://www.googleapis.com/oauth2/v3/userinfo', {
+      headers: { Authorization: `Bearer ${tokenRes.data.access_token}` },
+    });
+    const g = me.data; // { sub, email, email_verified, name, picture }
+
+    const sessionUser = await resolveOAuthUser({
+      provider: 'google',
+      providerId: g.sub,
+      email: g.email,
+      // userinfo returns a boolean, but tolerate the string form defensively.
+      emailVerified: g.email_verified === true || g.email_verified === 'true',
+      username: g.name,
+      avatarUrl: g.picture || null,
+      displayName: g.name,
+    });
+
+    res.redirect(`${base}/auth/callback#token=${signSession(sessionUser)}`);
+  } catch (err) {
+    fail(err.response?.data?.error_description || err.response?.data?.error || err.message);
   }
 });
 
 // ── Account ↔ player linking (trust-based self-claim) ───────────────────────
 
 // POST /api/auth/link  { player_id }
+// Any signed-in (OAuth-authenticated) user may claim — the provider login is
+// itself the identity proof, so there's no separate email-verification gate.
 router.post('/link', requireAuth, async (req, res) => {
-  if (!req.user.email_verified) {
-    return res.status(403).json({ error: 'Verify your email before claiming a player' });
-  }
   const playerId = Number(req.body.player_id);
   if (!playerId) return res.status(400).json({ error: 'player_id required' });
   if (req.user.player_id) return res.status(409).json({ error: 'Your account is already linked to a player' });
@@ -307,6 +333,17 @@ router.post('/link', requireAuth, async (req, res) => {
 // POST /api/auth/unlink — user releases their own claim.
 router.post('/unlink', requireAuth, async (req, res) => {
   await db.query(`UPDATE users SET player_id = NULL, updated_at = NOW() WHERE id = $1`, [req.user.id]);
+  res.json({ success: true });
+});
+
+// POST /api/auth/logout-all — bump token_version to invalidate every session
+// (including this one). The caller's current token stops working immediately;
+// the frontend should clear it locally and send the user to sign in again.
+router.post('/logout-all', requireAuth, async (req, res) => {
+  await db.query(
+    `UPDATE users SET token_version = token_version + 1, updated_at = NOW() WHERE id = $1`,
+    [req.user.id]
+  );
   res.json({ success: true });
 });
 

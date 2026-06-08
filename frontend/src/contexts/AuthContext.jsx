@@ -1,5 +1,5 @@
 import { createContext, useContext, useEffect, useState, useCallback } from 'react';
-import { getMe, loginUser, registerUser } from '../lib/api';
+import { getMe } from '../lib/api';
 
 const STORAGE_KEY = 'auth_token';
 const AuthContext = createContext(null);
@@ -40,26 +40,15 @@ export function AuthProvider({ children }) {
     refresh().finally(() => setLoading(false));
   }, [refresh]);
 
-  const login = useCallback(async (email, password) => {
-    const { token, user } = await loginUser({ email, password });
-    setToken(token);
-    setUser(user);
-    return user;
-  }, [setToken]);
-
-  const register = useCallback(async (data) => {
-    const { token, user } = await registerUser(data);
-    setToken(token);
-    setUser(user);
-    return user;
-  }, [setToken]);
-
+  // Sign-in itself happens via OAuth (Discord/Google): the backend redirects to
+  // /auth/callback#token=…, which calls setToken + refresh. No login/register
+  // helpers needed here.
   const logout = useCallback(() => {
     setToken(null);
     setUser(null);
   }, [setToken]);
 
-  const value = { user, token, loading, login, register, logout, refresh, setToken };
+  const value = { user, token, loading, logout, refresh, setToken };
   return <AuthContext.Provider value={value}>{children}</AuthContext.Provider>;
 }
 

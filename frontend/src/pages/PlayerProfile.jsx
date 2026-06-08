@@ -141,15 +141,6 @@ function ClaimProfileCTA({ playerId }) {
   // User already claimed a different player — nothing to do here.
   if (user.player_id) return null;
 
-  // Must verify email before claiming.
-  if (!user.email_verified) {
-    return (
-      <Link to="/link" className="shrink-0 text-xs text-amber-300/80 hover:text-amber-200">
-        Verify email to claim →
-      </Link>
-    );
-  }
-
   const claim = async () => {
     setBusy(true);
     setError(null);

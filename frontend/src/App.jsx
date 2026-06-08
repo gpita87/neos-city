@@ -1,4 +1,4 @@
-import { Routes, Route, NavLink, Link, useLocation } from 'react-router-dom';
+import { Routes, Route, NavLink, Link } from 'react-router-dom';
 import Home from './pages/Home';
 import Leaderboard from './pages/Leaderboard';
 import Players from './pages/Players';
@@ -12,13 +12,10 @@ import Calendar from './pages/Calendar';
 import Creators from './pages/Creators';
 import Login from './pages/Login';
 import AuthCallback from './pages/AuthCallback';
-import VerifyEmail from './pages/VerifyEmail';
-import ForgotPassword from './pages/ForgotPassword';
-import ResetPassword from './pages/ResetPassword';
 import ClaimPlayer from './pages/ClaimPlayer';
 import { useAuth } from './contexts/AuthContext';
-import { resendVerification } from './lib/api';
-import { useState } from 'react';
+import { useFlag } from './hooks/useFlag';
+import FlagPanel from './components/FlagPanel';
 
 function NavItem({ to, children }) {
   return (
@@ -73,32 +70,8 @@ function AuthNav() {
   );
 }
 
-// Persistent prompt for signed-in users who haven't verified their email.
-function VerifyBanner() {
-  const { user } = useAuth();
-  const location = useLocation();
-  const [sent, setSent] = useState(false);
-  if (!user || user.email_verified || !user.email) return null;
-  // Don't show on the verify page itself.
-  if (location.pathname === '/verify-email') return null;
-
-  const resend = async () => {
-    try { await resendVerification(); setSent(true); } catch { /* ignore */ }
-  };
-
-  return (
-    <div className="bg-amber-500/10 border-b border-amber-500/30 text-amber-200 text-sm">
-      <div className="max-w-6xl mx-auto px-4 py-2 flex items-center gap-3 flex-wrap">
-        <span>✉️ Verify your email to claim your player profile.</span>
-        {sent
-          ? <span className="text-green-300">Sent — check your inbox.</span>
-          : <button onClick={resend} className="underline hover:text-amber-100">Resend email</button>}
-      </div>
-    </div>
-  );
-}
-
 export default function App() {
+  const showCreators = useFlag('creators');
   return (
     <div className="min-h-screen neos-bg text-slate-100 font-body">
       {/* Nav */}
@@ -115,7 +88,7 @@ export default function App() {
             <NavItem to="/tournaments">Tournaments</NavItem>
             <NavItem to="/calendar">Calendar</NavItem>
             <NavItem to="/achievements">Achievements</NavItem>
-            <NavItem to="/creators">Creators</NavItem>
+            {showCreators && <NavItem to="/creators">YouTube</NavItem>}
           </nav>
           <div className="ml-auto">
             <AuthNav />
@@ -123,7 +96,6 @@ export default function App() {
         </div>
         {/* Neon line under nav */}
         <div className="neon-divider" />
-        <VerifyBanner />
       </header>
 
       <main className="max-w-6xl mx-auto px-4 py-8">
@@ -136,18 +108,16 @@ export default function App() {
           <Route path="/tournaments/:id" element={<TournamentDetail />} />
           <Route path="/calendar" element={<Calendar />} />
           <Route path="/achievements" element={<Achievements />} />
-          <Route path="/creators" element={<Creators />} />
+          {showCreators && <Route path="/creators" element={<Creators />} />}
           <Route path="/live" element={<LiveRoom />} />
           <Route path="/live/:code" element={<LiveRoom />} />
           <Route path="/organizers" element={<Organizers />} />
           <Route path="/login" element={<Login />} />
           <Route path="/auth/callback" element={<AuthCallback />} />
-          <Route path="/verify-email" element={<VerifyEmail />} />
-          <Route path="/forgot-password" element={<ForgotPassword />} />
-          <Route path="/reset-password" element={<ResetPassword />} />
           <Route path="/link" element={<ClaimPlayer />} />
         </Routes>
       </main>
+      <FlagPanel />
     </div>
   );
 }

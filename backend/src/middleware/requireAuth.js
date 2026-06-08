@@ -2,8 +2,16 @@ const jwt = require('jsonwebtoken');
 const db = require('../db');
 
 // Columns returned for req.user. Never includes password_hash.
+// token_version backs session revocation — see the `tv` check below.
 const USER_COLUMNS = `id, email, email_verified, discord_id, discord_username,
-                      display_name, avatar_url, player_id, is_admin`;
+                      google_id, display_name, avatar_url, player_id, is_admin, token_version`;
+
+// A session token is only valid while its `tv` claim matches the user's current
+// token_version. Tokens minted before this column existed carry no `tv` claim;
+// treat those as version 0 (the column default) so a deploy doesn't mass-logout.
+function tokenVersionMatches(payload, user) {
+  return (payload.tv ?? 0) === user.token_version;
+}
 
 let warnedMissing = false;
 
@@ -39,6 +47,7 @@ async function requireAuth(req, res, next) {
       `SELECT ${USER_COLUMNS} FROM users WHERE id = $1`, [payload.sub]
     );
     if (!user) return res.status(401).json({ error: 'Unauthorized' });
+    if (!tokenVersionMatches(payload, user)) return res.status(401).json({ error: 'Unauthorized' });
     req.user = user;
     next();
   } catch {
@@ -59,7 +68,7 @@ async function attachUser(req, res, next) {
     const { rows: [user] } = await db.query(
       `SELECT ${USER_COLUMNS} FROM users WHERE id = $1`, [payload.sub]
     );
-    req.user = user || null;
+    req.user = (user && tokenVersionMatches(payload, user)) ? user : null;
   } catch { /* invalid token — stay anonymous */ }
   next();
 }
