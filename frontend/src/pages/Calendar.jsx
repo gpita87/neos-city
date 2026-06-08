@@ -116,14 +116,8 @@ const SERIES_SCHEDULES = [
  *   url      where the pill links; null = non-clickable announcement
  */
 const MANUAL_EVENTS = [
-  {
-    id: 'manual_mid_tier_mayhem_2026-06-06',
-    name: 'Mid Tier Mayhem',
-    series: 'other',
-    date: '2026-06-06',
-    utcHour: 17, utcMinute: 0,   // 1:00 PM Eastern (EDT in June, UTC−4)
-    url: 'https://www.start.gg/tournament/mid-tier-mayhem/details',
-  },
+  // Mid Tier Mayhem (2026-06-06) was here as a placeholder; it has since run and
+  // been imported (start.gg, id 1068), so the real DB row supersedes it.
   {
     id: 'manual_replay_rumble_2026-06-20',
     name: 'Replay Rumble (Stockton, CA)',
@@ -316,7 +310,14 @@ function EventPill({ event, compact = false }) {
     >
       <span className={`w-2 h-2 rounded-full flex-shrink-0 ${m.color}`} />
       {compact
-        ? <span className="truncate">{event.isManual ? event.name : `${m.label}${event.number ? ` ${event.number}` : ''}`}</span>
+        ? <span className="truncate">{
+            // Recurring-series events compress to "FFC 15" / "RTG NA 23" to fit the
+            // small month cell. One-off events ('other') and manual placeholders have
+            // no meaningful series label, so show their actual name instead of "Other".
+            event.isManual || event.series === 'other'
+              ? event.name
+              : `${m.label}${event.number ? ` ${event.number}` : ''}`
+          }</span>
         : <span className="truncate">{event.name}</span>
       }
       {event.hour != null && !compact && (
