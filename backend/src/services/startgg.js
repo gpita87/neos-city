@@ -151,6 +151,33 @@ async function getEventBySlug(eventSlug) {
   return data.event;
 }
 
+// ─── Event-level final standings ──────────────────────────────────────────────
+//
+// Phase-group standings only rank the players within that one stage (a pool, or
+// the Top 8). For a multi-phase event the *event* standings give the real final
+// ranking across the whole field — needed so final_rank and placement bonuses
+// reflect the actual tournament finish, not a single stage's positions.
+// Entrant IDs are event-scoped and identical to the ones on the set slots, so
+// these line up with the per-set entrant map during import.
+
+async function getEventStandings(eventSlug, perPage = 256) {
+  const data = await gql(
+    `query EventStandings($slug: String!, $perPage: Int!) {
+      event(slug: $slug) {
+        id
+        standings(query: { perPage: $perPage, page: 1 }) {
+          nodes {
+            placement
+            entrant { id name }
+          }
+        }
+      }
+    }`,
+    { slug: eventSlug, perPage }
+  );
+  return data.event?.standings?.nodes || [];
+}
+
 // ─── URL parser ───────────────────────────────────────────────────────────────
 //
 // Handles:
@@ -268,6 +295,7 @@ module.exports = {
   getPhaseGroup,
   getAllSets,
   getEventBySlug,
+  getEventStandings,
   parseStartggUrl,
   isStartggUrl,
   discoverPokkenTournaments,

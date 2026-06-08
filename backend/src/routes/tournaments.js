@@ -929,10 +929,30 @@ async function updatePlayerStats(playerId, tournament, playerMap, matchList, tou
 // start.gg import
 // ══════════════════════════════════════════════════════════════════════════════
 
-async function importOneStartgg(phaseGroupId) {
+// opts (for multi-phase events imported as a single tournament row):
+//   mergePhaseGroupIds — other phase groups of the same event whose sets get
+//     folded into this canonical bracket. start.gg set IDs are globally unique,
+//     so concatenating is collision-free and the match upsert key (set id) stays
+//     stable across re-imports.
+//   standings — event-level final standings ([{placement, entrant{id,name}}]).
+//     Overrides the canonical phase group's stage-only standings so final_rank
+//     and placement bonuses reflect the real tournament finish.
+async function importOneStartgg(phaseGroupId, opts = {}) {
   try {
     // ── Fetch bracket + metadata from start.gg ─────────────────────────────
     const bracket = await startgg.getAllSets(phaseGroupId);
+
+    // Fold in the other phase groups of a multi-phase event (pools → top N).
+    if (opts.mergePhaseGroupIds?.length) {
+      for (const extraPg of opts.mergePhaseGroupIds) {
+        const extra = await startgg.getAllSets(extraPg);
+        bracket.sets.nodes.push(...(extra.sets?.nodes || []));
+      }
+    }
+    // Use the event-level final ranking instead of this stage's standings.
+    if (opts.standings?.length) {
+      bracket.standings = { nodes: opts.standings };
+    }
 
     const event      = bracket.phase?.event;
     const tournament = event?.tournament;
@@ -1206,6 +1226,35 @@ async function importOneStartgg(phaseGroupId) {
   }
 }
 
+// Import a full multi-phase start.gg event (pools → Top N) as ONE tournament
+// row. Gathers every phase group across every phase, merges their matches onto
+// the final phase's bracket, and applies the event-level final standings.
+async function importStartggEvent(eventSlug) {
+  const event = await startgg.getEventBySlug(eventSlug);
+  if (!event) throw new Error(`No event found for slug ${eventSlug}`);
+
+  const phases = event.phases || [];
+  if (!phases.length) throw new Error(`Event ${eventSlug} has no phases`);
+
+  // Every phase group across every phase.
+  const allPgIds = [];
+  for (const ph of phases) {
+    for (const g of (ph.phaseGroups?.nodes || [])) allPgIds.push(String(g.id));
+  }
+  if (!allPgIds.length) throw new Error(`Event ${eventSlug} has no phase groups`);
+
+  // Canonical = the final phase's first group (the real podium bracket). Keying
+  // the tournament row on its phase group id keeps re-imports idempotent.
+  const lastPhase  = phases[phases.length - 1];
+  const canonical  = String((lastPhase.phaseGroups?.nodes || [])[0]?.id || '');
+  if (!canonical) throw new Error(`Event ${eventSlug} final phase has no phase group`);
+  const others = allPgIds.filter(id => id !== canonical);
+
+  const standings = await startgg.getEventStandings(eventSlug);
+
+  return importOneStartgg(canonical, { mergePhaseGroupIds: others, standings });
+}
+
 // POST /api/tournaments/import-startgg — import a single start.gg bracket
 router.post('/import-startgg', requireAdmin, async (req, res) => {
   const { url, phase_group_id } = req.body;
@@ -1220,6 +1269,28 @@ router.post('/import-startgg', requireAdmin, async (req, res) => {
 
   try {
     const result = await importOneStartgg(pgId);
+    res.json(result);
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
+// POST /api/tournaments/import-startgg-event — import a full multi-phase event
+// (pools → Top N) as a single tournament row.
+// Body: { event_slug: "tournament/<t>/event/<e>" } or { url: "<any bracket URL>" }
+router.post('/import-startgg-event', requireAdmin, async (req, res) => {
+  const { url, event_slug } = req.body;
+
+  let slug = event_slug;
+  if (!slug && url) {
+    // bracket/overview URL → event slug. Handles both "/events/" and "/event/".
+    const m = String(url).match(/tournament\/([^/]+)\/events?\/([^/?#]+)/i);
+    if (m) slug = `tournament/${m[1]}/event/${m[2]}`;
+  }
+  if (!slug) return res.status(400).json({ error: 'event_slug or url required' });
+
+  try {
+    const result = await importStartggEvent(slug);
     res.json(result);
   } catch (err) {
     res.status(500).json({ error: err.message });
@@ -2470,6 +2541,7 @@ router.post('/import-liquipedia-placements', requireAdmin, async (req, res) => {
 module.exports = router;
 module.exports.importOne                    = importOne;
 module.exports.importOneStartgg             = importOneStartgg;
+module.exports.importStartggEvent           = importStartggEvent;
 module.exports.importOneTonamel             = importOneTonamel;
 module.exports.importOneOffline             = importOneOffline;
 module.exports.importOneLiquipediaBracket   = importOneLiquipediaBracket;
