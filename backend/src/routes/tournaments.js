@@ -263,7 +263,7 @@ async function importOne(challonge_id) {
     // Region auto-tag by series. Mirrors the JP auto-tag in importOneTonamel:
     // tag on insert, COALESCE on conflict so a manually-set region is preserved.
     // Currently only RTG NA — extend SERIES_REGION as more series get scoped.
-    const SERIES_REGION = { rtg_na: 'NA' };
+    const SERIES_REGION = { rtg_na: 'NA', rtg_eu: 'EU' };
     const autoRegion = SERIES_REGION[series] || null;
 
     for (const p of participantList) {
