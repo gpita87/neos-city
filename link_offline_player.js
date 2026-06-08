@@ -290,13 +290,20 @@ async function run() {
       // honor any --display-name fix the user asked for.
       console.log(`No player found for "${fromRaw}". Either it was already merged, or the offline event hasn't been imported yet.`);
       if (dst) {
+        // Alias key must match the importer's lookup verbatim — that's a
+        // lowercased+trimmed slug, NOT space-replaced. resolveAlias() in
+        // tournaments.js does an exact Map lookup keyed on the lowercased
+        // participant slug; using normalize() here (which replaces
+        // whitespace with '_') would silently miss start.gg-fallback
+        // rows like "neo sinanju" whose key has a literal space.
+        const aliasKey = String(fromRaw).trim().toLowerCase();
         await client.query(
           `INSERT INTO player_aliases (alias_username, canonical_username)
            VALUES ($1, $2)
            ON CONFLICT (alias_username) DO UPDATE SET canonical_username = EXCLUDED.canonical_username`,
-          [normalize(fromRaw), dst.challonge_username]
+          [aliasKey, dst.challonge_username]
         );
-        console.log(`✓ Alias ensured: ${normalize(fromRaw)} → ${dst.challonge_username}`);
+        console.log(`✓ Alias ensured: ${aliasKey} → ${dst.challonge_username}`);
         if (cliDisplayName && cliDisplayName !== dst.display_name) {
           await client.query(
             `UPDATE players SET display_name = $1 WHERE id = $2`,
@@ -330,7 +337,7 @@ async function run() {
     for (const [k, v] of Object.entries(counts)) {
       console.log(`    ${k.padEnd(40)} ${v}`);
     }
-    console.log(`  + insert/update player_aliases: ${normalize(src.challonge_username)} → ${dst.challonge_username}`);
+    console.log(`  + insert/update player_aliases: ${src.challonge_username} → ${dst.challonge_username}`);
     console.log(`  + DELETE players row id=${src.id} (after move)`);
     console.log(`  + recompute offline_* + offline_score on id=${dst.id}`);
     if (cliDisplayName && cliDisplayName !== dst.display_name) {
@@ -430,12 +437,16 @@ async function run() {
     console.log(`  Deleted players row id=${src.id}`);
 
     // ── Insert / update player_aliases ───────────────────────────────────
+    // Alias key uses src.challonge_username verbatim — that's the exact key
+    // the importer would look up via resolveAlias(). Don't run it through
+    // normalize() (which space-replaces) — see comment on the parallel
+    // alias write above and in merge_players.js step 8.
     await client.query(`
       INSERT INTO player_aliases (alias_username, canonical_username)
       VALUES ($1, $2)
       ON CONFLICT (alias_username) DO UPDATE SET canonical_username = EXCLUDED.canonical_username
-    `, [normalize(src.challonge_username), dst.challonge_username]);
-    console.log(`  player_aliases:              ${normalize(src.challonge_username)} → ${dst.challonge_username}`);
+    `, [src.challonge_username, dst.challonge_username]);
+    console.log(`  player_aliases:              ${src.challonge_username} → ${dst.challonge_username}`);
 
     // ── Recompute offline stats for the canonical player ─────────────────
     await refreshOfflineStats(client, dst.id);
