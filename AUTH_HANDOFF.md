@@ -100,7 +100,7 @@ read — safe to remove from Render.
 | `display_name`, `avatar_url` | informational; backfilled on merge if empty |
 | `player_id` | FK → `players(id)` `ON DELETE SET NULL`; partial-unique (one user per player) |
 | `token_version` | INTEGER default 0 (added by `add_token_version.sql`); embedded as `tv`, bumped by `logout-all` to revoke sessions |
-| `is_admin` | seeded false; **not wired to anything yet** |
+| `is_admin` | seeded false; **enforced by `requireAdmin`** (transitional dual-path — admin session OR legacy `x-admin-token`). Grant via `make_admin.js`. |
 | `created_at`, `updated_at` | routes set `updated_at` explicitly (no trigger) |
 
 - **CHECK** `users_has_identity`: `email OR discord_id OR google_id` (widened for Google).
@@ -124,9 +124,19 @@ read — safe to remove from Render.
 - `backend/src/middleware/requireAuth.js` — `requireAuth` (bearer verify + per-request user
   load + `tv` revocation check via `tokenVersionMatches`), `attachUser` (non-blocking
   variant, same check, **currently unused**), `USER_COLUMNS` (no `password_hash`; includes
-  `google_id`, `token_version`).
+  `google_id`, `token_version`). Exports `tokenVersionMatches` (reused by `requireAdmin`).
+- `backend/src/middleware/requireAdmin.js` — transitional admin gate. Async; authorizes if
+  EITHER (a) a valid bearer session whose `user.is_admin = true` (reuses `jwt.verify` +
+  `USER_COLUMNS` + `tokenVersionMatches` from `requireAuth`), OR (b) the legacy
+  `x-admin-token` matching `ADMIN_TOKEN`. Fails closed: 503 if neither `ADMIN_TOKEN` nor
+  `JWT_SECRET` is configured, 401 otherwise. Export shape unchanged (bare function), so the
+  ~25 route registrations across `tournaments.js`/`organizers.js`/`creators.js`/
+  `resources.js`/`auth.js` are untouched.
 - `backend/src/app.js` — mounts `app.use('/api/auth', authRouter)`. No new CORS origin
   needed (OAuth is full-page server redirects).
+- `make_admin.js` (repo root) — bootstrap: `node make_admin.js <discord_username|email>`
+  sets `is_admin = true` (case-insensitive match on `discord_username` OR `email`). Run once
+  after your first OAuth login (so your `users` row exists).
 - `merge_players.js`, `link_offline_player.js` — re-point `users.player_id` on merges.
 - **Deleted:** `backend/src/services/email.js`.
 
@@ -161,7 +171,7 @@ read — safe to remove from Render.
 | POST | `/link` | requireAuth | `{player_id}`; 409 if taken/already-linked. **No email gate.** |
 | POST | `/unlink` | requireAuth | clears caller's own `player_id` |
 | POST | `/logout-all` | requireAuth | bumps `token_version` — revokes every session incl. caller's |
-| POST | `/admin/unlink` | requireAdmin | `{user_id}`; reuses `x-admin-token` |
+| POST | `/admin/unlink` | requireAdmin | `{user_id}`; admin session OR legacy `x-admin-token` |
 
 ---
 
@@ -179,6 +189,11 @@ Backend `npm run dev` (3001) + frontend `npm run dev` (5173).
    redirect to `/login?error=discord|google`.
 6. `logout-all`: call it (no UI yet — `import('./lib/api').logoutAll()` from DevTools), then
    any further request 401s and the app drops you to signed-out.
+7. **Admin via session (`is_admin`):** after signing in once, run
+   `node make_admin.js <your-discord-username-or-email>` to set `is_admin = true`. Then a
+   mutating route (e.g. an import) succeeds with **only** your bearer `auth_token` and no
+   `x-admin-token` set. A non-admin session → 401; the legacy `x-admin-token` still works
+   throughout the transition.
 
 ---
 
@@ -192,7 +207,9 @@ Backend `npm run dev` (3001) + frontend `npm run dev` (5173).
 - **`/login?next=…` is ignored.** OAuth can't easily thread a post-login destination through
   the provider without encoding it in the `state` JWT. After login everyone lands on `/`.
   Minor; thread `next` through `state` if it matters later.
-- `is_admin` exists but is **not enforced anywhere** — admin routes still use `ADMIN_TOKEN`.
+- `is_admin` is **enforced by `requireAdmin`**, but transitionally: the route accepts an
+  admin session OR the legacy `x-admin-token`. The shared secret isn't retired until
+  `is_admin` is confirmed working in prod (see follow-up #3's cleanup step).
 
 ---
 
@@ -209,12 +226,23 @@ Backend `npm run dev` (3001) + frontend `npm run dev` (5173).
    in-app "link a second provider" button for the case where the two providers' emails
    **differ** (or one is unverified) — that still needs an explicit, authenticated
    confirm-link flow. Build it only if that case actually comes up.
-3. **Unify `ADMIN_TOKEN` into `is_admin` — NEXT.** Replace the shared `x-admin-token` on
-   mutating routes with `requireAuth` + an `is_admin` check, then retire the shared secret.
-   `is_admin` + `admin/unlink` are already seeded. Touches every admin route in
-   `tournaments.js` / `organizers.js` — its own task.
-4. **The ranked ladder** — the actual reason this exists. Builds on `users.player_id` as the
-   verified identity.
+3. 🟡 **Unify `ADMIN_TOKEN` into `is_admin` — TRANSITIONAL CUT DONE.** `requireAdmin` is now
+   dual-path: it authorizes EITHER a valid bearer session whose `user.is_admin = true` OR the
+   legacy `x-admin-token` (unchanged). The change is concentrated in
+   `backend/src/middleware/requireAdmin.js` (+ a one-line export of `tokenVersionMatches` from
+   `requireAuth.js`); the ~25 route registrations were **not** touched. `make_admin.js` is the
+   bootstrap to grant the first admin. The frontend already sends the bearer token, so no
+   frontend change was needed; the legacy `admin_token` interceptor stays during the
+   transition. **This was deliberately non-breaking** — a hard flip would have locked every
+   admin/import route, since there's no `is_admin` user yet and OAuth isn't live in a browser
+   until the Discord/Google apps are configured (top of this doc).
+   - **Remaining cleanup (do AFTER `is_admin` is confirmed working in prod):** retire the
+     shared secret — remove branch (b) (the `x-admin-token` path) from `requireAdmin`, drop
+     the `admin_token` interceptor in `frontend/src/lib/api.js`, and unset `ADMIN_TOKEN` on
+     Render + local `.env`. Don't do this until Gabriel has logged in once via OAuth, run
+     `make_admin.js`, and verified an admin action succeeds with only the session token.
+4. **The ranked ladder — NEXT major item.** The actual reason this auth work exists. Builds on
+   `users.player_id` as the verified identity. Nothing here is built yet.
 5. **Hardening:** server-side OAuth `state` store (currently a stateless 10m JWT), token
    refresh/rotation, expose "is this player already claimed" on the public profile payload
    so the claim button can pre-gray, optionally drop the unused `password_hash` column.
