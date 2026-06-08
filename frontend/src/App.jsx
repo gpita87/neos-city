@@ -72,6 +72,7 @@ function AuthNav() {
 
 export default function App() {
   const showCreators = useFlag('creators');
+  const showAuth = useFlag('auth');
   return (
     <div className="min-h-screen neos-bg text-slate-100 font-body">
       {/* Nav */}
@@ -90,9 +91,11 @@ export default function App() {
             <NavItem to="/achievements">Achievements</NavItem>
             {showCreators && <NavItem to="/creators">YouTube</NavItem>}
           </nav>
-          <div className="ml-auto">
-            <AuthNav />
-          </div>
+          {showAuth && (
+            <div className="ml-auto">
+              <AuthNav />
+            </div>
+          )}
         </div>
         {/* Neon line under nav */}
         <div className="neon-divider" />

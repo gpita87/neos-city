@@ -33,6 +33,11 @@ export const FLAGS = {
     description: 'YouTube creators + resource library page.',
     default: false,
   },
+  auth: {
+    label: 'Sign-in',
+    description: 'Shows the "Sign in" button / account controls (OAuth login + claim flow). Off until the Discord/Google apps are live in prod.',
+    default: false,
+  },
 };
 
 // ── Storage ───────────────────────────────────────────────────────────────────
