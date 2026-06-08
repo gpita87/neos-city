@@ -73,4 +73,4 @@ async function attachUser(req, res, next) {
   next();
 }
 
-module.exports = { requireAuth, attachUser, USER_COLUMNS };
+module.exports = { requireAuth, attachUser, USER_COLUMNS, tokenVersionMatches };
