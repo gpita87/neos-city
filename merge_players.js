@@ -3,9 +3,19 @@
  *
  * Reassigns all matches, placements, ELO history, achievements, and
  * defeated-opponent records from the OLD player to the CANONICAL player,
- * then deletes the old player record.
+ * deletes the old player record, AND writes a row to player_aliases so
+ * future tournament imports of the dead handle route directly to the
+ * canonical row instead of creating a fresh fallback.
  *
- * After running this, run `node recalculate_elo.js` to rebuild all stats.
+ * Closes the re-emergence loop: start.gg / offline imports that
+ * slugify a participant's display_name into a `challonge_username` key
+ * matching a previously-merged handle now hit `resolveAlias()` in
+ * tournaments.js and land on the canonical row, leaving no breadcrumb
+ * to re-merge later. Existing aliases that pointed AT the dead handle
+ * are also forwarded to the new canonical, so chained merges stay
+ * consistent.
+ *
+ * After running, run `node recalculate_elo.js` to rebuild all stats.
  *
  * Usage (from neos-city directory):
  *   node merge_players.js <old_username> <canonical_username>
@@ -16,6 +26,22 @@
 
 require('./backend/node_modules/dotenv').config({ path: './backend/.env' });
 const { Pool } = require('./backend/node_modules/pg');
+
+// Defensive — link_offline_player.js also creates this table; the merge
+// script doesn't want to crash if it's run before that has happened.
+async function ensureAliasTable(client) {
+  await client.query(`
+    CREATE TABLE IF NOT EXISTS player_aliases (
+      id                 SERIAL PRIMARY KEY,
+      alias_username     TEXT UNIQUE NOT NULL,
+      canonical_username TEXT NOT NULL,
+      created_at         TIMESTAMPTZ DEFAULT NOW()
+    )
+  `);
+  await client.query(`
+    CREATE INDEX IF NOT EXISTS idx_player_aliases_alias ON player_aliases (alias_username)
+  `);
+}
 
 const oldUsername = process.argv[2];
 const canonUsername = process.argv[3];
@@ -31,6 +57,8 @@ const pool = new Pool({ connectionString: process.env.DATABASE_URL });
 async function merge() {
   const client = await pool.connect();
   try {
+    await ensureAliasTable(client);
+
     // Look up both players
     const { rows: oldRows } = await client.query(
       `SELECT id, challonge_username, display_name FROM players WHERE challonge_username = $1`,
@@ -148,6 +176,35 @@ async function merge() {
     // 7. Delete old player record
     await client.query(`DELETE FROM players WHERE id = $1`, [oldId]);
     console.log(`  Deleted old player record (id=${oldId})`);
+
+    // 8. Write player_aliases so future imports route the dead handle to the
+    //    canonical row instead of recreating a fallback. Two steps:
+    //    a. Any existing aliases that pointed AT oldUsername (because some
+    //       earlier merge made it canonical) get re-pointed to canonUsername.
+    //    b. oldUsername itself becomes an alias for canonUsername. ON CONFLICT
+    //       handles the case where an older alias row already exists for it.
+    //
+    //    The alias key is oldRows[0].challonge_username verbatim (no
+    //    normalization). resolveAlias() in tournaments.js does an exact map
+    //    lookup keyed on the lowercased participant slug, which is exactly
+    //    what's stored in players.challonge_username — normalizing here would
+    //    silently miss handles with spaces (e.g. "neo sinanju" from start.gg).
+    const oldKey = oldRows[0].challonge_username;
+    const canonKey = canonRows[0].challonge_username;
+    const r7 = await client.query(
+      `UPDATE player_aliases SET canonical_username = $1 WHERE canonical_username = $2`,
+      [canonKey, oldKey]
+    );
+    if (r7.rowCount > 0) {
+      console.log(`  player_aliases: re-routed ${r7.rowCount} existing alias(es) "${oldKey}" → "${canonKey}"`);
+    }
+    await client.query(
+      `INSERT INTO player_aliases (alias_username, canonical_username)
+       VALUES ($1, $2)
+       ON CONFLICT (alias_username) DO UPDATE SET canonical_username = EXCLUDED.canonical_username`,
+      [oldKey, canonKey]
+    );
+    console.log(`  player_aliases: ${oldKey} → ${canonKey}`);
 
     await client.query('COMMIT');
     console.log('\nMerge complete! Now run: node recalculate_elo.js');
