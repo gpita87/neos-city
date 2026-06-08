@@ -572,3 +572,5 @@ https://www.start.gg/tournament/heaven-s-arena-32/events/heaven-s-arena-32/brack
 # Appended via harvest_console.js on 2026-06-03 (organizer: RTG NA / shean96)
 https://challonge.com/shean96/cm12dhdv
 https://challonge.com/shean96/ys1pj3d2
+# Appended via harvest_console.js on 2026-06-08 (organizer: FFC / rickythe3rd)
+https://challonge.com/rickythe3rd/fizy3udu
