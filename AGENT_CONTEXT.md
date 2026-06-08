@@ -1172,3 +1172,30 @@ Run `node recalculate_elo.js` to replay all matches chronologically and correct 
     - PowerShell 5.1: actively broken. Wraps stderr lines in `ErrorRecord` objects and sets `$?` to `$false` even when the exe exited 0. So `npx esbuild ... 2>&1 | Out-Null; if ($?) {"OK"} else {"FAIL"}` reports FAIL on valid JSX whenever esbuild writes anything to stderr. Don't redirect stderr in PowerShell; it's captured for you.
   - **`echo $?` (Bash) / `if ($?) {"OK"} else {"FAIL"}` (PowerShell)** — the exit code is in the tool result. Reinventing it lies when the `2>&1` trap above corrupts `$?`.
   - **Mismatched whitelist scope** — `Bash(...)` allow patterns in `.claude/settings.json` do NOT cover the PowerShell tool and vice versa. If a command prompts unexpectedly, check which tool you invoked and whether the matching pattern exists.
+
+### Minimizing permission prompts
+
+The allowlist in `.claude/settings.json` matches **static command prefixes**, one segment at a time — it never executes or expands anything. That single fact explains nearly every avoidable prompt. Before adding a new allow rule, decide which kind of prompt you're looking at: a **missing verb** (allowlist it) or a **structural** problem (refactor — no rule can fix it).
+
+- **A compound command (`;`, `&&`, `||`) auto-approves only if EVERY segment already matches an allow rule.** The matcher splits the line and checks each piece; one un-listed segment forces a prompt for the whole thing. The usual culprits are scaffolding, not the real work:
+  - **`cd <dir>`** — redundant (the tool already starts in the project root; use cwd-relative paths, or `git -C <path>` to act on another tree). `cd` also trips a separate "changes directory before running git, which can execute untrusted hooks" warning.
+  - **`echo "=== label ==="`** — put section labels in your *response text*, not in the command. Each `echo` is an un-listed segment that forces a prompt.
+
+  Strip both and a diagnostic that only bundled allowlisted verbs (`git log`, `git status`, `git rev-parse`, `node -c`) usually goes silent.
+
+- **Loops, conditionals, and shell variables are inherently un-allowlistable.** The matcher can't see inside a `for`/`while`/`if`, and `node -c "$f"` never matches `node -c *` because the matcher sees the literal `"$f"`, not its expansions. Unroll into literal-argument calls:
+  ```
+  # prompts (loop body is opaque to the matcher):
+  for f in a.js b.js; do node -c "$f"; done
+  # silent (each segment matches `node -c *`):
+  node -c a.js; node -c b.js
+  ```
+  Better yet, issue independent read-only checks as **separate tool calls** — the harness runs them in parallel and a failure points at exactly one file.
+
+- **Multi-line `-m` commit bodies can defeat `commit:*` matching.** Wildcards don't span newlines, so a message with blank lines + a `Co-Authored-By` trailer falls through to a prompt even though `git commit:*` is allowed. Use a single-line `-m` when you want it silent, `-F <file>` for a long body, or just accept the prompt (committing is deliberate enough that a prompt is fine).
+
+- **Two layers stop commands — know which one fired.**
+  - *Permission layer* (allow / ask / deny): fixable with an allow rule. `Read`/`Edit`/`Write`/`Bash` run here.
+  - *Workspace-boundary check* — the error "Path is outside allowed working directories" — is NOT the permission layer and NO allow rule widens it. `Grep`/`Glob` are confined to the session's working roots; a sibling worktree (`neos-city-worktrees/<name>/`) is out of bounds. Either Grep the identical file in the in-scope main checkout, or `/add-dir <path>` for that one session. Don't bake the whole worktrees tree into `additionalDirectories` — that widens scope for every session and pollutes searches with stale branch copies.
+
+- **Decision rule:** when something prompts, ask *is a verb missing from the allowlist, or is the structure the problem?* Read-only verbs (`git merge-base`, `git grep`, `git cat-file`, `git rev-parse`) belong in the allowlist — add them. But `cd` / `echo` / a loop / a `$var` / a multi-line `-m` are structural — refactor them away; allowlisting can't help.

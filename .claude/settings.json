@@ -50,6 +50,7 @@
       "Read(//c/Users/pitag/Documents/neos-city/**)",
       "Glob(//c/Users/pitag/Documents/neos-city/**)",
       "Grep(//c/Users/pitag/Documents/neos-city/**)",
+      "Read(//c/Users/pitag/Documents/neos-city-worktrees/**)",
       "Edit(//c/Users/pitag/Documents/neos-city-worktrees/**)",
       "Write(//c/Users/pitag/Documents/neos-city-worktrees/**)",
       "Bash(npx esbuild:*)",
