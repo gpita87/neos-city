@@ -30,11 +30,6 @@ const startgg = require('./backend/src/services/startgg');
 
 const HARVESTED_FILE = path.join(__dirname, 'harvested_tournaments.txt');
 
-// Locals threshold — events with fewer entrants are skipped at harvest time.
-// 8 keeps the floor at "at least a top 8 worth of bracket" and drops the long
-// tail of 2–6 entrant weekly micro-events that would otherwise pollute stats.
-const MIN_ENTRANTS = 8;
-
 // Series allowlist — events whose tournament/event name doesn't match any
 // of these patterns are skipped. Mirrors harvest_new.js's per-organizer model
 // for Challonge: start.gg has no central "series" organizer, so we curate by
@@ -42,6 +37,17 @@ const MIN_ENTRANTS = 8;
 // to disable the filter entirely.
 const SERIES_PATTERNS = [
   /heaven'?s arena/i,
+];
+
+// Event denylist — secondary brackets that share a tournament with the main
+// event. start.gg exposes these as separate events under the same tournament
+// (e.g. "Bracket of the Fallen", Heaven's Arena's last-chance/redemption
+// bracket), so discovery emits a second URL per tournament that imports as a
+// duplicate row. The old MIN_ENTRANTS floor dropped them incidentally because
+// the consolation bracket is smaller; now we exclude them by name explicitly.
+// Matched against the combined "Tournament — Event" name.
+const EVENT_DENY_PATTERNS = [
+  /bracket of the fallen/i,
 ];
 
 function parseArgs() {
@@ -114,8 +120,8 @@ function parseArgs() {
   // ── 3. Filter to genuinely new ones ────────────────────────────────────
   const seen = new Set();
   const fresh = [];
-  let belowThreshold = 0;
   let offSeries = 0;
+  let denied = 0;
   for (const item of discovered) {
     if (known.has(item.phaseGroupId)) continue;
     if (seen.has(item.phaseGroupId)) continue; // de-dupe within this run
@@ -123,8 +129,8 @@ function parseArgs() {
       offSeries++;
       continue;
     }
-    if (typeof item.numEntrants === 'number' && item.numEntrants < MIN_ENTRANTS) {
-      belowThreshold++;
+    if (EVENT_DENY_PATTERNS.some(p => p.test(item.name))) {
+      denied++;
       continue;
     }
     seen.add(item.phaseGroupId);
@@ -133,8 +139,8 @@ function parseArgs() {
   if (offSeries) {
     console.log(`Skipped ${offSeries} new event(s) not matching the series allowlist`);
   }
-  if (belowThreshold) {
-    console.log(`Skipped ${belowThreshold} new event(s) with <${MIN_ENTRANTS} entrants (locals threshold)`);
+  if (denied) {
+    console.log(`Skipped ${denied} new event(s) matching the event denylist (e.g. Bracket of the Fallen)`);
   }
 
   if (fresh.length === 0) {

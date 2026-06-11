@@ -574,3 +574,6 @@ https://challonge.com/shean96/cm12dhdv
 https://challonge.com/shean96/ys1pj3d2
 # Appended via harvest_console.js on 2026-06-08 (organizer: FFC / rickythe3rd)
 https://challonge.com/rickythe3rd/fizy3udu
+# Appended by harvest_startgg.js on 2026-06-09 (last 90d)
+# 2026-06-02 - Heaven's Arena #33 — Heaven's Arena #33
+https://www.start.gg/tournament/heaven-s-arena-33/events/heaven-s-arena-33/brackets/2302881/3332735
