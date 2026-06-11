@@ -85,8 +85,60 @@ async function getChannelSnapshot(channelId) {
   return snapshot;
 }
 
+// Fetch a channel's avatar + its N most-recent uploads in one helper (2 quota
+// units). Returns { channelId, avatarUrl, videos: [{ videoId, title,
+// publishedAt }] } newest-first. videos is [] for a channel with no uploads.
+async function getChannelRecent(channelId, max = 3) {
+  const { data: chData } = await axios.get(`${API_BASE}/channels`, {
+    params: { key: apiKey(), part: 'contentDetails,snippet', id: channelId },
+  });
+  const channel = chData.items?.[0];
+  if (!channel) throw new Error(`Channel not found: ${channelId}`);
+
+  const thumbs = channel.snippet?.thumbnails || {};
+  const avatarUrl = (thumbs.medium || thumbs.high || thumbs.default || {}).url || null;
+  const uploadsId = channel.contentDetails?.relatedPlaylists?.uploads;
+
+  let videos = [];
+  if (uploadsId) {
+    const perPage = Math.min(Math.max(parseInt(max, 10) || 1, 1), 50);
+    const { data: plData } = await axios.get(`${API_BASE}/playlistItems`, {
+      params: { key: apiKey(), part: 'snippet', playlistId: uploadsId, maxResults: perPage },
+    });
+    videos = (plData.items || [])
+      .map(it => ({
+        videoId: it.snippet?.resourceId?.videoId || null,
+        title: it.snippet?.title || null,
+        publishedAt: it.snippet?.publishedAt || null,
+      }))
+      .filter(v => v.videoId);
+  }
+  return { channelId, avatarUrl, videos };
+}
+
+// Fetch a single video's metadata (title, channel, thumbnail). 1 quota unit.
+// Returns null if the video isn't found / is private.
+async function getVideoMeta(videoId) {
+  const { data } = await axios.get(`${API_BASE}/videos`, {
+    params: { key: apiKey(), part: 'snippet', id: videoId },
+  });
+  const s = data.items?.[0]?.snippet;
+  if (!s) return null;
+  const t = s.thumbnails || {};
+  return {
+    videoId,
+    title: s.title || null,
+    channelTitle: s.channelTitle || null,
+    channelId: s.channelId || null,
+    thumbnailUrl: (t.medium || t.high || t.default || {}).url || null,
+    publishedAt: s.publishedAt || null,
+  };
+}
+
 module.exports = {
   parseChannelUrl,
   resolveChannelId,
   getChannelSnapshot,
+  getChannelRecent,
+  getVideoMeta,
 };

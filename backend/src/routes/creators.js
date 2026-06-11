@@ -2,6 +2,7 @@ const express = require('express');
 const router = express.Router();
 const db = require('../db');
 const youtube = require('../services/youtube');
+const { refreshCreator, refreshFeatured } = require('../services/refreshCreators');
 const requireAdmin = require('../middleware/requireAdmin');
 
 // How long since the last upload before a creator drops out of the "active"
@@ -9,24 +10,36 @@ const requireAdmin = require('../middleware/requireAdmin');
 // generous (4 months). Override per-request with ?active_days=N.
 const DEFAULT_ACTIVE_DAYS = 120;
 
-// GET /api/creators — every creator, newest-upload first, with a derived
-// `is_active` flag and a resource count. `?active_days=N` tunes the threshold.
+// GET /api/creators — every creator in curated order, each with a derived
+// `is_active` flag, a resource count, and its recent uploads. Also returns the
+// featured-video spotlight. `?active_days=N` tunes the is_active threshold.
 router.get('/', async (req, res) => {
   const activeDays = Math.max(1, parseInt(req.query.active_days, 10) || DEFAULT_ACTIVE_DAYS);
   try {
-    const { rows } = await db.query(
+    const { rows: creators } = await db.query(
       `SELECT
          c.*,
          (c.latest_upload_at IS NOT NULL
             AND c.latest_upload_at >= NOW() - make_interval(days => $1)) AS is_active,
          (SELECT COUNT(*)::int FROM resources r WHERE r.creator_id = c.id) AS resource_count,
-         p.display_name AS player_name
+         p.display_name AS player_name,
+         COALESCE((
+           SELECT json_agg(json_build_object(
+                    'video_id', v.video_id, 'title', v.title, 'published_at', v.published_at)
+                  ORDER BY v.published_at DESC NULLS LAST)
+           FROM creator_videos v WHERE v.creator_id = c.id
+         ), '[]'::json) AS videos
        FROM creators c
        LEFT JOIN players p ON p.id = c.player_id
        ORDER BY c.sort_order ASC, c.name ASC`,
       [activeDays]
     );
-    res.json({ active_days: activeDays, creators: rows });
+    const { rows: featured } = await db.query(
+      `SELECT id, video_id, title, channel_name, channel_url, note, thumbnail_url, sort_order
+       FROM featured_videos
+       ORDER BY sort_order ASC, added_at DESC`
+    );
+    res.json({ active_days: activeDays, creators, featured });
   } catch (err) {
     res.status(500).json({ error: err.message });
   }
@@ -79,31 +92,51 @@ router.post('/', requireAdmin, async (req, res) => {
   }
 });
 
-// POST /api/creators/:id/refresh — pull this creator's latest upload from
-// YouTube and cache it. Useful for testing without running the batch script.
+// ── Featured-video spotlight (registered before the /:id routes) ────────────
+
+// POST /api/creators/featured — add/curate a spotlight video.
+// Body: { video_id, note?, channel_url?, sort_order? }. Title/channel/thumbnail
+// are filled from YouTube (best-effort here, and kept fresh by the poller).
+router.post('/featured', requireAdmin, async (req, res) => {
+  const { video_id, note, channel_url, sort_order } = req.body;
+  if (!video_id) return res.status(400).json({ error: 'video_id is required' });
+  try {
+    const { rows: [row] } = await db.query(
+      `INSERT INTO featured_videos (video_id, note, channel_url, sort_order)
+       VALUES ($1, $2, $3, COALESCE($4, 0))
+       ON CONFLICT (video_id) DO UPDATE SET
+         note        = COALESCE(EXCLUDED.note, featured_videos.note),
+         channel_url = COALESCE(EXCLUDED.channel_url, featured_videos.channel_url),
+         sort_order  = EXCLUDED.sort_order
+       RETURNING *`,
+      [video_id, note || null, channel_url || null, sort_order]
+    );
+    // Best-effort metadata fill; non-fatal if the API key is missing/over quota.
+    try { await refreshFeatured(db, { onlyMissing: true }); } catch (e) { /* poller retries */ }
+    res.json(row);
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
+// DELETE /api/creators/featured/:fid
+router.delete('/featured/:fid', requireAdmin, async (req, res) => {
+  try {
+    await db.query('DELETE FROM featured_videos WHERE id = $1', [req.params.fid]);
+    res.json({ success: true });
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
+// POST /api/creators/:id/refresh — pull this creator's recent uploads from
+// YouTube and cache them. Handy for testing without the poller / batch script.
 router.post('/:id/refresh', requireAdmin, async (req, res) => {
   try {
     const { rows: [c] } = await db.query('SELECT * FROM creators WHERE id = $1', [req.params.id]);
     if (!c) return res.status(404).json({ error: 'Creator not found' });
-
-    let channelId = c.channel_id;
-    if (!channelId) channelId = await youtube.resolveChannelId(c.channel_url);
-    if (!channelId) return res.status(422).json({ error: 'Could not resolve channel ID' });
-
-    const snap = await youtube.getChannelSnapshot(channelId);
-    const { rows: [updated] } = await db.query(
-      `UPDATE creators SET
-         channel_id         = $2,
-         avatar_url         = COALESCE($3, avatar_url),
-         latest_upload_at   = $4,
-         latest_video_id    = $5,
-         latest_video_title = $6,
-         last_checked_at    = NOW()
-       WHERE id = $1
-       RETURNING *`,
-      [c.id, snap.channelId, snap.avatarUrl, snap.latestUploadAt,
-       snap.latestVideoId, snap.latestVideoTitle]
-    );
+    await refreshCreator(db, c);
+    const { rows: [updated] } = await db.query('SELECT * FROM creators WHERE id = $1', [c.id]);
     res.json(updated);
   } catch (err) {
     res.status(500).json({ error: err.message });

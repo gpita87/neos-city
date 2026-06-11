@@ -50,8 +50,7 @@ function SeriesBadge({ series }) {
 
 function CreatorCard({ c }) {
   const flag = regionFlag(c.region);
-  const last = relativeTime(c.latest_upload_at);
-  const latestUrl = c.latest_video_id ? `https://www.youtube.com/watch?v=${c.latest_video_id}` : c.channel_url;
+  const videos = Array.isArray(c.videos) ? c.videos.slice(0, 3) : [];
   return (
     <div className={`bg-[#0c1425] border rounded-xl p-4 flex flex-col gap-3 transition-colors ${
       c.is_active ? 'border-[#1a2744] hover:border-cyan-500/40' : 'border-[#15203a] opacity-75 hover:opacity-100'
@@ -77,23 +76,56 @@ function CreatorCard({ c }) {
         </div>
       )}
 
-      <div className="mt-auto flex items-center justify-between text-xs">
-        <span className={c.is_active ? 'text-emerald-400' : 'text-slate-500'}>
-          {last ? (
-            <a href={latestUrl} target="_blank" rel="noreferrer" className="hover:underline"
-               title={c.latest_video_title || 'Latest upload'}>
-              ▶ {last}
+      {/* Recent uploads (title + age), newest first */}
+      {videos.length > 0 ? (
+        <div className="space-y-1">
+          {videos.map(v => (
+            <a key={v.video_id} href={`https://www.youtube.com/watch?v=${v.video_id}`}
+               target="_blank" rel="noreferrer"
+               className="flex items-baseline gap-2 text-xs text-slate-300 hover:text-cyan-300 transition-colors">
+              <span className="text-slate-600 shrink-0">▶</span>
+              <span className="truncate" title={v.title || ''}>{v.title || 'Untitled'}</span>
+              {v.published_at && (
+                <span className="ml-auto shrink-0 text-slate-600">{relativeTime(v.published_at)}</span>
+              )}
             </a>
-          ) : 'no uploads tracked'}
-        </span>
-        <span className="flex items-center gap-2 text-slate-500">
-          {c.resource_count > 0 && <span>{c.resource_count} guide{c.resource_count === 1 ? '' : 's'}</span>}
-          {c.player_id && (
-            <Link to={`/players/${c.player_id}`} className="text-cyan-400 hover:text-cyan-300">profile →</Link>
-          )}
-        </span>
+          ))}
+        </div>
+      ) : (
+        <p className="text-xs text-slate-600">No recent uploads tracked.</p>
+      )}
+
+      <div className="mt-auto flex items-center justify-end gap-2 text-xs text-slate-500">
+        {c.resource_count > 0 && <span>{c.resource_count} guide{c.resource_count === 1 ? '' : 's'}</span>}
+        {c.player_id && (
+          <Link to={`/players/${c.player_id}`} className="text-cyan-400 hover:text-cyan-300">profile →</Link>
+        )}
       </div>
     </div>
+  );
+}
+
+function FeaturedCard({ f }) {
+  const url = `https://www.youtube.com/watch?v=${f.video_id}`;
+  // i.ytimg.com thumbnails work for any public video without an API call, so the
+  // spotlight shows an image even before the refresh job fills thumbnail_url.
+  const thumb = f.thumbnail_url || `https://i.ytimg.com/vi/${f.video_id}/hqdefault.jpg`;
+  return (
+    <a href={url} target="_blank" rel="noreferrer"
+       className="group flex gap-4 bg-[#0c1425] border border-amber-500/30 rounded-xl p-4 hover:border-amber-400/60 transition-colors">
+      <div className="relative shrink-0">
+        <img src={thumb} alt="" className="w-40 h-[90px] object-cover rounded-lg bg-[#15203a]" loading="lazy" />
+        <span className="absolute inset-0 grid place-items-center text-3xl text-white/80 group-hover:text-white transition-colors">▶</span>
+      </div>
+      <div className="min-w-0 flex flex-col">
+        <span className="text-[10px] font-display tracking-widest text-amber-300 mb-1">★ SPOTLIGHT</span>
+        <span className="font-semibold text-white truncate" title={f.title || ''}>
+          {f.title || 'Featured video'}
+        </span>
+        {f.channel_name && <span className="text-xs text-slate-400 mt-0.5 truncate">{f.channel_name}</span>}
+        {f.note && <span className="text-xs text-slate-500 mt-auto pt-2">{f.note}</span>}
+      </div>
+    </a>
   );
 }
 
@@ -118,6 +150,7 @@ function ResourceRow({ r }) {
 
 export default function Creators() {
   const [creators, setCreators] = useState([]);
+  const [featured, setFeatured] = useState([]);
   const [resources, setResources] = useState([]);
   const [loading, setLoading] = useState(true);
 
@@ -130,6 +163,7 @@ export default function Creators() {
     Promise.all([getCreators(), getResources()])
       .then(([c, r]) => {
         setCreators(c.creators || []);
+        setFeatured(c.featured || []);
         setResources(r || []);
       })
       .catch(() => { /* leave empty states */ })
@@ -164,6 +198,16 @@ export default function Creators() {
       </div>
 
       {loading && <p className="text-slate-400">Loading…</p>}
+
+      {/* ── Featured spotlight ──────────────────────────────────────────── */}
+      {!loading && featured.length > 0 && (
+        <section className="mb-10">
+          <h2 className="font-display text-sm tracking-widest text-amber-400 mb-3">★ SPOTLIGHT</h2>
+          <div className="grid grid-cols-1 lg:grid-cols-2 gap-4">
+            {featured.map(f => <FeaturedCard key={f.id} f={f} />)}
+          </div>
+        </section>
+      )}
 
       {/* ── Creators (hand-curated order via sort_order) ─────────────────── */}
       {!loading && (

@@ -99,5 +99,10 @@ app.get('/api/health/challonge', async (req, res) => {
   res.json({ challonge_ok: steps.v1_api?.ok ?? false, steps });
 });
 
+const { startCreatorPolling } = require('./services/poller');
+
 const PORT = process.env.PORT || 3001;
-app.listen(PORT, () => console.log(`🏙️  Neos City backend running on port ${PORT}`));
+app.listen(PORT, () => {
+  console.log(`🏙️  Neos City backend running on port ${PORT}`);
+  startCreatorPolling();
+});

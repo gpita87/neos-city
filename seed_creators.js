@@ -52,6 +52,19 @@ const RESOURCES = [
   },
 ];
 
+// ── EDIT ME: featured-video spotlight ────────────────────────────────────────
+// Hand-picked one-off videos shown in the spotlight at the top of the page.
+// Only video_id + note are needed here — title, channel name, and thumbnail are
+// filled in from the YouTube API by refresh_creators.js / the backend poller.
+// video_id is the YouTube watch id (the v= part of the URL).
+const FEATURED = [
+  {
+    video_id: '6JFxLh8bZP0',
+    note: "One-off Pokkén video from a creator who doesn't normally cover the game.",
+    sort_order: 0,
+  },
+];
+
 async function seedCreators() {
   let added = 0, updated = 0;
   for (const c of CREATORS) {
@@ -102,14 +115,37 @@ async function seedResources() {
   console.log(`Resources: ${added} added, ${skipped} already present.`);
 }
 
+async function seedFeatured() {
+  let added = 0, updated = 0;
+  for (const f of FEATURED) {
+    const { rows } = await pool.query('SELECT id FROM featured_videos WHERE video_id = $1', [f.video_id]);
+    if (rows.length) {
+      await pool.query(
+        `UPDATE featured_videos SET note=$2, channel_url=$3, sort_order=COALESCE($4,0) WHERE id=$1`,
+        [rows[0].id, f.note || null, f.channel_url || null, f.sort_order]
+      );
+      updated++;
+    } else {
+      await pool.query(
+        `INSERT INTO featured_videos (video_id, note, channel_url, sort_order)
+         VALUES ($1,$2,$3,COALESCE($4,0))`,
+        [f.video_id, f.note || null, f.channel_url || null, f.sort_order]
+      );
+      added++;
+    }
+  }
+  console.log(`Featured: ${added} added, ${updated} updated. (run refresh_creators.js to fill titles/thumbnails)`);
+}
+
 (async () => {
-  if (CREATORS.length === 0 && RESOURCES.length === 0) {
-    console.log('Nothing to seed — edit the CREATORS / RESOURCES arrays in seed_creators.js first.');
+  if (CREATORS.length === 0 && RESOURCES.length === 0 && FEATURED.length === 0) {
+    console.log('Nothing to seed — edit the CREATORS / RESOURCES / FEATURED arrays in seed_creators.js first.');
     await pool.end();
     return;
   }
   await seedCreators();
   await seedResources();
+  await seedFeatured();
   await pool.end();
 })().catch(err => {
   console.error('Fatal:', err.message);
