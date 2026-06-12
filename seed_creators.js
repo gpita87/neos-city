@@ -12,6 +12,7 @@
 
 require('./backend/node_modules/dotenv').config({ path: './backend/.env' });
 const { Pool } = require('./backend/node_modules/pg');
+const youtube = require('./backend/src/services/youtube');
 const pool = new Pool({ connectionString: process.env.DATABASE_URL });
 
 // ── EDIT ME: the pillars ─────────────────────────────────────────────────────
@@ -64,6 +65,32 @@ const FEATURED = [
     sort_order: 0,
   },
 ];
+
+// ── EDIT ME: pinned creator videos ───────────────────────────────────────────
+// For creators whose recent uploads aren't relevant (e.g. a legacy Pokkén
+// channel now posting other content), hand-pick the videos to show and set
+// `lock: true` so the poller never overwrites them (videos_locked). Titles +
+// dates are fetched from the YouTube API; videos sort newest-first by date.
+//   creator: must match a CREATORS name above
+//   lock:    true → videos_locked = TRUE (auto-updates disabled)
+//   videos:  watch URLs or bare video IDs (replaces the creator's video set)
+const PINNED = [
+  {
+    creator: 'BadIntent',
+    lock: true,
+    videos: [
+      'https://www.youtube.com/watch?v=bsPi1ky3ON8',
+      'https://www.youtube.com/watch?v=HTLjidu1vHY',
+      'https://www.youtube.com/watch?v=0RfXH46a0Mw',
+    ],
+  },
+];
+
+// Pull the 11-char video id out of a watch/share URL (or accept a bare id).
+function extractVideoId(s) {
+  const m = String(s).match(/(?:[?&]v=|youtu\.be\/|\/embed\/|\/shorts\/)([\w-]{6,})/);
+  return m ? m[1] : String(s).trim();
+}
 
 async function seedCreators() {
   let added = 0, updated = 0;
@@ -137,15 +164,53 @@ async function seedFeatured() {
   console.log(`Featured: ${added} added, ${updated} updated. (run refresh_creators.js to fill titles/thumbnails)`);
 }
 
+async function seedPinned() {
+  for (const p of PINNED) {
+    const { rows: cr } = await pool.query('SELECT id FROM creators WHERE name = $1', [p.creator]);
+    if (!cr.length) { console.warn(`  pinned: creator "${p.creator}" not found — skipping`); continue; }
+    const creatorId = cr[0].id;
+
+    if (typeof p.lock === 'boolean') {
+      await pool.query('UPDATE creators SET videos_locked = $2 WHERE id = $1', [creatorId, p.lock]);
+    }
+
+    if (Array.isArray(p.videos)) {
+      // Replace this creator's video set with exactly the pinned list.
+      await pool.query('DELETE FROM creator_videos WHERE creator_id = $1', [creatorId]);
+      for (const ref of p.videos) {
+        const vid = extractVideoId(ref);
+        let title = null, publishedAt = null;
+        try {
+          const meta = await youtube.getVideoMeta(vid);
+          if (meta) { title = meta.title; publishedAt = meta.publishedAt; }
+        } catch (e) {
+          console.warn(`  pinned ${p.creator}: could not fetch meta for ${vid} (${e.message})`);
+        }
+        await pool.query(
+          `INSERT INTO creator_videos (creator_id, video_id, title, published_at)
+           VALUES ($1,$2,$3,$4)
+           ON CONFLICT (creator_id, video_id) DO UPDATE SET
+             title = EXCLUDED.title, published_at = EXCLUDED.published_at`,
+          [creatorId, vid, title, publishedAt]
+        );
+      }
+      console.log(`Pinned: ${p.creator} → ${p.videos.length} video(s)${p.lock ? ' (locked)' : ''}.`);
+    } else if (typeof p.lock === 'boolean') {
+      console.log(`Pinned: ${p.creator} videos_locked=${p.lock}.`);
+    }
+  }
+}
+
 (async () => {
-  if (CREATORS.length === 0 && RESOURCES.length === 0 && FEATURED.length === 0) {
-    console.log('Nothing to seed — edit the CREATORS / RESOURCES / FEATURED arrays in seed_creators.js first.');
+  if (CREATORS.length === 0 && RESOURCES.length === 0 && FEATURED.length === 0 && PINNED.length === 0) {
+    console.log('Nothing to seed — edit the CREATORS / RESOURCES / FEATURED / PINNED arrays in seed_creators.js first.');
     await pool.end();
     return;
   }
   await seedCreators();
   await seedResources();
   await seedFeatured();
+  await seedPinned();
   await pool.end();
 })().catch(err => {
   console.error('Fatal:', err.message);

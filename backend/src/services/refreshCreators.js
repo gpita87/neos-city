@@ -11,6 +11,9 @@ const DEFAULT_VIDEO_COUNT = 3;
 // replace its cached video rows, and update the denormalized latest_* columns
 // (still used for the card's relative-time + the is_active threshold).
 async function refreshCreator(db, creator, { videoCount = DEFAULT_VIDEO_COUNT } = {}) {
+  // Hand-curated creators opt out of auto-updates — leave their videos alone.
+  if (creator.videos_locked) return { skipped: true };
+
   let channelId = creator.channel_id;
   if (!channelId) {
     channelId = await youtube.resolveChannelId(creator.channel_url);
@@ -53,21 +56,21 @@ async function refreshCreator(db, creator, { videoCount = DEFAULT_VIDEO_COUNT } 
 // per-creator results so a poller run logs failures without aborting.
 async function refreshAllCreators(db, opts = {}) {
   const { rows: creators } = await db.query(
-    'SELECT id, name, channel_url, channel_id FROM creators ORDER BY sort_order, id'
+    'SELECT id, name, channel_url, channel_id, videos_locked FROM creators ORDER BY sort_order, id'
   );
-  let ok = 0, failed = 0;
+  let ok = 0, failed = 0, skipped = 0;
   const results = [];
   for (const c of creators) {
     try {
       const r = await refreshCreator(db, c, opts);
       results.push({ name: c.name, ...r });
-      ok++;
+      if (r.skipped) skipped++; else ok++;
     } catch (err) {
       results.push({ name: c.name, error: err.message });
       failed++;
     }
   }
-  return { ok, failed, total: creators.length, results };
+  return { ok, failed, skipped, total: creators.length, results };
 }
 
 // Fill in / refresh featured-video metadata (title, channel, thumbnail) from the

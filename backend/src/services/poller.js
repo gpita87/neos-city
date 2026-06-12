@@ -21,7 +21,8 @@ async function runOnce() {
     const f = await refreshFeatured(db);
     console.log(
       `[creator-poll] creators ${c.ok}/${c.total} refreshed` +
-      `${c.failed ? ` (${c.failed} failed)` : ''}; featured ${f.ok}/${f.total}`
+      `${c.skipped ? ` (${c.skipped} locked)` : ''}${c.failed ? ` (${c.failed} failed)` : ''}` +
+      `; featured ${f.ok}/${f.total}`
     );
   } catch (err) {
     console.warn('[creator-poll] run failed:', err.message);

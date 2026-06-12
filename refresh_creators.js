@@ -29,6 +29,8 @@ const pool = new Pool({ connectionString: process.env.DATABASE_URL });
   for (const r of c.results) {
     if (r.error) {
       console.warn(`⚠️  ${r.name.padEnd(24)} ${r.error}`);
+    } else if (r.skipped) {
+      console.log(`⏭️  ${r.name.padEnd(24)} locked (auto-update disabled)`);
     } else {
       const latest = r.latest?.publishedAt
         ? `, latest ${new Date(r.latest.publishedAt).toISOString().slice(0, 10)}`
@@ -36,7 +38,7 @@ const pool = new Pool({ connectionString: process.env.DATABASE_URL });
       console.log(`✅ ${r.name.padEnd(24)} ${r.videoCount} video(s)${latest}`);
     }
   }
-  console.log(`\nCreators: ${c.ok} refreshed, ${c.failed} failed.`);
+  console.log(`\nCreators: ${c.ok} refreshed, ${c.skipped} locked, ${c.failed} failed.`);
 
   const f = await refreshFeatured(pool);
   console.log(`Featured: ${f.ok}/${f.total} refreshed${f.failed ? `, ${f.failed} failed` : ''}.`);
