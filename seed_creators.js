@@ -44,13 +44,8 @@ const CREATORS = [
 // creator: optional creator name (must match a CREATORS entry above) — links the
 //          resource to that creator's card and counts toward its "N guides" badge
 const RESOURCES = [
-  {
-    title: 'Pokkén Basics (playlist)',
-    url: 'https://www.youtube.com/playlist?list=PLY3pqCfpWyAK4GxBRrz1f2Nix6IqAzzoc',
-    kind: 'fundamental',
-    skill_level: 'beginner',
-    creator: 'BadIntent',
-  },
+  // Pokkén Basics moved to PLAYLISTS (it's a playlist). Add character guides /
+  // non-playlist fundamentals here.
 ];
 
 // ── EDIT ME: featured-video spotlight ────────────────────────────────────────
@@ -99,7 +94,8 @@ function extractVideoId(s) {
 // follows array order (sort_order defaults to the index).
 //   creator: optional creator name (must match a CREATORS entry above)
 const PLAYLISTS = [
-  // BadIntent's Pokkén playlists
+  // BadIntent's Pokkén playlists (Pokkén Basics first — the fundamentals set)
+  { creator: 'BadIntent', note: 'Fundamentals', url: 'https://www.youtube.com/playlist?list=PLY3pqCfpWyAK4GxBRrz1f2Nix6IqAzzoc' },
   { creator: 'BadIntent', url: 'https://www.youtube.com/playlist?list=PLY3pqCfpWyAINcEinYpabjIfFQ6gB7S0L' },
   { creator: 'BadIntent', url: 'https://www.youtube.com/playlist?list=PLY3pqCfpWyAKfZiSmfmt8NJCdQR1MCOtD' },
   { creator: 'BadIntent', url: 'https://www.youtube.com/playlist?list=PLY3pqCfpWyAJR9TxQTrvBg1luAcDvJCeH' },

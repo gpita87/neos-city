@@ -266,8 +266,8 @@ export default function Creators() {
         </section>
       )}
 
-      {/* ── Resource library ────────────────────────────────────────────── */}
-      {!loading && (
+      {/* ── Resource library (hidden until non-playlist resources exist) ──── */}
+      {!loading && resources.length > 0 && (
         <section>
           <div className="flex items-baseline justify-between mb-3 flex-wrap gap-2">
             <h2 className="font-display text-sm tracking-widest text-cyan-400">RESOURCE LIBRARY</h2>
