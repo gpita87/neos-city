@@ -78,6 +78,14 @@ export default function TournamentDetail() {
     ? `https://liquipedia.net/fighters/${tournament.liquipedia_url}`
     : 'https://liquipedia.net/fighters/Pokk%C3%A9n_Tournament/Tournaments';
 
+  // start.gg-sourced events: link out to the tournament's start.gg landing page.
+  // startgg_slug is stored as "tournament/<slug>", so it slots directly after the
+  // origin. challonge_url and startgg_slug are mutually exclusive per source, so
+  // at most one external link renders.
+  const startggHref = tournament.startgg_slug
+    ? `https://www.start.gg/${tournament.startgg_slug}`
+    : null;
+
   // Group achievements by player so the UI reads "this player earned X, Y, Z
   // here" rather than a flat undifferentiated list.
   const byPlayer = new Map();
@@ -119,6 +127,16 @@ export default function TournamentDetail() {
             className="text-cyan-400 text-xs hover:underline mt-1 inline-block"
           >
             View on Challonge ↗
+          </a>
+        )}
+        {startggHref && (
+          <a
+            href={startggHref}
+            target="_blank"
+            rel="noreferrer"
+            className="text-cyan-400 text-xs hover:underline mt-1 inline-block"
+          >
+            View on start.gg ↗
           </a>
         )}
         {isOffline && (
