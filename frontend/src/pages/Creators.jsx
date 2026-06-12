@@ -129,6 +129,34 @@ function FeaturedCard({ f }) {
   );
 }
 
+function PlaylistCard({ p }) {
+  const url = `https://www.youtube.com/playlist?list=${p.playlist_id}`;
+  return (
+    <a href={url} target="_blank" rel="noreferrer"
+       className="group flex gap-3 bg-[#0c1425] border border-[#1a2744] rounded-xl p-3 hover:border-cyan-500/40 transition-colors">
+      <div className="relative shrink-0">
+        {p.thumbnail_url ? (
+          <img src={p.thumbnail_url} alt="" className="w-28 h-16 object-cover rounded-lg bg-[#15203a]" loading="lazy" />
+        ) : (
+          <div className="w-28 h-16 rounded-lg bg-[#15203a] grid place-items-center text-slate-600 text-lg">☰</div>
+        )}
+        {p.video_count != null && (
+          <span className="absolute bottom-1 right-1 text-[10px] bg-black/75 text-white px-1.5 py-0.5 rounded flex items-center gap-1">
+            ☰ {p.video_count}
+          </span>
+        )}
+      </div>
+      <div className="min-w-0 flex flex-col">
+        <span className="font-medium text-white text-sm truncate group-hover:text-cyan-300 transition-colors" title={p.title || ''}>
+          {p.title || 'Playlist'}
+        </span>
+        {p.note && <span className="text-xs text-slate-500 truncate">{p.note}</span>}
+        {p.creator_name && <span className="text-xs text-slate-600 mt-auto">{p.creator_name}</span>}
+      </div>
+    </a>
+  );
+}
+
 function ResourceRow({ r }) {
   return (
     <a href={r.url} target="_blank" rel="noreferrer"
@@ -151,6 +179,7 @@ function ResourceRow({ r }) {
 export default function Creators() {
   const [creators, setCreators] = useState([]);
   const [featured, setFeatured] = useState([]);
+  const [playlists, setPlaylists] = useState([]);
   const [resources, setResources] = useState([]);
   const [loading, setLoading] = useState(true);
 
@@ -164,6 +193,7 @@ export default function Creators() {
       .then(([c, r]) => {
         setCreators(c.creators || []);
         setFeatured(c.featured || []);
+        setPlaylists(c.playlists || []);
         setResources(r || []);
       })
       .catch(() => { /* leave empty states */ })
@@ -223,6 +253,16 @@ export default function Creators() {
               {creators.map(c => <CreatorCard key={c.id} c={c} />)}
             </div>
           )}
+        </section>
+      )}
+
+      {/* ── Playlists ───────────────────────────────────────────────────── */}
+      {!loading && playlists.length > 0 && (
+        <section className="mb-10">
+          <h2 className="font-display text-sm tracking-widest text-cyan-400 mb-3">☰ PLAYLISTS</h2>
+          <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-3">
+            {playlists.map(p => <PlaylistCard key={p.id} p={p} />)}
+          </div>
         </section>
       )}
 

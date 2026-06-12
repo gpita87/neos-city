@@ -1,5 +1,5 @@
 const db = require('../db');
-const { refreshAllCreators, refreshFeatured } = require('./refreshCreators');
+const { refreshAllCreators, refreshFeatured, refreshPlaylists } = require('./refreshCreators');
 
 // Background poller — keeps creator recent-uploads + featured-video metadata
 // fresh from the always-on backend, so the /creators page never has to hit the
@@ -19,10 +19,11 @@ async function runOnce() {
   try {
     const c = await refreshAllCreators(db);
     const f = await refreshFeatured(db);
+    const pl = await refreshPlaylists(db);
     console.log(
       `[creator-poll] creators ${c.ok}/${c.total} refreshed` +
       `${c.skipped ? ` (${c.skipped} locked)` : ''}${c.failed ? ` (${c.failed} failed)` : ''}` +
-      `; featured ${f.ok}/${f.total}`
+      `; featured ${f.ok}/${f.total}; playlists ${pl.ok}/${pl.total}`
     );
   } catch (err) {
     console.warn('[creator-poll] run failed:', err.message);

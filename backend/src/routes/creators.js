@@ -2,7 +2,7 @@ const express = require('express');
 const router = express.Router();
 const db = require('../db');
 const youtube = require('../services/youtube');
-const { refreshCreator, refreshFeatured } = require('../services/refreshCreators');
+const { refreshCreator, refreshFeatured, refreshPlaylists } = require('../services/refreshCreators');
 const requireAdmin = require('../middleware/requireAdmin');
 
 // How long since the last upload before a creator drops out of the "active"
@@ -39,7 +39,14 @@ router.get('/', async (req, res) => {
        FROM featured_videos
        ORDER BY sort_order ASC, added_at DESC`
     );
-    res.json({ active_days: activeDays, creators, featured });
+    const { rows: playlists } = await db.query(
+      `SELECT pl.id, pl.playlist_id, pl.title, pl.channel_name, pl.thumbnail_url,
+              pl.video_count, pl.note, pl.creator_id, pl.sort_order, c.name AS creator_name
+       FROM playlists pl
+       LEFT JOIN creators c ON c.id = pl.creator_id
+       ORDER BY pl.sort_order ASC, pl.added_at ASC`
+    );
+    res.json({ active_days: activeDays, creators, featured, playlists });
   } catch (err) {
     res.status(500).json({ error: err.message });
   }
@@ -123,6 +130,42 @@ router.post('/featured', requireAdmin, async (req, res) => {
 router.delete('/featured/:fid', requireAdmin, async (req, res) => {
   try {
     await db.query('DELETE FROM featured_videos WHERE id = $1', [req.params.fid]);
+    res.json({ success: true });
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
+// ── Curated playlists (registered before the /:id routes) ───────────────────
+
+// POST /api/creators/playlists — add/curate a playlist.
+// Body: { playlist_id, creator_id?, note?, sort_order? }. Title/channel/
+// thumbnail/video_count are filled from YouTube (best-effort here + poller).
+router.post('/playlists', requireAdmin, async (req, res) => {
+  const { playlist_id, creator_id, note, sort_order } = req.body;
+  if (!playlist_id) return res.status(400).json({ error: 'playlist_id is required' });
+  try {
+    const { rows: [row] } = await db.query(
+      `INSERT INTO playlists (playlist_id, creator_id, note, sort_order)
+       VALUES ($1, $2, $3, COALESCE($4, 0))
+       ON CONFLICT (playlist_id) DO UPDATE SET
+         creator_id = COALESCE(EXCLUDED.creator_id, playlists.creator_id),
+         note       = COALESCE(EXCLUDED.note, playlists.note),
+         sort_order = EXCLUDED.sort_order
+       RETURNING *`,
+      [playlist_id, creator_id || null, note || null, sort_order]
+    );
+    try { await refreshPlaylists(db, { onlyMissing: true }); } catch (e) { /* poller retries */ }
+    res.json(row);
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
+// DELETE /api/creators/playlists/:pid
+router.delete('/playlists/:pid', requireAdmin, async (req, res) => {
+  try {
+    await db.query('DELETE FROM playlists WHERE id = $1', [req.params.pid]);
     res.json({ success: true });
   } catch (err) {
     res.status(500).json({ error: err.message });

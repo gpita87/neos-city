@@ -14,7 +14,7 @@
 
 require('./backend/node_modules/dotenv').config({ path: './backend/.env' });
 const { Pool } = require('./backend/node_modules/pg');
-const { refreshAllCreators, refreshFeatured } = require('./backend/src/services/refreshCreators');
+const { refreshAllCreators, refreshFeatured, refreshPlaylists } = require('./backend/src/services/refreshCreators');
 
 const pool = new Pool({ connectionString: process.env.DATABASE_URL });
 
@@ -42,6 +42,9 @@ const pool = new Pool({ connectionString: process.env.DATABASE_URL });
 
   const f = await refreshFeatured(pool);
   console.log(`Featured: ${f.ok}/${f.total} refreshed${f.failed ? `, ${f.failed} failed` : ''}.`);
+
+  const pl = await refreshPlaylists(pool);
+  console.log(`Playlists: ${pl.ok}/${pl.total} refreshed${pl.failed ? `, ${pl.failed} failed` : ''}.`);
 
   await pool.end();
 })().catch(err => {

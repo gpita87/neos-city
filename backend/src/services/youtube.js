@@ -135,10 +135,30 @@ async function getVideoMeta(videoId) {
   };
 }
 
+// Fetch a playlist's metadata (title, channel, thumbnail, video count).
+// 1 quota unit. Returns null if the playlist isn't found / is private.
+async function getPlaylistMeta(playlistId) {
+  const { data } = await axios.get(`${API_BASE}/playlists`, {
+    params: { key: apiKey(), part: 'snippet,contentDetails', id: playlistId },
+  });
+  const item = data.items?.[0];
+  if (!item) return null;
+  const s = item.snippet || {};
+  const t = s.thumbnails || {};
+  return {
+    playlistId,
+    title: s.title || null,
+    channelTitle: s.channelTitle || null,
+    thumbnailUrl: (t.medium || t.high || t.default || {}).url || null,
+    itemCount: item.contentDetails?.itemCount ?? null,
+  };
+}
+
 module.exports = {
   parseChannelUrl,
   resolveChannelId,
   getChannelSnapshot,
   getChannelRecent,
   getVideoMeta,
+  getPlaylistMeta,
 };

@@ -101,4 +101,33 @@ async function refreshFeatured(db, { onlyMissing = false } = {}) {
   return { ok, failed, total: rows.length };
 }
 
-module.exports = { refreshCreator, refreshAllCreators, refreshFeatured, DEFAULT_VIDEO_COUNT };
+// Fill in / refresh playlist metadata (title, channel, thumbnail, video count)
+// from the YouTube API. With onlyMissing, skips rows that already have a title.
+async function refreshPlaylists(db, { onlyMissing = false } = {}) {
+  const { rows } = await db.query(
+    `SELECT id, playlist_id FROM playlists
+     ${onlyMissing ? 'WHERE title IS NULL' : ''}`
+  );
+  let ok = 0, failed = 0;
+  for (const pl of rows) {
+    try {
+      const meta = await youtube.getPlaylistMeta(pl.playlist_id);
+      if (!meta) throw new Error('playlist not found');
+      await db.query(
+        `UPDATE playlists SET
+           title         = COALESCE($2, title),
+           channel_name  = COALESCE($3, channel_name),
+           thumbnail_url = COALESCE($4, thumbnail_url),
+           video_count   = COALESCE($5, video_count)
+         WHERE id = $1`,
+        [pl.id, meta.title, meta.channelTitle, meta.thumbnailUrl, meta.itemCount]
+      );
+      ok++;
+    } catch (err) {
+      failed++;
+    }
+  }
+  return { ok, failed, total: rows.length };
+}
+
+module.exports = { refreshCreator, refreshAllCreators, refreshFeatured, refreshPlaylists, DEFAULT_VIDEO_COUNT };

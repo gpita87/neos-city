@@ -92,6 +92,35 @@ function extractVideoId(s) {
   return m ? m[1] : String(s).trim();
 }
 
+// ── EDIT ME: curated playlists ───────────────────────────────────────────────
+// Shown in the "Playlists" section. Title / channel / thumbnail / video count
+// are fetched from the YouTube API by refresh_creators.js / the poller — only
+// the playlist URL (and optional creator/note) are needed here. Display order
+// follows array order (sort_order defaults to the index).
+//   creator: optional creator name (must match a CREATORS entry above)
+const PLAYLISTS = [
+  // BadIntent's Pokkén playlists
+  { creator: 'BadIntent', url: 'https://www.youtube.com/playlist?list=PLY3pqCfpWyAINcEinYpabjIfFQ6gB7S0L' },
+  { creator: 'BadIntent', url: 'https://www.youtube.com/playlist?list=PLY3pqCfpWyAKfZiSmfmt8NJCdQR1MCOtD' },
+  { creator: 'BadIntent', url: 'https://www.youtube.com/playlist?list=PLY3pqCfpWyAJR9TxQTrvBg1luAcDvJCeH' },
+  { creator: 'BadIntent', url: 'https://www.youtube.com/playlist?list=PLY3pqCfpWyAKHwH3bGmzjjJah0T9hpY1i' },
+  { creator: 'BadIntent', url: 'https://www.youtube.com/playlist?list=PLY3pqCfpWyAK1yDypiMIbnzVfM7H57FLz' },
+  { creator: 'BadIntent', url: 'https://www.youtube.com/playlist?list=PLY3pqCfpWyALf1ZE0O7Gv-6xXV2PfQvdw' },
+  { creator: 'BadIntent', url: 'https://www.youtube.com/playlist?list=PLY3pqCfpWyAJ6Bj0OWCpXb9Bu0l5ldVLC' },
+  { creator: 'BadIntent', url: 'https://www.youtube.com/playlist?list=PLY3pqCfpWyAJ51AMd8YmBmnLesVcbKwdi' },
+  { creator: 'BadIntent', url: 'https://www.youtube.com/playlist?list=PLY3pqCfpWyAJx-yaFOwKP4tOejBgiwFsW' },
+  { creator: 'BadIntent', url: 'https://www.youtube.com/playlist?list=PLY3pqCfpWyAKch2MXVu2BmVS_FboBPODm' },
+  { creator: 'BadIntent', url: 'https://www.youtube.com/playlist?list=PLY3pqCfpWyAKrGlZv2yqKrlkk38771tJN' },
+  { creator: 'BadIntent', url: 'https://www.youtube.com/playlist?list=PLY3pqCfpWyAKqU18QAbKcAP9dAXf2-IuI' },
+  { creator: 'BadIntent', url: 'https://www.youtube.com/playlist?list=PLY3pqCfpWyALdhRX_xVNNKlD4MszrYOxn' },
+];
+
+// Pull the "list=" id out of a playlist URL (or accept a bare id).
+function extractPlaylistId(s) {
+  const m = String(s).match(/[?&]list=([\w-]+)/);
+  return m ? m[1] : String(s).trim();
+}
+
 async function seedCreators() {
   let added = 0, updated = 0;
   for (const c of CREATORS) {
@@ -201,9 +230,40 @@ async function seedPinned() {
   }
 }
 
+async function seedPlaylists() {
+  let added = 0, updated = 0;
+  for (let i = 0; i < PLAYLISTS.length; i++) {
+    const p = PLAYLISTS[i];
+    const pid = extractPlaylistId(p.url);
+    let creatorId = null;
+    if (p.creator) {
+      const { rows: cr } = await pool.query('SELECT id FROM creators WHERE name = $1', [p.creator]);
+      if (cr.length) creatorId = cr[0].id;
+      else console.warn(`  playlist ${pid}: creator "${p.creator}" not found — leaving unlinked`);
+    }
+    const sortOrder = p.sort_order != null ? p.sort_order : i;
+    const { rows } = await pool.query('SELECT id FROM playlists WHERE playlist_id = $1', [pid]);
+    if (rows.length) {
+      await pool.query(
+        'UPDATE playlists SET creator_id=COALESCE($2,creator_id), note=COALESCE($3,note), sort_order=$4 WHERE id=$1',
+        [rows[0].id, creatorId, p.note || null, sortOrder]
+      );
+      updated++;
+    } else {
+      await pool.query(
+        'INSERT INTO playlists (playlist_id, creator_id, note, sort_order) VALUES ($1,$2,$3,$4)',
+        [pid, creatorId, p.note || null, sortOrder]
+      );
+      added++;
+    }
+  }
+  console.log(`Playlists: ${added} added, ${updated} updated. (run refresh_creators.js to fill titles/thumbnails)`);
+}
+
 (async () => {
-  if (CREATORS.length === 0 && RESOURCES.length === 0 && FEATURED.length === 0 && PINNED.length === 0) {
-    console.log('Nothing to seed — edit the CREATORS / RESOURCES / FEATURED / PINNED arrays in seed_creators.js first.');
+  if (CREATORS.length === 0 && RESOURCES.length === 0 && FEATURED.length === 0 &&
+      PINNED.length === 0 && PLAYLISTS.length === 0) {
+    console.log('Nothing to seed — edit the CREATORS / RESOURCES / FEATURED / PINNED / PLAYLISTS arrays in seed_creators.js first.');
     await pool.end();
     return;
   }
@@ -211,6 +271,7 @@ async function seedPinned() {
   await seedResources();
   await seedFeatured();
   await seedPinned();
+  await seedPlaylists();
   await pool.end();
 })().catch(err => {
   console.error('Fatal:', err.message);
