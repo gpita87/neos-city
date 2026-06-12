@@ -1183,7 +1183,7 @@ The allowlist in `.claude/settings.json` matches **static command prefixes**, on
 
   Strip both and a diagnostic that only bundled allowlisted verbs (`git log`, `git status`, `git rev-parse`, `node -c`) usually goes silent.
 
-- **Loops, conditionals, and shell variables are inherently un-allowlistable.** The matcher can't see inside a `for`/`while`/`if`, and `node -c "$f"` never matches `node -c *` because the matcher sees the literal `"$f"`, not its expansions. Unroll into literal-argument calls:
+- **Loops, conditionals, and shell variables are inherently un-allowlistable.** The matcher can't see inside a `for`/`while`/`if`, and `node -c "$f"` never matches `node -c *` because the matcher sees the literal `"$f"`, not its expansions. This fires on the expansion *itself*, loop or not — a lone `node -c "$f"`, `grep "$x" file`, or any `$(...)`/backtick substitution is flagged (the prompt reads "Contains simple_expansion" or similar) because the matcher can't resolve it to a concrete argument. The loop is just a common way to introduce one. Unroll into literal-argument calls:
   ```
   # prompts (loop body is opaque to the matcher):
   for f in a.js b.js; do node -c "$f"; done
