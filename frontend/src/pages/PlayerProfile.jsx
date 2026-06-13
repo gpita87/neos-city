@@ -122,7 +122,7 @@ function RegionTierDisplay({ highestRegions }) {
 }
 
 // Account ↔ player claim control shown in the profile header.
-function ClaimProfileCTA({ playerId }) {
+function ClaimProfileCTA({ playerId, claimed }) {
   const { user, loading, refresh } = useAuth();
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState(null);
@@ -140,6 +140,14 @@ function ClaimProfileCTA({ playerId }) {
   }
   // User already claimed a different player — nothing to do here.
   if (user.player_id) return null;
+  // Claimed by someone else — pre-gray instead of offering a button that 409s.
+  if (claimed) {
+    return (
+      <span className="shrink-0 text-xs px-3 py-1.5 rounded-lg bg-white/5 text-slate-500 border border-[#1a2744]">
+        Claimed
+      </span>
+    );
+  }
 
   const claim = async () => {
     setBusy(true);
@@ -209,7 +217,7 @@ export default function PlayerProfile() {
             </div>
           )}
         </div>
-        <ClaimProfileCTA playerId={id} />
+        <ClaimProfileCTA playerId={id} claimed={player.claimed} />
       </div>
 
       {/* Recent Tournaments */}

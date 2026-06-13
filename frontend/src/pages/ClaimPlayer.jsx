@@ -166,16 +166,20 @@ export default function ClaimPlayer() {
             const showHandle = p.challonge_username && p.challonge_username !== p.display_name;
             return (
               <li key={p.id} className="flex items-center gap-3 px-4 py-2.5">
-                <span className="font-medium text-white truncate">{p.display_name}</span>
+                <span className={`font-medium truncate ${p.claimed ? 'text-slate-500' : 'text-white'}`}>{p.display_name}</span>
                 {flag && <span className="text-xs">{flag}</span>}
                 {showHandle && <span className="text-xs text-slate-500 truncate">@{p.challonge_username}</span>}
-                <button
-                  onClick={() => claim(p.id)}
-                  disabled={claiming === p.id}
-                  className="ml-auto shrink-0 bg-cyan-500 hover:bg-cyan-400 disabled:opacity-50 text-white text-xs font-medium px-3 py-1.5 rounded-lg transition-colors"
-                >
-                  {claiming === p.id ? 'Claiming…' : 'This is me'}
-                </button>
+                {p.claimed ? (
+                  <span className="ml-auto shrink-0 text-xs text-slate-500 px-3 py-1.5">Already claimed</span>
+                ) : (
+                  <button
+                    onClick={() => claim(p.id)}
+                    disabled={claiming === p.id}
+                    className="ml-auto shrink-0 bg-cyan-500 hover:bg-cyan-400 disabled:opacity-50 text-white text-xs font-medium px-3 py-1.5 rounded-lg transition-colors"
+                  >
+                    {claiming === p.id ? 'Claiming…' : 'This is me'}
+                  </button>
+                )}
               </li>
             );
           })}

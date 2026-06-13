@@ -73,10 +73,11 @@ router.get('/offline-leaderboard', async (req, res) => {
 router.get('/index', async (req, res) => {
   try {
     const { rows } = await db.query(
-      `SELECT id, display_name, challonge_username, region, avatar_url,
-              tournaments_entered, games_played, offline_top2
-       FROM players
-       ORDER BY LOWER(display_name) ASC, id ASC`
+      `SELECT p.id, p.display_name, p.challonge_username, p.region, p.avatar_url,
+              p.tournaments_entered, p.games_played, p.offline_top2,
+              EXISTS (SELECT 1 FROM users u WHERE u.player_id = p.id) AS claimed
+       FROM players p
+       ORDER BY LOWER(p.display_name) ASC, p.id ASC`
     );
     res.json(rows);
   } catch (err) {
@@ -147,6 +148,12 @@ router.get('/:id', async (req, res) => {
       `SELECT * FROM players WHERE id = $1`, [req.params.id]
     );
     if (!player) return res.status(404).json({ error: 'Player not found' });
+
+    // Whether any user account has already claimed this player — lets the
+    // profile's claim CTA pre-gray instead of failing the link with a 409.
+    const { rows: [claimRow] } = await db.query(
+      `SELECT EXISTS (SELECT 1 FROM users WHERE player_id = $1) AS claimed`, [player.id]
+    );
 
     // Recent matches
     const { rows: recentMatches } = await db.query(
@@ -222,6 +229,7 @@ router.get('/:id', async (req, res) => {
 
     res.json({
       ...player,
+      claimed: claimRow.claimed,
       recent_matches: recentMatches,
       recent_tournaments: recentTournaments,
       elo_history: eloHistory,
