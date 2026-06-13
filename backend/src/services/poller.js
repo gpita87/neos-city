@@ -1,5 +1,7 @@
 const db = require('../db');
 const { refreshAllCreators, refreshFeatured, refreshPlaylists } = require('./refreshCreators');
+const twitch = require('./twitch');
+const { refreshTwitchStreamers } = require('./refreshTwitch');
 
 // Background poller — keeps creator recent-uploads + featured-video metadata
 // fresh from the always-on backend, so the /creators page never has to hit the
@@ -47,4 +49,41 @@ function startCreatorPolling() {
   console.log(`[creator-poll] enabled — every ${POLL_HOURS}h${RUN_ON_BOOT ? ' (and ~15s after boot)' : ''}.`);
 }
 
-module.exports = { startCreatorPolling, runOnce };
+// ── Twitch streamers poll ─────────────────────────────────────────────────────
+// Keeps twitch_streamers live-status + last-Pokkén-stream data fresh. Shorter
+// cadence than the creator poll because live status goes stale in minutes.
+// Disabled automatically when the Twitch app credentials are unset.
+//
+// Tunables (backend/.env):
+//   TWITCH_POLL_MINUTES   interval in minutes (default 10)
+//   TWITCH_POLL_ON_BOOT   run once ~20s after boot unless set to "false"
+
+const TWITCH_POLL_MINUTES = parseFloat(process.env.TWITCH_POLL_MINUTES) || 10;
+const TWITCH_RUN_ON_BOOT = process.env.TWITCH_POLL_ON_BOOT !== 'false';
+
+let twitchTimer = null;
+
+async function runTwitchOnce() {
+  try {
+    const r = await refreshTwitchStreamers(db);
+    console.log(`[twitch-poll] ${r.ok}/${r.total} streamers refreshed (${r.live} live)`);
+  } catch (err) {
+    console.warn('[twitch-poll] run failed:', err.message);
+  }
+}
+
+function startTwitchPolling() {
+  if (!twitch.isConfigured()) {
+    console.log('[twitch-poll] TWITCH_CLIENT_ID/SECRET not set — polling disabled.');
+    return;
+  }
+  if (twitchTimer) return;
+
+  if (TWITCH_RUN_ON_BOOT) setTimeout(runTwitchOnce, 20_000);
+  twitchTimer = setInterval(runTwitchOnce, Math.max(1, TWITCH_POLL_MINUTES) * 60 * 1000);
+  if (typeof twitchTimer.unref === 'function') twitchTimer.unref();
+
+  console.log(`[twitch-poll] enabled — every ${TWITCH_POLL_MINUTES}min${TWITCH_RUN_ON_BOOT ? ' (and ~20s after boot)' : ''}.`);
+}
+
+module.exports = { startCreatorPolling, runOnce, startTwitchPolling, runTwitchOnce };

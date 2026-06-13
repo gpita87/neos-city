@@ -12,6 +12,7 @@ const organizersRouter = require('./routes/organizers');
 const creatorsRouter = require('./routes/creators');
 const resourcesRouter = require('./routes/resources');
 const authRouter = require('./routes/auth');
+const twitchRouter = require('./routes/twitch');
 
 const app = express();
 
@@ -69,6 +70,7 @@ app.use('/api/organizers', organizersRouter);
 app.use('/api/creators', creatorsRouter);
 app.use('/api/resources', resourcesRouter);
 app.use('/api/auth', authRouter);
+app.use('/api/twitch', twitchRouter);
 
 app.get('/api/health', (req, res) => res.json({ status: 'ok', app: 'Neos City' }));
 
@@ -99,10 +101,11 @@ app.get('/api/health/challonge', async (req, res) => {
   res.json({ challonge_ok: steps.v1_api?.ok ?? false, steps });
 });
 
-const { startCreatorPolling } = require('./services/poller');
+const { startCreatorPolling, startTwitchPolling } = require('./services/poller');
 
 const PORT = process.env.PORT || 3001;
 app.listen(PORT, () => {
   console.log(`🏙️  Neos City backend running on port ${PORT}`);
   startCreatorPolling();
+  startTwitchPolling();
 });

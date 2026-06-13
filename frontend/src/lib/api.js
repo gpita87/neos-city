@@ -73,6 +73,10 @@ export const getCreators = (active_days) =>
 export const getResources = (params = {}) =>
   api.get('/resources', { params }).then(r => r.data);
 
+// Twitch streamers — cached live status + last Pokkén-category stream per
+// channel. Returns { configured, last_checked_at, streamers: [...] }.
+export const getTwitchStreamers = () => api.get('/twitch').then(r => r.data);
+
 // ── Auth + account linking (OAuth-only: Discord + Google) ────────────────────
 export const getMe = () => api.get('/auth/me').then(r => r.data);
 // Invalidates every session for the account (bumps token_version server-side),

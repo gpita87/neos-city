@@ -38,6 +38,11 @@ export const FLAGS = {
     description: 'Shows the "Sign in" button / account controls (OAuth login + claim flow). Off until the Discord/Google apps are live in prod.',
     default: false,
   },
+  twitch: {
+    label: 'Twitch Streams',
+    description: 'Twitch streamers page — live status + last Pokkén-category stream per channel.',
+    default: false,
+  },
 };
 
 // ── Storage ───────────────────────────────────────────────────────────────────

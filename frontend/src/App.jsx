@@ -10,6 +10,7 @@ import Achievements from './pages/Achievements';
 import Organizers from './pages/Organizers';
 import Calendar from './pages/Calendar';
 import Creators from './pages/Creators';
+import Twitch from './pages/Twitch';
 import Login from './pages/Login';
 import AuthCallback from './pages/AuthCallback';
 import ClaimPlayer from './pages/ClaimPlayer';
@@ -73,6 +74,7 @@ function AuthNav() {
 export default function App() {
   const showCreators = useFlag('creators');
   const showAuth = useFlag('auth');
+  const showTwitch = useFlag('twitch');
   return (
     <div className="min-h-screen neos-bg text-slate-100 font-body">
       {/* Nav */}
@@ -90,6 +92,7 @@ export default function App() {
             <NavItem to="/calendar">Calendar</NavItem>
             <NavItem to="/achievements">Achievements</NavItem>
             {showCreators && <NavItem to="/creators">YouTube</NavItem>}
+            {showTwitch && <NavItem to="/twitch">Twitch</NavItem>}
           </nav>
           {showAuth && (
             <div className="ml-auto">
@@ -112,6 +115,7 @@ export default function App() {
           <Route path="/calendar" element={<Calendar />} />
           <Route path="/achievements" element={<Achievements />} />
           {showCreators && <Route path="/creators" element={<Creators />} />}
+          {showTwitch && <Route path="/twitch" element={<Twitch />} />}
           <Route path="/live" element={<LiveRoom />} />
           <Route path="/live/:code" element={<LiveRoom />} />
           <Route path="/organizers" element={<Organizers />} />
