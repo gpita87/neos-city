@@ -35,8 +35,8 @@ export const FLAGS = {
   },
   auth: {
     label: 'Sign-in',
-    description: 'Shows the "Sign in" button / account controls (OAuth login + claim flow). Off until the Discord/Google apps are live in prod.',
-    default: false,
+    description: 'Shows the "Sign in" button / account controls (OAuth login + claim flow).',
+    default: true,
   },
   twitch: {
     label: 'Twitch Streams',
@@ -85,11 +85,18 @@ export function getFlags() {
   return out;
 }
 
-// True once the user has opted into flag-land: any active override, or ?ff in the
-// URL. The panel renders only when this is true, so normal visitors never see it.
+// True once the user has put a flag into a non-default state — i.e. some override
+// disagrees with the flag's `default`. The panel renders only when this is true,
+// so normal visitors never see it. A flag that's merely default-on (a shipped
+// feature) does NOT light the indicator, even if a redundant `?ff=*` override for
+// it is sitting in localStorage — only an actual deviation from default counts.
 export function flagsActive() {
-  if (Object.values(readOverrides()).some(Boolean)) return true;
-  return new URLSearchParams(window.location.search).has('ff');
+  const overrides = readOverrides();
+  for (const [k, v] of Object.entries(overrides)) {
+    const def = !!(FLAGS[k] && FLAGS[k].default);
+    if (!!v !== def) return true;
+  }
+  return false;
 }
 
 // ── Public write API ──────────────────────────────────────────────────────────

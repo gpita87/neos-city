@@ -13,7 +13,11 @@ export default function FlagPanel() {
 
   const resolved = getFlags();
   const knownKeys = Object.keys(FLAGS);
-  const activeCount = Object.values(resolved).filter(Boolean).length;
+  // Count only flags deviating from their default — a default-on (shipped) flag
+  // shouldn't inflate the indicator badge. Matches flagsActive()'s logic.
+  const activeCount = knownKeys.filter(
+    (k) => !!resolved[k] !== !!FLAGS[k].default
+  ).length;
 
   return (
     <div className="fixed bottom-4 right-4 z-[100] font-body text-sm">
@@ -63,7 +67,7 @@ export default function FlagPanel() {
           </div>
 
           <div className="flex items-center justify-between px-4 py-2 border-t border-fuchsia-500/20">
-            <span className="text-[11px] text-slate-500">{activeCount} on</span>
+            <span className="text-[11px] text-slate-500">{activeCount} changed</span>
             <button
               onClick={clearFlags}
               className="text-[11px] text-slate-400 hover:text-red-400 transition-colors underline"
