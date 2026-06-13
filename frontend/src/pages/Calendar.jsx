@@ -130,6 +130,18 @@ const MANUAL_EVENTS = [
     utcHour: 25, utcMinute: 0,
     url: 'https://www.start.gg/tournament/replay-rumble-48-you-re-60-years-too-early/details',
   },
+  {
+    id: 'manual_dcm_p37_2026-06-19',
+    name: 'DCM Pokkén #37',
+    series: 'dcm',
+    date: '2026-06-19',
+    // Announced "Friday, June 19, 6:00 PM". DCM events fire ~01:00-02:00 UTC Sat
+    // (see SERIES_SCHEDULES note), i.e. 6pm Pacific Friday → 01:00 UTC Jun 20.
+    // hour 25 rolls past midnight UTC; `date` stays the Friday the event lands on
+    // for the PT audience.
+    utcHour: 25, utcMinute: 0,
+    url: 'https://challonge.com/dcmp37',
+  },
 ];
 
 /** Materialize MANUAL_EVENTS that fall inside the visible range into calendar
