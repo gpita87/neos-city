@@ -25,6 +25,10 @@ const SERIES = {
   NEZUMI:         'nezumi',
   NEZUMI_ROOKIES: 'nezumi_rookies',
   HA:             'ha',
+  // Display-only series: gives Mid Tier Mayhem its own badge/color in the UI.
+  // Intentionally NOT in ONLINE_SERIES, so it carries no achievement track or
+  // per-series stat columns — results still count toward global achievements.
+  MTM:            'mtm',
   OTHER:          'other',
 
   // Offline tiers (unchanged)
@@ -43,6 +47,7 @@ const SERIES_NAMES = {
   nezumi:         'ねずみ杯 (Mouse Cup)',
   nezumi_rookies: 'ねずみ杯 Rookies',
   ha:             "Heaven's Arena",
+  mtm:            'Mid Tier Mayhem',
   other:          'Other',
   worlds:         'World Championships',
   major:          'Major',
@@ -63,6 +68,7 @@ function detectSeries(slug = '', name = '') {
   if (n.includes('ねずみ杯ROOKIES') || n.includes('NEZUMI_ROOKIES'))          return SERIES.NEZUMI_ROOKIES;
   if (n.includes('ねずみ杯') || n.includes('NEZUMI'))                          return SERIES.NEZUMI;
   if (/HEAVEN.*ARENA/.test(n) || /HEAVEN-S-ARENA/.test(s))                   return SERIES.HA;
+  if (/MID[- ]?TIER[- ]?MAYHEM/.test(n) || /MID-TIER-MAYHEM/.test(s))        return SERIES.MTM;
   return SERIES.OTHER;
 }
 

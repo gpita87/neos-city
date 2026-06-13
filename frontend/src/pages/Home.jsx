@@ -15,6 +15,7 @@ const SERIES_META = {
   nezumi:          { name: 'ねずみ杯',    color: 'border-rose-500/40',   accent: 'text-rose-400',   bg: 'bg-rose-500/10',   badge: 'bg-rose-900/40 text-rose-300 border-rose-700/50' },
   nezumi_rookies:  { name: 'Rookies',    color: 'border-amber-500/40',  accent: 'text-amber-400',  bg: 'bg-amber-500/10',  badge: 'bg-amber-900/40 text-amber-300 border-amber-700/50' },
   ha:              { name: "Heaven's Arena", color: 'border-cyan-500/40', accent: 'text-cyan-400', bg: 'bg-cyan-500/10', badge: 'bg-cyan-900/40 text-cyan-300 border-cyan-700/50' },
+  mtm:             { name: 'Mid Tier Mayhem', color: 'border-indigo-500/40', accent: 'text-indigo-400', bg: 'bg-indigo-500/10', badge: 'bg-indigo-900/40 text-indigo-300 border-indigo-700/50' },
 };
 
 const DEFAULT_SERIES = { name: 'Online', color: 'border-slate-500/40', accent: 'text-slate-400', bg: 'bg-slate-500/10', badge: 'bg-slate-800/40 text-slate-400 border-slate-600/50' };

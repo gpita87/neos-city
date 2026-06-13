@@ -31,6 +31,7 @@ const SERIES_BADGE = {
   nezumi: { label: 'ねずみ杯', class: 'bg-rose-900/40 text-rose-300 border-rose-700/40' },
   nezumi_rookies: { label: 'Rookies', class: 'bg-amber-900/40 text-amber-300 border-amber-700/40' },
   ha:     { label: "Heaven's Arena", class: 'bg-cyan-900/40 text-cyan-300 border-cyan-700/40' },
+  mtm:    { label: 'Mid Tier Mayhem', class: 'bg-indigo-900/40 text-indigo-300 border-indigo-700/40' },
   worlds: { label: 'Worlds',  class: 'bg-yellow-900/40 text-yellow-300 border-yellow-700/40' },
   major:  { label: 'Major',   class: 'bg-cyan-900/40 text-cyan-300 border-cyan-700/40' },
   regional: { label: 'Regional', class: 'bg-emerald-900/40 text-emerald-300 border-emerald-700/40' },

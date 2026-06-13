@@ -13,6 +13,7 @@ const SERIES_META = {
   nezumi:          { label: 'Nezumi',       color: 'bg-rose-500',    text: 'text-rose-300',    border: 'border-rose-600',   dot: '#f43f5e' },
   nezumi_rookies:  { label: 'Rookies',      color: 'bg-amber-500',   text: 'text-amber-300',   border: 'border-amber-600',  dot: '#f59e0b' },
   ha:              { label: "Heaven's Arena",color: 'bg-cyan-500',   text: 'text-cyan-300',    border: 'border-cyan-600',   dot: '#06b6d4' },
+  mtm:             { label: 'Mid Tier Mayhem',color: 'bg-indigo-500', text: 'text-indigo-300',  border: 'border-indigo-600', dot: '#6366f1' },
   // Offline tiers
   worlds:          { label: 'Worlds',       color: 'bg-yellow-500',  text: 'text-yellow-300',  border: 'border-yellow-600', dot: '#eab308' },
   major:           { label: 'Major',        color: 'bg-cyan-500',   text: 'text-cyan-300',    border: 'border-cyan-600',   dot: '#00e5ff' },
@@ -698,7 +699,7 @@ export default function Calendar() {
   const visibleSeries = useMemo(() => {
     const s = new Set(calendarEvents.map(e => e.series));
     // Maintain a consistent order
-    const order = ['ffc','rtg_na','rtg_eu','dcm','tcc','eotr','nezumi','nezumi_rookies','ha','worlds','major','regional','other'];
+    const order = ['ffc','rtg_na','rtg_eu','dcm','tcc','eotr','nezumi','nezumi_rookies','ha','mtm','worlds','major','regional','other'];
     return order.filter(k => s.has(k));
   }, [calendarEvents]);
 
