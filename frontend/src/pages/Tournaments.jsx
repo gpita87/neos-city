@@ -244,7 +244,7 @@ export default function Tournaments() {
                 className="bg-[#0c1425] border border-[#1a2744] rounded-xl p-5 hover:border-cyan-500/50 transition-colors block"
               >
                 <h3 className="font-medium text-white mb-1">{t.name}</h3>
-                <div className="flex items-center gap-4 text-xs text-slate-500">
+                <div className="flex flex-wrap items-center gap-x-4 gap-y-1 text-xs text-slate-500">
                   {t.game_name && <span>🎮 {t.game_name}</span>}
                   {t.participants_count && <span>👥 {t.participants_count} players</span>}
                   <span>📅 {formatDate(t.completed_at)}</span>

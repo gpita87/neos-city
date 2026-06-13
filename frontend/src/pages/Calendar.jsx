@@ -405,7 +405,7 @@ function MonthView({ events, currentDate, onDateClick }) {
                 key={dateKey(d)}
                 onClick={() => dayEvents.length > 0 && onDateClick(d)}
                 className={`
-                  min-h-[100px] border-b border-r border-[#1a2744] p-1.5
+                  min-h-[68px] sm:min-h-[100px] border-b border-r border-[#1a2744] p-1 sm:p-1.5
                   ${inMonth ? 'bg-[#050a18]' : 'bg-[#030712]'}
                   ${dayEvents.length > 0 ? 'cursor-pointer hover:bg-white/[0.02]' : ''}
                   transition-colors
@@ -762,17 +762,17 @@ export default function Calendar() {
       {/* Controls bar */}
       <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-4">
         {/* Nav arrows + title */}
-        <div className="flex items-center gap-3">
-          <button onClick={goPrev} className="p-2 rounded-lg hover:bg-white/5 text-slate-400 hover:text-white transition-colors">
+        <div className="flex items-center gap-2 sm:gap-3">
+          <button onClick={goPrev} className="shrink-0 p-2 rounded-lg hover:bg-white/5 text-slate-400 hover:text-white transition-colors">
             <svg className="w-5 h-5" fill="none" viewBox="0 0 24 24" stroke="currentColor"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M15 19l-7-7 7-7"/></svg>
           </button>
-          <h2 className="font-display text-lg tracking-wide text-slate-200 min-w-[200px] text-center">
+          <h2 className="font-display text-base sm:text-lg tracking-wide text-slate-200 flex-1 sm:flex-none min-w-0 sm:min-w-[200px] text-center">
             {headerText}
           </h2>
-          <button onClick={goNext} className="p-2 rounded-lg hover:bg-white/5 text-slate-400 hover:text-white transition-colors">
+          <button onClick={goNext} className="shrink-0 p-2 rounded-lg hover:bg-white/5 text-slate-400 hover:text-white transition-colors">
             <svg className="w-5 h-5" fill="none" viewBox="0 0 24 24" stroke="currentColor"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M9 5l7 7-7 7"/></svg>
           </button>
-          <button onClick={goToday} className="ml-2 px-3 py-1 text-xs rounded-lg bg-cyan-500/20 text-cyan-300 border border-cyan-500/40 hover:bg-cyan-500/30 transition-colors">
+          <button onClick={goToday} className="shrink-0 ml-1 sm:ml-2 px-3 py-1 text-xs rounded-lg bg-cyan-500/20 text-cyan-300 border border-cyan-500/40 hover:bg-cyan-500/30 transition-colors">
             Today
           </button>
         </div>

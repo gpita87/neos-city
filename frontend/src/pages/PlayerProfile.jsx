@@ -197,26 +197,28 @@ export default function PlayerProfile() {
   return (
     <div className="space-y-6">
       {/* Header */}
-      <div className="bg-[#0c1425] border border-[#1a2744] rounded-xl p-6 flex items-center gap-6">
-        {player.avatar_url ? (
-          <img
-            src={player.avatar_url}
-            alt={player.display_name}
-            className="w-16 h-16 rounded-full object-cover bg-slate-800 border border-[#1a2744]"
-          />
-        ) : (
-          <div className="w-16 h-16 rounded-full bg-cyan-500/20 flex items-center justify-center text-3xl">
-            ⚔️
-          </div>
-        )}
-        <div className="flex-1">
-          <h1 className="font-display text-2xl text-white tracking-wide">{player.display_name}</h1>
-          <p className="text-slate-500 text-sm">@{player.challonge_username}</p>
-          {player.highest_regions && (
-            <div className="mt-2">
-              <RegionTierDisplay highestRegions={player.highest_regions} />
+      <div className="bg-[#0c1425] border border-[#1a2744] rounded-xl p-5 sm:p-6 flex flex-col sm:flex-row sm:items-center gap-4 sm:gap-6">
+        <div className="flex items-center gap-4 sm:gap-6 min-w-0 flex-1">
+          {player.avatar_url ? (
+            <img
+              src={player.avatar_url}
+              alt={player.display_name}
+              className="w-14 h-14 sm:w-16 sm:h-16 shrink-0 rounded-full object-cover bg-slate-800 border border-[#1a2744]"
+            />
+          ) : (
+            <div className="w-14 h-14 sm:w-16 sm:h-16 shrink-0 rounded-full bg-cyan-500/20 flex items-center justify-center text-2xl sm:text-3xl">
+              ⚔️
             </div>
           )}
+          <div className="flex-1 min-w-0">
+            <h1 className="font-display text-xl sm:text-2xl text-white tracking-wide truncate">{player.display_name}</h1>
+            <p className="text-slate-500 text-sm truncate">@{player.challonge_username}</p>
+            {player.highest_regions && (
+              <div className="mt-2">
+                <RegionTierDisplay highestRegions={player.highest_regions} />
+              </div>
+            )}
+          </div>
         </div>
         <ClaimProfileCTA playerId={id} claimed={player.claimed} />
       </div>
@@ -248,9 +250,9 @@ export default function PlayerProfile() {
                   </span>
                   <span className="flex-1 text-sm text-white truncate">{t.name}</span>
                   {t.participants_count != null && (
-                    <span className="text-xs text-slate-500 shrink-0">{t.participants_count}p</span>
+                    <span className="hidden sm:inline text-xs text-slate-500 shrink-0">{t.participants_count}p</span>
                   )}
-                  <span className="text-xs text-slate-600 shrink-0 w-20 text-right">{formatDate(date)}</span>
+                  <span className="text-xs text-slate-600 shrink-0 w-16 sm:w-20 text-right">{formatDate(date)}</span>
                 </Link>
               );
             })}

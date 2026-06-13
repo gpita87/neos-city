@@ -78,10 +78,10 @@ function TournamentCard({ tournament }) {
   return (
     <div className={`bg-[#0c1425] border ${isPartial ? 'border-amber-500/40' : series.color} rounded-xl overflow-hidden`}>
       {/* Card header */}
-      <div className={`px-5 py-3 ${series.bg} border-b ${isPartial ? 'border-amber-500/40' : series.color}`}>
-        <div className="flex items-center justify-between gap-3">
+      <div className={`px-4 sm:px-5 py-3 ${series.bg} border-b ${isPartial ? 'border-amber-500/40' : series.color}`}>
+        <div className="flex flex-col gap-1 sm:flex-row sm:items-center sm:justify-between sm:gap-3">
           <div className="flex items-center gap-2 min-w-0">
-            <span className={`px-2 py-0.5 rounded border text-[10px] font-display tracking-wider ${series.badge}`}>
+            <span className={`px-2 py-0.5 rounded border text-[10px] font-display tracking-wider shrink-0 ${series.badge}`}>
               {series.name}
             </span>
             {isPartial && (
@@ -142,11 +142,11 @@ export default function Home() {
   return (
     <div className="space-y-10">
       {/* Hero */}
-      <div className="text-center py-10">
-        <h1 className="font-display text-4xl md:text-5xl text-cyan-400 tracking-widest mb-3 neon-text">
+      <div className="text-center py-6 sm:py-10">
+        <h1 className="font-display text-3xl sm:text-4xl md:text-5xl text-cyan-400 tracking-widest mb-3 neon-text">
           NEOS CITY
         </h1>
-        <p className="text-slate-400 text-lg">
+        <p className="text-slate-400 text-base sm:text-lg">
           Pokkén Tournament community hub — results, stats & achievements
         </p>
       </div>

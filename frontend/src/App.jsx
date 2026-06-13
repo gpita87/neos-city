@@ -1,3 +1,4 @@
+import { useState } from 'react';
 import { Routes, Route, NavLink, Link } from 'react-router-dom';
 import Home from './pages/Home';
 import Leaderboard from './pages/Leaderboard';
@@ -18,10 +19,12 @@ import { useAuth } from './contexts/AuthContext';
 import { useFlag } from './hooks/useFlag';
 import FlagPanel from './components/FlagPanel';
 
-function NavItem({ to, children }) {
+function NavItem({ to, children, onClick }) {
   return (
     <NavLink
       to={to}
+      end={to === '/'}
+      onClick={onClick}
       className={({ isActive }) =>
         `px-4 py-2 rounded-lg text-sm font-medium transition-all duration-200 ${
           isActive
@@ -34,6 +37,16 @@ function NavItem({ to, children }) {
     </NavLink>
   );
 }
+
+// Nav destinations, shared between the desktop bar and the mobile menu so the
+// two never drift. Flag-gated items are appended in the component.
+const NAV_LINKS = [
+  { to: '/', label: 'Home' },
+  { to: '/players', label: 'Players' },
+  { to: '/tournaments', label: 'Tournaments' },
+  { to: '/calendar', label: 'Calendar' },
+  { to: '/achievements', label: 'Achievements' },
+];
 
 // Right-hand auth controls: Login when signed out; identity + Logout when in.
 function AuthNav() {
@@ -75,36 +88,73 @@ export default function App() {
   const showCreators = useFlag('creators');
   const showAuth = useFlag('auth');
   const showTwitch = useFlag('twitch');
+  const [menuOpen, setMenuOpen] = useState(false);
+
+  const links = [
+    ...NAV_LINKS,
+    ...(showCreators ? [{ to: '/creators', label: 'YouTube' }] : []),
+    ...(showTwitch ? [{ to: '/twitch', label: 'Twitch' }] : []),
+  ];
+  const closeMenu = () => setMenuOpen(false);
+
   return (
     <div className="min-h-screen neos-bg text-slate-100 font-body">
       {/* Nav */}
       <header className="border-b border-[#1a2744] sticky top-0 z-50 backdrop-blur-md bg-[#050a18]/80">
-        <div className="max-w-6xl mx-auto px-4 py-3 flex items-center gap-6">
-          <NavLink to="/" className="flex items-center gap-2 mr-2 group">
-            <span className="font-display text-lg text-cyan-400 tracking-widest neon-text group-hover:animate-neon-flicker transition-all">
+        <div className="max-w-6xl mx-auto px-4 py-3 flex items-center gap-4 lg:gap-6">
+          <NavLink to="/" onClick={closeMenu} className="flex items-center gap-2 mr-auto lg:mr-2 group shrink-0">
+            <span className="font-display text-base sm:text-lg text-cyan-400 tracking-widest neon-text group-hover:animate-neon-flicker transition-all">
               NEOS CITY
             </span>
           </NavLink>
-          <nav className="flex gap-1 flex-wrap">
-            <NavItem to="/">Home</NavItem>
-            <NavItem to="/players">Players</NavItem>
-            <NavItem to="/tournaments">Tournaments</NavItem>
-            <NavItem to="/calendar">Calendar</NavItem>
-            <NavItem to="/achievements">Achievements</NavItem>
-            {showCreators && <NavItem to="/creators">YouTube</NavItem>}
-            {showTwitch && <NavItem to="/twitch">Twitch</NavItem>}
+
+          {/* Desktop nav */}
+          <nav className="hidden lg:flex gap-1">
+            {links.map(l => (
+              <NavItem key={l.to} to={l.to}>{l.label}</NavItem>
+            ))}
           </nav>
           {showAuth && (
-            <div className="ml-auto">
+            <div className="hidden lg:block lg:ml-auto">
               <AuthNav />
             </div>
           )}
+
+          {/* Mobile menu toggle */}
+          <button
+            type="button"
+            onClick={() => setMenuOpen(o => !o)}
+            className="lg:hidden p-2 -mr-2 rounded-lg text-slate-300 hover:text-cyan-300 hover:bg-cyan-500/5 transition-colors"
+            aria-label={menuOpen ? 'Close menu' : 'Open menu'}
+            aria-expanded={menuOpen}
+          >
+            <svg className="w-6 h-6" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+              {menuOpen
+                ? <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M6 18L18 6M6 6l12 12" />
+                : <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M4 6h16M4 12h16M4 18h16" />}
+            </svg>
+          </button>
         </div>
+
+        {/* Mobile menu panel */}
+        {menuOpen && (
+          <nav className="lg:hidden border-t border-[#1a2744] bg-[#050a18]/95 backdrop-blur-md px-4 py-3 flex flex-col gap-1">
+            {links.map(l => (
+              <NavItem key={l.to} to={l.to} onClick={closeMenu}>{l.label}</NavItem>
+            ))}
+            {showAuth && (
+              <div className="pt-3 mt-2 border-t border-[#1a2744]" onClick={closeMenu}>
+                <AuthNav />
+              </div>
+            )}
+          </nav>
+        )}
+
         {/* Neon line under nav */}
         <div className="neon-divider" />
       </header>
 
-      <main className="max-w-6xl mx-auto px-4 py-8">
+      <main className="max-w-6xl mx-auto px-4 py-6 sm:py-8">
         <Routes>
           <Route path="/" element={<Home />} />
           <Route path="/leaderboard" element={<Leaderboard />} />
