@@ -13,8 +13,9 @@
  *   - Target file is inside the main checkout (and NOT a worktree)  -> ask
  *   - Target file is inside a worktree, or anywhere else            -> allow silently
  *
- * "ask" surfaces a permission prompt to Gabriel. Approve it when you genuinely
- * want the change on main; otherwise redirect the work into a worktree.
+ * "ask" surfaces a permission prompt to Gabriel. The default response is to
+ * back out and redirect the work into a worktree — approve a main edit ONLY
+ * when Gabriel raised main first this session and asked for it to land now.
  *
  * Detection is purely path-based and tied to this machine's layout:
  *   MAIN       = C:\Users\pitag\Documents\neos-city
@@ -59,8 +60,10 @@ process.stdin.on('end', () => {
         permissionDecisionReason:
           'This edits the MAIN checkout (' + (ti.file_path || ti.notebook_path || ti.path) +
           ') directly. Default is to work in a worktree (see AGENT_CONTEXT.md). ' +
-          'Approve only if you specifically want this change on main now; ' +
-          'otherwise spawn/enter a worktree and edit there.'
+          'Agent: do NOT ask to approve this — back out and redirect the work ' +
+          'into a worktree (node spawn-worktree.js <name>, or commit in the ' +
+          'harness worktree and hand off a cherry-pick). Approve ONLY if Gabriel ' +
+          'raised main first this session and asked for the change to land now.'
       }
     }));
   }
