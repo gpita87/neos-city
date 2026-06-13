@@ -1,7 +1,8 @@
 import { useEffect, useMemo, useState } from 'react';
-import { Link, useNavigate } from 'react-router-dom';
-import { getPlayerIndex, linkPlayer } from '../lib/api';
+import { Link, useNavigate, useSearchParams } from 'react-router-dom';
+import { getPlayerIndex, linkPlayer, getClaimSuggestions } from '../lib/api';
 import { useAuth } from '../contexts/AuthContext';
+import { useFlag } from '../hooks/useFlag';
 
 function regionFlag(region) {
   if (region === 'NA') return '🇺🇸';
@@ -13,7 +14,11 @@ function regionFlag(region) {
 export default function ClaimPlayer() {
   const { user, loading, refresh } = useAuth();
   const navigate = useNavigate();
+  const [searchParams] = useSearchParams();
+  const welcome = searchParams.get('welcome') === '1';
+  const showSuggestions = useFlag('auth'); // new UI stays behind the auth flag
   const [players, setPlayers] = useState([]);
+  const [suggestions, setSuggestions] = useState(null); // null = not loaded yet
   const [query, setQuery] = useState('');
   const [claiming, setClaiming] = useState(null); // player id mid-claim
   const [error, setError] = useState(null);
@@ -21,6 +26,20 @@ export default function ClaimPlayer() {
   useEffect(() => {
     getPlayerIndex().then(setPlayers).catch(() => {});
   }, []);
+
+  // Smart "Is this you?" suggestions — only meaningful once we know the user is
+  // signed in and unclaimed. Falls back to [] on error so the UI just shows search.
+  useEffect(() => {
+    if (!showSuggestions || loading || !user || user.player_id) return;
+    getClaimSuggestions()
+      .then((data) => setSuggestions(data.suggestions || []))
+      .catch(() => setSuggestions([]));
+  }, [showSuggestions, loading, user]);
+
+  const skip = () => {
+    try { localStorage.setItem('claim_dismissed', '1'); } catch { /* storage off — fine */ }
+    navigate('/', { replace: true });
+  };
 
   const q = query.trim().toLowerCase();
   const filtered = useMemo(() => {
@@ -72,10 +91,59 @@ export default function ClaimPlayer() {
 
   return (
     <div className="max-w-2xl mx-auto">
-      <h1 className="font-display text-2xl tracking-widest text-white mb-1 text-center">CLAIM YOUR PROFILE</h1>
-      <p className="text-slate-500 text-sm text-center mb-6">
-        Find your existing player record to link it to your account.
-      </p>
+      {welcome ? (
+        <div className="text-center mb-6">
+          <p className="text-3xl mb-2">👋</p>
+          <h1 className="font-display text-2xl tracking-widest text-white mb-1">WELCOME TO NEOS CITY</h1>
+          <p className="text-slate-400 text-sm">
+            Link your player record to claim your stats, achievements, and match history.
+          </p>
+        </div>
+      ) : (
+        <>
+          <h1 className="font-display text-2xl tracking-widest text-white mb-1 text-center">CLAIM YOUR PROFILE</h1>
+          <p className="text-slate-500 text-sm text-center mb-6">
+            Find your existing player record to link it to your account.
+          </p>
+        </>
+      )}
+
+      {/* Smart "Is this you?" suggestions, matched from the provider name (auth-flag UI). */}
+      {showSuggestions && suggestions && suggestions.length > 0 && (
+        <div className="mb-6">
+          <p className="text-xs uppercase tracking-widest text-cyan-400/80 mb-2">Is this you?</p>
+          <div className="space-y-2">
+            {suggestions.map(p => {
+              const flag = regionFlag(p.region);
+              const showHandle = p.challonge_username && p.challonge_username !== p.display_name;
+              return (
+                <div key={p.id} className="flex items-center gap-3 bg-[#0c1425] border border-cyan-500/30 rounded-xl px-4 py-3">
+                  <span className="w-7 h-7 rounded-full bg-cyan-500/15 flex items-center justify-center text-sm shrink-0">⚔️</span>
+                  <div className="min-w-0">
+                    <div className="flex items-center gap-2">
+                      <span className="font-medium text-white truncate">{p.display_name}</span>
+                      {flag && <span className="text-xs">{flag}</span>}
+                    </div>
+                    {showHandle && <span className="text-xs text-slate-500 truncate">@{p.challonge_username}</span>}
+                  </div>
+                  {p.already_claimed ? (
+                    <span className="ml-auto shrink-0 text-xs text-slate-500 px-3 py-1.5">Already claimed</span>
+                  ) : (
+                    <button
+                      onClick={() => claim(p.id)}
+                      disabled={claiming === p.id}
+                      className="ml-auto shrink-0 bg-cyan-500 hover:bg-cyan-400 disabled:opacity-50 text-white text-xs font-medium px-3 py-1.5 rounded-lg transition-colors"
+                    >
+                      {claiming === p.id ? 'Claiming…' : 'This is me'}
+                    </button>
+                  )}
+                </div>
+              );
+            })}
+          </div>
+          <p className="text-xs text-slate-600 text-center mt-3">Not listed? Search for your record below.</p>
+        </div>
+      )}
 
       <div className="relative mb-4">
         <span className="absolute left-3 top-1/2 -translate-y-1/2 text-slate-500 text-sm">🔍</span>
@@ -120,6 +188,14 @@ export default function ClaimPlayer() {
       </div>
       {!q && players.length > 50 && (
         <p className="text-xs text-slate-600 text-center mt-3">Showing first 50 — search to narrow down.</p>
+      )}
+
+      {welcome && (
+        <p className="text-center mt-6">
+          <button onClick={skip} className="text-sm text-slate-500 hover:text-slate-300 transition-colors">
+            Skip for now
+          </button>
+        </p>
       )}
     </div>
   );

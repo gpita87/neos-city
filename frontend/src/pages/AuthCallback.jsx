@@ -1,6 +1,7 @@
 import { useEffect, useRef, useState } from 'react';
 import { useNavigate, Link } from 'react-router-dom';
 import { useAuth } from '../contexts/AuthContext';
+import { isFlagEnabled } from '../lib/flags';
 
 // Landing page for the Discord OAuth redirect. The backend hands the session
 // token back in the URL fragment (#token=…) so it never hits server logs or
@@ -24,7 +25,17 @@ export default function AuthCallback() {
     setToken(token);
     // Clear the token from the address bar before continuing.
     window.history.replaceState(null, '', window.location.pathname);
-    refresh().finally(() => navigate('/', { replace: true }));
+    // refresh() returns the freshly-loaded user (context state isn't updated
+    // synchronously). Send an unclaimed user to the post-login claim step —
+    // unless they've dismissed it before — instead of dropping them home.
+    refresh().then((u) => {
+      const dismissed = localStorage.getItem('claim_dismissed');
+      if (u && !u.player_id && !dismissed && isFlagEnabled('auth')) {
+        navigate('/link?welcome=1', { replace: true });
+      } else {
+        navigate('/', { replace: true });
+      }
+    });
   }, [setToken, refresh, navigate]);
 
   if (error) {

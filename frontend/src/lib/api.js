@@ -84,6 +84,10 @@ export const getMe = () => api.get('/auth/me').then(r => r.data);
 export const logoutAll = () => api.post('/auth/logout-all').then(r => r.data);
 export const linkPlayer = (player_id) => api.post('/auth/link', { player_id }).then(r => r.data);
 export const unlinkPlayer = () => api.post('/auth/unlink').then(r => r.data);
+// Ranked player records matching the signed-in user's provider name, for the
+// post-login "Is this you?" claim step. Returns { suggestions: [...] } ([] when
+// nothing matches or the account is already linked).
+export const getClaimSuggestions = () => api.get('/auth/claim-suggestions').then(r => r.data);
 // OAuth sign-in is a full-page navigation (not an XHR), so build raw URLs.
 // In dev VITE_API_URL is unset and the Vite proxy forwards /api → backend.
 export const discordLoginUrl = () => `${import.meta.env.VITE_API_URL || ''}/api/auth/discord`;

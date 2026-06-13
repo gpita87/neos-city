@@ -301,6 +301,69 @@ router.get('/google/callback', authLimiter, async (req, res) => {
 
 // ── Account ↔ player linking (trust-based self-claim) ───────────────────────
 
+// GET /api/auth/claim-suggestions
+// Ranked player records that likely match the signed-in user's provider identity
+// (display_name / discord_username), for the post-login "Is this you?" claim step.
+// Read-only. Returns { suggestions: [] } when the caller is already linked or
+// nothing matches, so the UI can fall back to the manual search.
+router.get('/claim-suggestions', requireAuth, async (req, res) => {
+  // Already linked → nothing to suggest.
+  if (req.user.player_id) return res.json({ suggestions: [] });
+
+  // Identity signals to match against player records.
+  const signals = [...new Set(
+    [req.user.display_name, req.user.discord_username]
+      .map((s) => String(s || '').trim().toLowerCase())
+      .filter(Boolean)
+  )];
+  if (signals.length === 0) return res.json({ suggestions: [] });
+
+  try {
+    // Generous candidate pool via substring match on name OR handle; we score and
+    // cap in JS below. Escape LIKE wildcards in the (user-controlled) signals so a
+    // name containing % / _ can't broaden the match to the whole table.
+    const escapeLike = (s) => s.replace(/[\\%_]/g, '\\$&');
+    const likeTerms = signals.map((s) => `%${escapeLike(s)}%`);
+    const { rows } = await db.query(
+      `SELECT p.id, p.display_name, p.challonge_username, p.region,
+              EXISTS (SELECT 1 FROM users u WHERE u.player_id = p.id) AS already_claimed
+         FROM players p
+        WHERE p.display_name ILIKE ANY($1) OR p.challonge_username ILIKE ANY($1)`,
+      [likeTerms]
+    );
+
+    // exact (ci) = 100, prefix either way = 80, substring either way = 60.
+    const scoreField = (value) => {
+      const t = String(value || '').trim().toLowerCase();
+      if (!t) return 0;
+      let best = 0;
+      for (const s of signals) {
+        if (t === s) best = Math.max(best, 100);
+        else if (t.startsWith(s) || s.startsWith(t)) best = Math.max(best, 80);
+        else if (t.includes(s) || s.includes(t)) best = Math.max(best, 60);
+      }
+      return best;
+    };
+
+    const suggestions = rows
+      .map((r) => ({
+        id: r.id,
+        display_name: r.display_name,
+        challonge_username: r.challonge_username,
+        region: r.region,
+        already_claimed: r.already_claimed,
+        score: Math.max(scoreField(r.display_name), scoreField(r.challonge_username)),
+      }))
+      .filter((s) => s.score > 0)
+      .sort((a, b) => b.score - a.score || a.display_name.localeCompare(b.display_name))
+      .slice(0, 5);
+
+    res.json({ suggestions });
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
 // POST /api/auth/link  { player_id }
 // Any signed-in (OAuth-authenticated) user may claim — the provider login is
 // itself the identity proof, so there's no separate email-verification gate.
