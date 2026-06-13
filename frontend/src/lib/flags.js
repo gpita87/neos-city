@@ -31,7 +31,7 @@ export const FLAGS = {
   creators: {
     label: 'YouTube Creators',
     description: 'YouTube creators + resource library page.',
-    default: false,
+    default: true,
   },
   auth: {
     label: 'Sign-in',
@@ -41,7 +41,7 @@ export const FLAGS = {
   twitch: {
     label: 'Twitch Streams',
     description: 'Twitch streamers page — live status + last Pokkén-category stream per channel.',
-    default: false,
+    default: true,
   },
 };
 
