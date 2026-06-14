@@ -574,15 +574,28 @@ router.post('/preview-dates', requireAdmin, async (req, res) => {
     }
   }
 
+  // Map values carry { date, finalized }. `finalized` tells the caller
+  // (batch_import.js) whether the row is safe to drop client-side instead of
+  // re-POSTing it just to have the backend DB-skip it. It mirrors each
+  // import route's own skip rule exactly, so dropping never hides a row the
+  // backend would actually re-import:
+  //   - Challonge /batch-import re-imports rows with NULL completed_at or
+  //     is_partial=TRUE (RTG holds top-N for stream reveal), so only
+  //     completed && !partial rows are finalized.
+  //   - start.gg /batch-import-startgg skips on mere existence, so any known
+  //     phase group is finalized.
   const knownChallonge = new Map();
   const knownStartgg = new Map();
   if (challongeSlugs.length) {
     const { rows } = await db.query(
-      'SELECT challonge_id, started_at, completed_at, imported_at FROM tournaments WHERE challonge_id = ANY($1)',
+      'SELECT challonge_id, started_at, completed_at, imported_at, is_partial FROM tournaments WHERE challonge_id = ANY($1)',
       [challongeSlugs]
     );
     for (const r of rows) {
-      knownChallonge.set(r.challonge_id, r.started_at || r.completed_at || r.imported_at || null);
+      knownChallonge.set(r.challonge_id, {
+        date: r.started_at || r.completed_at || r.imported_at || null,
+        finalized: r.completed_at != null && !r.is_partial,
+      });
     }
   }
   if (startggPhaseIds.length) {
@@ -591,7 +604,10 @@ router.post('/preview-dates', requireAdmin, async (req, res) => {
       [startggPhaseIds]
     );
     for (const r of rows) {
-      knownStartgg.set(r.startgg_phase_group_id, r.started_at || r.completed_at || r.imported_at || null);
+      knownStartgg.set(r.startgg_phase_group_id, {
+        date: r.started_at || r.completed_at || r.imported_at || null,
+        finalized: true,
+      });
     }
   }
 
@@ -607,13 +623,14 @@ router.post('/preview-dates', requireAdmin, async (req, res) => {
       }
       if (knownStartgg.has(parsed.phaseGroupId)) {
         cachedCount++;
-        const date = knownStartgg.get(parsed.phaseGroupId);
+        const { date, finalized } = knownStartgg.get(parsed.phaseGroupId);
         results.push({
           url,
           source: 'startgg',
           phase_group_id: parsed.phaseGroupId,
           date: date ? new Date(date).toISOString() : null,
           cached: true,
+          finalized,
         });
         continue;
       }
@@ -636,13 +653,14 @@ router.post('/preview-dates', requireAdmin, async (req, res) => {
       const slug = challonge.extractSlugFromUrl(url) || url;
       if (knownChallonge.has(slug)) {
         cachedCount++;
-        const date = knownChallonge.get(slug);
+        const { date, finalized } = knownChallonge.get(slug);
         results.push({
           url,
           source: 'challonge',
           slug,
           date: date ? new Date(date).toISOString() : null,
           cached: true,
+          finalized,
         });
         continue;
       }

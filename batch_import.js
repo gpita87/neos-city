@@ -173,16 +173,33 @@ async function sendRun(run, idx, totalRuns) {
 
   const sorted = await sortUrlsByDate(allUrls);
 
-  const firstDated = sorted.find(r => r.date);
-  const lastDated  = [...sorted].reverse().find(r => r.date);
+  // Drop URLs the backend would only DB-skip anyway. /preview-dates tags each
+  // already-finalized row with finalized:true; re-POSTing those just burns
+  // round-trips and the 1.5s inter-run delays. Rows that are cached but NOT
+  // finalized (Challonge partials / unfinalized stubs) and brand-new rows are
+  // kept, so nothing the backend would actually re-import gets hidden.
+  const toImport   = sorted.filter(r => !(r.cached && r.finalized));
+  const preSkipped = sorted.length - toImport.length;
+  if (preSkipped) {
+    console.log(`\n${preSkipped} already-finalized URLs skipped client-side (not sent to the backend).`);
+  }
+  if (toImport.length === 0) {
+    console.log('\nNothing new to import - every URL is already finalized in the DB.');
+    console.log('Run `node recalculate_elo.js` only if you changed data by other means.');
+    console.log('\nReload http://localhost:5173 if you expected changes.');
+    return;
+  }
+
+  const firstDated = toImport.find(r => r.date);
+  const lastDated  = [...toImport].reverse().find(r => r.date);
   if (firstDated && lastDated) {
     console.log(`\nImporting in chronological order: ${firstDated.date.slice(0, 10)} -> ${lastDated.date.slice(0, 10)}\n`);
   } else {
     console.log('\nNo URLs were dated - importing in file order.\n');
   }
 
-  const runs = groupSequentialBySource(sorted);
-  console.log(`${runs.length} runs queued (${sorted.length} URLs)\n`);
+  const runs = groupSequentialBySource(toImport);
+  console.log(`${runs.length} runs queued (${toImport.length} URLs)\n`);
 
   const totals = { imported: 0, skipped: 0, errors: 0 };
   const failures = [];
@@ -199,7 +216,7 @@ async function sendRun(run, idx, totalRuns) {
   console.log('\n===========================================================');
   console.log('DONE');
   console.log(`    Imported : ${totals.imported}`);
-  console.log(`    Skipped  : ${totals.skipped}   (already in DB)`);
+  console.log(`    Skipped  : ${totals.skipped + preSkipped}   (already in DB${preSkipped ? `; ${preSkipped} skipped client-side` : ''})`);
   console.log(`    Errors   : ${totals.errors}`);
 
   if (failures.length) {
