@@ -54,7 +54,8 @@
       "Edit(//c/Users/pitag/Documents/neos-city-worktrees/**)",
       "Write(//c/Users/pitag/Documents/neos-city-worktrees/**)",
       "Bash(npx esbuild:*)",
-      "PowerShell(npx esbuild:*)"
+      "PowerShell(npx esbuild:*)",
+      "mcp__ccd_session_mgmt__search_session_transcripts"
     ],
     "deny": [
       "Bash(node pull_new.js)",
