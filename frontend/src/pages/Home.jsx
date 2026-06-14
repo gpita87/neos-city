@@ -1,7 +1,7 @@
 import { useEffect, useState } from 'react';
 import { Link } from 'react-router-dom';
 import { getRecentPlacements, getTournaments, getRecentAchievements } from '../lib/api';
-import { formatDate } from '../lib/utils';
+import { formatDate, eventDate } from '../lib/utils';
 import AchievementIcon from '../components/AchievementIcon';
 
 // Series display names and colors
@@ -98,7 +98,7 @@ function TournamentCard({ tournament }) {
           </div>
           <div className="flex items-center gap-3 text-xs text-slate-500 shrink-0">
             <span>{tournament.participants_count} players</span>
-            <span>{formatDate(tournament.completed_at)}</span>
+            <span>{formatDate(eventDate(tournament))}</span>
           </div>
         </div>
       </div>
@@ -212,7 +212,7 @@ export default function Home() {
                       <p className="text-white font-medium text-sm truncate">{t.name}</p>
                     </div>
                     <p className="text-xs text-slate-500 mt-1">
-                      {t.participants_count} players · {formatDate(t.completed_at)}
+                      {t.participants_count} players · {formatDate(eventDate(t))}
                     </p>
                   </Link>
                 );

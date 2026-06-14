@@ -39,8 +39,12 @@ router.get('/', async (req, res) => {
     if (is_offline === 'true')  whereClause = `WHERE is_offline = TRUE`;
     if (is_offline === 'false') whereClause = `WHERE (is_offline = FALSE OR is_offline IS NULL)`;
 
+    // Order by the true event date. started_at is when the bracket ran;
+    // completed_at can drift far later for stream-revealed events (RTG holds
+    // top placements back, so its finalize / last-match timestamp lands on the
+    // reveal day). Fall back to completed_at for rows with no started_at.
     const { rows } = await db.query(
-      `SELECT * FROM tournaments ${whereClause} ORDER BY completed_at DESC NULLS LAST`
+      `SELECT * FROM tournaments ${whereClause} ORDER BY COALESCE(started_at, completed_at) DESC NULLS LAST`
     );
     res.json(rows);
   } catch (err) {
@@ -57,13 +61,17 @@ router.get('/recent-placements', async (req, res) => {
     const placementLimit = parseInt(req.query.limit) || 8;
 
     // Get recent online tournaments with their top placements
+    // Window and order on the true event date (started_at), not completed_at,
+    // so stream-revealed events (RTG) appear on their actual day rather than
+    // jumping to the reveal day. Fall back to completed_at when started_at is
+    // null.
     const { rows: tournaments } = await db.query(
-      `SELECT t.id, t.name, t.series, t.completed_at, t.participants_count, t.challonge_url,
+      `SELECT t.id, t.name, t.series, t.started_at, t.completed_at, t.participants_count, t.challonge_url,
               t.source, t.startgg_slug, t.tonamel_id, t.is_partial
        FROM tournaments t
        WHERE (t.is_offline = FALSE OR t.is_offline IS NULL)
-         AND t.completed_at >= NOW() - INTERVAL '1 day' * $1
-       ORDER BY t.completed_at DESC`,
+         AND COALESCE(t.started_at, t.completed_at) >= NOW() - INTERVAL '1 day' * $1
+       ORDER BY COALESCE(t.started_at, t.completed_at) DESC`,
       [days]
     );
 
@@ -92,6 +100,7 @@ router.get('/recent-placements', async (req, res) => {
         tournament_id: t.id,
         name: t.name,
         series: t.series,
+        started_at: t.started_at,
         completed_at: t.completed_at,
         participants_count: t.participants_count,
         is_partial: t.is_partial,

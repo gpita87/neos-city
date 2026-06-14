@@ -2,7 +2,7 @@ import { useEffect, useState } from 'react';
 import { useParams, Link } from 'react-router-dom';
 import { getPlayer, linkPlayer } from '../lib/api';
 import { useAuth } from '../contexts/AuthContext';
-import { formatDate } from '../lib/utils';
+import { formatDate, eventDate } from '../lib/utils';
 import AchievementTournamentsModal from '../components/AchievementTournamentsModal';
 import OfflinePlacementsModal from '../components/OfflinePlacementsModal';
 import AchievementIcon, { REGION_NUMERALS } from '../components/AchievementIcon';
@@ -235,7 +235,7 @@ export default function PlayerProfile() {
           <div className="space-y-1.5">
             {player.recent_tournaments?.map(t => {
               const badge = SERIES_BADGE[t.series] || { name: t.is_offline ? 'Offline' : 'Online', cls: 'bg-slate-800/40 text-slate-400 border-slate-600/50' };
-              const date = t.completed_at || t.started_at;
+              const date = eventDate(t);
               return (
                 <Link
                   key={t.id}

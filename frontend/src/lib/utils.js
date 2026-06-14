@@ -16,3 +16,12 @@ export function formatDate(dateStr) {
   if (!dateStr) return '—';
   return new Date(dateStr).toLocaleDateString('en-US', { month: 'short', day: 'numeric', year: 'numeric' });
 }
+
+// The canonical "when did this event happen" date. started_at is the true
+// event date; completed_at can drift far later for events revealed after the
+// fact — RTG holds its top placements for a stream reveal, so the finalize /
+// last-match timestamp lands on the reveal day, not the event day. Falls back
+// to completed_at for rows with no started_at (e.g. offline imports).
+export function eventDate(t) {
+  return (t && (t.started_at || t.completed_at)) || null;
+}

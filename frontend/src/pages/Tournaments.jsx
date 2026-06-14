@@ -1,7 +1,7 @@
 import { useEffect, useState } from 'react';
 import { Link, useNavigate, useSearchParams } from 'react-router-dom';
 import { getTournaments, getTournament, importTournament } from '../lib/api';
-import { formatDate } from '../lib/utils';
+import { formatDate, eventDate } from '../lib/utils';
 
 const TABS = [
   { key: 'online',  label: '🎮 Online'  },
@@ -247,7 +247,7 @@ export default function Tournaments() {
                 <div className="flex flex-wrap items-center gap-x-4 gap-y-1 text-xs text-slate-500">
                   {t.game_name && <span>🎮 {t.game_name}</span>}
                   {t.participants_count && <span>👥 {t.participants_count} players</span>}
-                  <span>📅 {formatDate(t.completed_at)}</span>
+                  <span>📅 {formatDate(eventDate(t))}</span>
                 </div>
               </Link>
             ))}

@@ -1,7 +1,7 @@
 import { useEffect, useState } from 'react';
 import { useParams, Link } from 'react-router-dom';
 import { getTournament } from '../lib/api';
-import { formatDate } from '../lib/utils';
+import { formatDate, eventDate } from '../lib/utils';
 import AchievementIcon from '../components/AchievementIcon';
 
 // Visual treatment for the top of the bracket. Anything past 8th falls
@@ -116,7 +116,7 @@ export default function TournamentDetail() {
             isOffline ? 'offline' : tournament.tournament_type,
             isOffline && tournament.location,
             isOffline && tournament.prize_pool && `prize ${tournament.prize_pool}`,
-            formatDate(tournament.completed_at),
+            formatDate(eventDate(tournament)),
           ].filter(Boolean).join(' · ')}
         </p>
         {tournament.challonge_url && (
