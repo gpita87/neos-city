@@ -52,7 +52,23 @@ const NON_TOURNAMENT_SLUGS = new Set([
   'terms_of_service', 'privacy_policy', 'bracket_generator',
   'pricing', 'features', 'communities', 'tournament', 'communities',
   'premier', 'pro', 'plus', 'upgrade', 'billing', 'notifications',
+  // Logged-in profile chrome (the joltaru profile renders these when you're
+  // signed in): dashboard nav, the messages inbox, the news feed, log-out.
+  'dashboard', 'comment_threads', 'news', 'user_session',
 ]);
+
+// joltaru's PROFILE lists every tournament he touched — both the ones he RAN
+// and the (many) ones he only PLAYED IN (Road to Greatness, Devcord Community
+// Monthly, Synergy Smackdown, End of the Road, FFC, …). We only want the ones
+// he organized: the Thunderdome series. Those are the only joltaru-original
+// events, so the brand name is the reliable discriminator — the Pokkén check
+// downstream can't help, since the participated-in events are Pokkén too.
+// Match by title keyword OR slug prefix (slugs: Tdome1, TdomeR, TdomeR2..17,
+// TDomeR11; titles: "Thunderdome Pokken #N", "The Thunderdome Returns #11").
+const ONLY_THUNDERDOME = true;
+function isThunderdome(slug, title) {
+  return /thunderdome/i.test(title || '') || /^tdome/i.test(slug);
+}
 
 const sleep = ms => new Promise(r => setTimeout(r, ms));
 
@@ -133,18 +149,31 @@ async function fetchPage(page) {
     if (page < PAGES_TO_SCRAPE) await sleep(PAGE_DELAY_MS);
   }
 
-  const slugs = [...bySlug.keys()];
+  const allSlugs = [...bySlug.keys()];
+  // Keep only joltaru's own Thunderdome events; drop everything he merely
+  // played in (and any stray chrome). Flip ONLY_THUNDERDOME to false to see the
+  // full unfiltered list (e.g. if the series ever gets a non-Thunderdome name).
+  const slugs = ONLY_THUNDERDOME
+    ? allSlugs.filter(s => isThunderdome(s, bySlug.get(s)))
+    : allSlugs;
+  const droppedCount = allSlugs.length - slugs.length;
+
   // Canonical, clickable personal-tournament URLs (global namespace).
   const urls = slugs.map(s => `https://challonge.com/${s}`);
 
-  console.log(`\n%c─── ${slugs.length} candidate tournament(s) ───`, 'font-weight:bold');
+  console.log(
+    `\n%c─── ${slugs.length} Thunderdome event(s) kept` +
+    `${droppedCount ? `, ${droppedCount} other/participated-in dropped` : ''} ───`,
+    'font-weight:bold'
+  );
   console.table(slugs.map(s => ({ slug: s, title: bySlug.get(s) || '(no title text)' })));
 
   if (urls.length === 0) {
     console.warn(
-      'No candidates found. Either the profile DOM changed, or the fetch was ' +
-      'blocked. Confirm you can load https://challonge.com/users/joltaru/tournaments ' +
-      'in this same tab, then re-paste.'
+      'No Thunderdome events found among ' + allSlugs.length + ' profile links. ' +
+      'Either the profile DOM changed, the fetch was blocked, or the naming changed. ' +
+      'Confirm you can load https://challonge.com/users/joltaru/tournaments in this ' +
+      'same tab; to inspect the full unfiltered list, set ONLY_THUNDERDOME = false and re-paste.'
     );
     return;
   }

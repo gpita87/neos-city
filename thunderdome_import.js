@@ -102,18 +102,28 @@ function postJson(apiPath, data) {
   });
 }
 
-// ── Validate one slug against the Pokkén keyword/game check ─────────────────
+// joltaru's profile mixes events he RAN (the Thunderdome series) with the many
+// he only PLAYED IN (RTG, DCM, Synergy Smackdown, …). Those are Pokkén too, so
+// the Pokkén check can't separate them — we gate on the Thunderdome brand.
+// Matches slugs Tdome1/TdomeR/TdomeR2..17/TDomeR11 and titles "Thunderdome …".
+function isThunderdome(slug, name) {
+  return /thunderdome/i.test(name || '') || /^tdome/i.test(slug);
+}
+
+// ── Validate one slug: must be Pokkén AND a Thunderdome (joltaru-run) event ──
 async function classify(slug) {
   try {
     const data = await challonge.getTournament(slug);
     const meta = data?.tournament || data?.data?.attributes || data || {};
+    const game = meta.game_name || '';
+    const name = meta.name || '';
     const isPokken = challonge.looksLikePokkenTournament(meta);
-    return {
-      verdict: isPokken ? 'KEEP' : 'DROP',
-      game: meta.game_name || '',
-      name: meta.name || '',
-      date: meta.started_at || meta.completed_at || null,
-    };
+    const isTdome  = isThunderdome(slug, name);
+    let verdict, note;
+    if (!isPokken)      { verdict = 'DROP'; note = 'non-Pokkén'; }
+    else if (!isTdome)  { verdict = 'DROP'; note = 'Pokkén but not a Thunderdome event (participated-in, not organized)'; }
+    else                { verdict = 'KEEP'; }
+    return { verdict, game, name, date: meta.started_at || meta.completed_at || null, note };
   } catch (err) {
     const status = err.response?.status;
     if (status === 404) return { verdict: 'DROP', game: '', name: '', date: null, note: '404 not found' };
@@ -157,7 +167,7 @@ async function classify(slug) {
   out.push(`# ${kept.length} kept below. Import: node thunderdome_import.js --import  then  node recalculate_elo.js`);
   if (dropped.length) {
     out.push(`#`);
-    out.push(`# Dropped as non-Pokkén (for the record — NOT imported):`);
+    out.push(`# Dropped — non-Pokkén or not a Thunderdome (joltaru-run) event (for the record, NOT imported):`);
     for (const d of dropped) out.push(`#   ${d.slug}  game="${d.game}"  name="${d.name}"${d.note ? `  (${d.note})` : ''}`);
   }
   out.push('');
@@ -172,9 +182,9 @@ async function classify(slug) {
                 'Re-run to retry, or check them manually before importing.');
   }
   if (dropped.length) {
-    console.log('\nℹ️  If any DROPPED row is actually a real Pokkén event (e.g. an untagged ' +
-                'bracket whose name has no Pokkén keyword), add its URL back to thunderdome_urls.txt ' +
-                'by hand before importing — the keyword check only knows game_name + the name list.');
+    console.log('\nℹ️  DROPPED rows are events that are non-Pokkén or not Thunderdome (i.e. ones ' +
+                'joltaru only played in). That is expected. If a real Thunderdome event was ' +
+                'dropped by mistake, add its URL back to thunderdome_urls.txt by hand before importing.');
   }
 
   if (!DO_IMPORT) {

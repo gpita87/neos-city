@@ -1,17 +1,38 @@
 # joltaru / Thunderdome — plain online Challonge tournaments, NO series.
 #
-# This file is the harvest record + import source for joltaru's ~17 tournaments.
-# It starts as a PLACEHOLDER. Fill it by running harvest_joltaru_console.js in a
-# challonge.com browser tab (the profile listing 403s server-side, so it must be
-# scraped from the browser) — that script copies the candidate URLs to your
-# clipboard. Paste them below, replacing this placeholder block, then run:
+# Pre-filled from the 2026-06-17 browser harvest of joltaru's profile, filtered
+# to his own Thunderdome events (everything he only PLAYED IN — Road to
+# Greatness, Devcord Community Monthly, Synergy Smackdown, End of the Road, FFC,
+# etc. — was dropped). 18 events below.
 #
-#   node thunderdome_import.js            # validate (drops non-Pokkén) + preview
+# NOTE: the task estimated ~17. The extra is the two un-numbered originals,
+# "TdomeR" and "Tdome1" (both titled just "Thunderdome Pokken") — likely the
+# first event plus a relaunch/duplicate. thunderdome_import.js will show each
+# one's date + participant info; drop one by hand here if it's a dead/dupe bracket.
+#
+# Validate + import on main:
+#   node thunderdome_import.js            # validate (Pokkén + Thunderdome gate) + preview
 #   node thunderdome_import.js --import   # import the kept URLs
 #   node recalculate_elo.js               # perfect ELO + Pass-2 achievements
 #
-# thunderdome_import.js rewrites this file in place to the validated KEPT URLs,
-# with any dropped non-Pokkén events recorded as '# DROPPED' comments.
-#
-# --- paste harvested URLs below this line (delete the placeholder) ---
-# https://challonge.com/EXAMPLE_SLUG
+# thunderdome_import.js rewrites this file in place to the validated KEPT URLs.
+# To re-harvest from scratch instead, run harvest_joltaru_console.js and paste over this block.
+
+https://challonge.com/TdomeR17
+https://challonge.com/TdomeR16
+https://challonge.com/TdomeR15
+https://challonge.com/TdomeR14
+https://challonge.com/TdomeR13
+https://challonge.com/TdomeR12
+https://challonge.com/TDomeR11
+https://challonge.com/TdomeR10
+https://challonge.com/TdomeR9
+https://challonge.com/TdomeR8
+https://challonge.com/TdomeR7
+https://challonge.com/TdomeR6
+https://challonge.com/TdomeR5
+https://challonge.com/TdomeR4
+https://challonge.com/TdomeR3
+https://challonge.com/TdomeR2
+https://challonge.com/TdomeR
+https://challonge.com/Tdome1
