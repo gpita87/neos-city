@@ -1,0 +1,26 @@
+# Nietplay — start.gg Pokkén brackets (enumerated 2026-06-17)
+# Readers use `.startsWith('http')` (see batch_import.js:45), so these # lines are ignored.
+#
+# ⚠️ CLASSIFICATION FLAG: start.gg reports ALL three Nietplay events as isOnline=FALSE
+#    with real UK venues (Leeds / Birmingham). These are IN-PERSON / OFFLINE events.
+#    batch-import-startgg ALWAYS creates online/ELO rows — see runbook for options A/B/C.
+#    Do NOT import the URLs below as-is unless you accept them being added to ELO.
+#
+# ── Nietplay Tournament (2019-02-09, venue: Leeds, GB) — "Nietplay Tournament", 18 entrants ──
+https://www.start.gg/tournament/nietplay-tournament/events/nietplay-tournament/brackets/473478/832728
+#
+# ── Nietplay 2: Summer Edition (2019-07-06, venue: Marston Green/Birmingham, GB) — "Nietplay 2", 11 entrants ──
+https://www.start.gg/tournament/nietplay-2-summer-edition/events/nietplay-2/brackets/536419/912143
+#
+# ─────────────────────────── EXCLUDED (not standard 1v1 brackets) ───────────────────────────
+# 3v3 TEAM side brackets — team format; entrant "names" are teams and would pollute the
+#   players table. Do NOT import:
+#   https://www.start.gg/tournament/nietplay-tournament/events/3v3-side-bracket/brackets/521375/890216
+#   https://www.start.gg/tournament/nietplay-2-summer-edition/events/side-bracket-3v3/brackets/536422/912146
+#   https://www.start.gg/tournament/nietplay-3-counter-attack/events/nietplay-3v3-side-event/brackets/747353/1199383
+#
+# Super Smash Bros. Ultimate side event — non-Pokkén (videogame id 1386). Skipped.
+#
+# Nietplay 3: Counter-attack! main event (2020-05-30, Leeds) — only 1 entrant (cancelled/empty,
+#   likely COVID). No usable bracket data. Do NOT import:
+#   https://www.start.gg/tournament/nietplay-3-counter-attack/events/nietplay-3/brackets/747352/1199382

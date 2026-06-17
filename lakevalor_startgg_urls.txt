@@ -1,0 +1,21 @@
+# Battle at Lake Valor — start.gg Pokkén brackets (enumerated 2026-06-17)
+# Readers use `.startsWith('http')` (see batch_import.js:45), so these # lines are ignored.
+#
+# ⚠️ CLASSIFICATION FLAG: start.gg reports BOTH events as isOnline=FALSE with real
+#    physical venues (see runbook). The task pre-labeled these "online (ELO)". Confirm
+#    real-world status before importing — batch-import-startgg ALWAYS creates online/ELO rows.
+#
+# ── Battle at Lake Valor (2022-04-30, venue: Lansing, MI, US) — "Pokken 1v1", 39 entrants ──
+#    MULTI-PHASE: 2 pool groups + Top 8. For a single, correct tournament row capturing
+#    ALL phases, prefer the EVENT import instead of the single bracket below:
+#       POST /api/tournaments/import-startgg-event  { "url": "<the Top 8 URL below>" }
+#    The single-bracket URL below imports ONLY the Top 8 stage (pool matches are lost),
+#    so use it only if you accept top-8-only match data.
+https://www.start.gg/tournament/battle-at-lake-valor/events/pokken-1v1/brackets/1113971/1733274
+#    (pool groups, for reference — do NOT add as separate rows; they fragment one event:)
+#    https://www.start.gg/tournament/battle-at-lake-valor/events/pokken-1v1/brackets/1083027/1691801
+#    https://www.start.gg/tournament/battle-at-lake-valor/events/pokken-1v1/brackets/1083027/1704395
+#
+# ── Battle at Lake Valor 2 (2023-05-20, venue: Hilliard, OH, US) — "Bracket", 16 entrants ──
+#    Single phase, single group — clean single-bracket import.
+https://www.start.gg/tournament/battle-at-lake-valor-2/events/bracket/brackets/1266551/1942618
