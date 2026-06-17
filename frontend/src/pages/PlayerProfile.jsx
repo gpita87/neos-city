@@ -24,6 +24,37 @@ const REGION_COLORS = {
   paldea: 'bg-fuchsia-900/30 text-fuchsia-400 border-fuchsia-800/50',
 };
 
+// Region tiers, lowest → highest. Region tiers cascade: holding a higher tier
+// implies every lower one is also earned, so listing them all is redundant.
+const REGION_ORDER = ['kanto', 'johto', 'hoenn', 'sinnoh', 'unova', 'kalos', 'alola', 'galar', 'paldea'];
+
+// Split an achievement_id into its "type" (scope + placement/meta tier, i.e. the
+// id minus its trailing region) and the region's rank. Achievements with no
+// region suffix (e.g. multi_series) return regionIndex -1 and are always kept.
+function parseAchievementId(id) {
+  for (let i = 0; i < REGION_ORDER.length; i++) {
+    const suffix = `_${REGION_ORDER[i]}`;
+    if (id.endsWith(suffix)) return { typeKey: id.slice(0, -suffix.length), regionIndex: i };
+  }
+  return { typeKey: id, regionIndex: -1 };
+}
+
+// Collapse a list of unlocked achievements to the single highest-region tier
+// per type, dropping the redundant lower cascade tiers (e.g. show "Hoenn Dark
+// Horse" and hide the Kanto/Johto Dark Horse the player necessarily also holds).
+function collapseToHighestTier(achievements) {
+  const bestByType = new Map();
+  const result = [];
+  for (const a of achievements) {
+    const { typeKey, regionIndex } = parseAchievementId(a.achievement_id);
+    if (regionIndex < 0) { result.push(a); continue; }
+    const cur = bestByType.get(typeKey);
+    if (!cur || regionIndex > cur.regionIndex) bestByType.set(typeKey, { ach: a, regionIndex });
+  }
+  for (const { ach } of bestByType.values()) result.push(ach);
+  return result;
+}
+
 // Group achievements by category for display
 function groupAchievements(achievements) {
   const groups = {};
@@ -192,7 +223,8 @@ export default function PlayerProfile() {
   if (loading) return <p className="text-slate-400">Loading...</p>;
   if (!player) return <p className="text-red-400">Player not found.</p>;
 
-  const achGroups = groupAchievements(player.achievements || []);
+  const collapsedAchievements = collapseToHighestTier(player.achievements || []);
+  const achGroups = groupAchievements(collapsedAchievements);
 
   return (
     <div className="space-y-6">
@@ -336,10 +368,10 @@ export default function PlayerProfile() {
       {/* Achievements */}
       <div className="bg-[#0c1425] border border-[#1a2744] rounded-xl p-5">
         <h2 className="font-display text-sm tracking-widest text-cyan-400 mb-4">
-          ACHIEVEMENTS ({player.achievements?.length ?? 0})
+          ACHIEVEMENTS ({collapsedAchievements.length})
         </h2>
 
-        {player.achievements?.length === 0 && (
+        {collapsedAchievements.length === 0 && (
           <p className="text-slate-500 text-sm">No achievements yet.</p>
         )}
 
