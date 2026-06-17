@@ -1,0 +1,17 @@
+# joltaru / Thunderdome — plain online Challonge tournaments, NO series.
+#
+# This file is the harvest record + import source for joltaru's ~17 tournaments.
+# It starts as a PLACEHOLDER. Fill it by running harvest_joltaru_console.js in a
+# challonge.com browser tab (the profile listing 403s server-side, so it must be
+# scraped from the browser) — that script copies the candidate URLs to your
+# clipboard. Paste them below, replacing this placeholder block, then run:
+#
+#   node thunderdome_import.js            # validate (drops non-Pokkén) + preview
+#   node thunderdome_import.js --import   # import the kept URLs
+#   node recalculate_elo.js               # perfect ELO + Pass-2 achievements
+#
+# thunderdome_import.js rewrites this file in place to the validated KEPT URLs,
+# with any dropped non-Pokkén events recorded as '# DROPPED' comments.
+#
+# --- paste harvested URLs below this line (delete the placeholder) ---
+# https://challonge.com/EXAMPLE_SLUG
