@@ -49,6 +49,9 @@ async function getPhaseGroup(phaseGroupId) {
               slug
               startAt
               endAt
+              isOnline
+              city
+              countryCode
             }
           }
         }

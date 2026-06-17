@@ -993,7 +993,25 @@ async function importOneStartgg(phaseGroupId, opts = {}) {
     if (!tournament) throw new Error(`No tournament metadata returned for phaseGroup ${phaseGroupId}`);
 
     const tournamentName = tournament.name || `start.gg #${phaseGroupId}`;
-    const series         = detectSeries(tournament.slug || '', tournamentName);
+    // Offline-ness is read from the tournament's own start.gg details: start.gg
+    // records isOnline=false for in-person LANs (Battle at Lake Valor, Nietplay).
+    // So by default the event self-labels — no flag needed at import time. An
+    // explicit opts.offline (true/false) overrides start.gg's value if ever wrong.
+    // When offline: classify into an offline tier (worlds/major/regional/other)
+    // and flag is_offline so it lands in the Offline tab; otherwise detect the
+    // online series as usual. Matches still feed ELO via recalculate_elo.js (the
+    // recalc replays every tournament's matches regardless of is_offline).
+    const isOffline = opts.offline != null
+      ? !!opts.offline
+      : (tournament.isOnline === false);
+    const series    = isOffline
+      ? detectOfflineTier(tournamentName)
+      : detectSeries(tournament.slug || '', tournamentName);
+    // Offline events display a venue on the Offline tab; build it from start.gg's
+    // tournament city/country (fetched by the getPhaseGroup query). Null for online.
+    const location  = isOffline
+      ? ([tournament.city, tournament.countryCode].filter(Boolean).join(', ') || null)
+      : null;
 
     // start.gg timestamps are Unix seconds — convert to ISO for Postgres
     const startedAt   = event.startAt   ? new Date(event.startAt   * 1000).toISOString() : null;
@@ -1004,15 +1022,17 @@ async function importOneStartgg(phaseGroupId, opts = {}) {
     const { rows: [t] } = await db.query(
       `INSERT INTO tournaments
          (challonge_id, name, series, participants_count, started_at, completed_at,
-          source, startgg_slug, startgg_phase_group_id)
-       VALUES (NULL, $1, $2, $3, $4, $5, 'startgg', $6, $7)
+          source, startgg_slug, startgg_phase_group_id, is_offline, location)
+       VALUES (NULL, $1, $2, $3, $4, $5, 'startgg', $6, $7, $8, $9)
        ON CONFLICT (startgg_phase_group_id) WHERE startgg_phase_group_id IS NOT NULL
        DO UPDATE SET
          name               = EXCLUDED.name,
          series             = EXCLUDED.series,
          participants_count = EXCLUDED.participants_count,
          started_at         = EXCLUDED.started_at,
-         completed_at       = EXCLUDED.completed_at
+         completed_at       = EXCLUDED.completed_at,
+         is_offline         = EXCLUDED.is_offline,
+         location           = COALESCE(EXCLUDED.location, tournaments.location)
        RETURNING *`,
       [
         tournamentName,
@@ -1022,6 +1042,8 @@ async function importOneStartgg(phaseGroupId, opts = {}) {
         endedAt,
         tournament.slug || null,
         String(phaseGroupId),
+        isOffline,
+        location,
       ]
     );
 
@@ -1263,7 +1285,7 @@ async function importOneStartgg(phaseGroupId, opts = {}) {
 // Import a full multi-phase start.gg event (pools → Top N) as ONE tournament
 // row. Gathers every phase group across every phase, merges their matches onto
 // the final phase's bracket, and applies the event-level final standings.
-async function importStartggEvent(eventSlug) {
+async function importStartggEvent(eventSlug, opts = {}) {
   const event = await startgg.getEventBySlug(eventSlug);
   if (!event) throw new Error(`No event found for slug ${eventSlug}`);
 
@@ -1286,12 +1308,12 @@ async function importStartggEvent(eventSlug) {
 
   const standings = await startgg.getEventStandings(eventSlug);
 
-  return importOneStartgg(canonical, { mergePhaseGroupIds: others, standings });
+  return importOneStartgg(canonical, { mergePhaseGroupIds: others, standings, offline: opts.offline });
 }
 
 // POST /api/tournaments/import-startgg — import a single start.gg bracket
 router.post('/import-startgg', requireAdmin, async (req, res) => {
-  const { url, phase_group_id } = req.body;
+  const { url, phase_group_id, offline } = req.body;
 
   let pgId = phase_group_id;
   if (!pgId && url) {
@@ -1302,7 +1324,7 @@ router.post('/import-startgg', requireAdmin, async (req, res) => {
   if (!pgId) return res.status(400).json({ error: 'url or phase_group_id required' });
 
   try {
-    const result = await importOneStartgg(pgId);
+    const result = await importOneStartgg(pgId, { offline });
     res.json(result);
   } catch (err) {
     res.status(500).json({ error: err.message });
@@ -1313,7 +1335,7 @@ router.post('/import-startgg', requireAdmin, async (req, res) => {
 // (pools → Top N) as a single tournament row.
 // Body: { event_slug: "tournament/<t>/event/<e>" } or { url: "<any bracket URL>" }
 router.post('/import-startgg-event', requireAdmin, async (req, res) => {
-  const { url, event_slug } = req.body;
+  const { url, event_slug, offline } = req.body;
 
   let slug = event_slug;
   if (!slug && url) {
@@ -1324,7 +1346,7 @@ router.post('/import-startgg-event', requireAdmin, async (req, res) => {
   if (!slug) return res.status(400).json({ error: 'event_slug or url required' });
 
   try {
-    const result = await importStartggEvent(slug);
+    const result = await importStartggEvent(slug, { offline });
     res.json(result);
   } catch (err) {
     res.status(500).json({ error: err.message });
@@ -1332,9 +1354,12 @@ router.post('/import-startgg-event', requireAdmin, async (req, res) => {
 });
 
 // POST /api/tournaments/batch-import-startgg
-// Body: { urls: ["https://www.start.gg/tournament/.../brackets/PHASE/PHASEGROUP/..."] }
+// Body: { urls: ["https://www.start.gg/tournament/.../brackets/PHASE/PHASEGROUP/..."], offline?: bool }
+// By default each event self-labels online/offline from start.gg's own isOnline
+// field (LANs like Battle at Lake Valor / Nietplay come back offline). Pass an
+// explicit offline:true/false only to override start.gg's value for all URLs.
 router.post('/batch-import-startgg', requireAdmin, async (req, res) => {
-  const { urls = [] } = req.body;
+  const { urls = [], offline } = req.body;
   if (!Array.isArray(urls) || urls.length === 0) {
     return res.status(400).json({ error: 'urls array is required' });
   }
@@ -1361,7 +1386,7 @@ router.post('/batch-import-startgg', requireAdmin, async (req, res) => {
     }
 
     try {
-      const result = await importOneStartgg(phaseGroupId);
+      const result = await importOneStartgg(phaseGroupId, { offline });
       results.imported.push({ url, phaseGroupId, name: result.tournament });
       console.log(`✅ start.gg imported: ${result.tournament} (pgid ${phaseGroupId})`);
     } catch (err) {
