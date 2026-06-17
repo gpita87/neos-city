@@ -35,6 +35,12 @@ const SERIES = {
   WORLDS:         'worlds',
   MAJOR:          'major',
   REGIONAL:       'regional',
+
+  // Official online championship (Play! Pokémon). Display-only series, like MTM:
+  // NOT in ONLINE_SERIES (no achievement track / no per-series stat columns).
+  // Imported with is_offline=TRUE so it stays out of the online ladder; results
+  // still count toward GLOBAL achievements. See WORKTREE_SUMMARY (players-cup).
+  PLAYERS_CUP:    'players_cup',
 };
 
 const SERIES_NAMES = {
@@ -52,6 +58,7 @@ const SERIES_NAMES = {
   worlds:         'World Championships',
   major:          'Major',
   regional:       'Regional',
+  players_cup:    'Pokémon Players Cup',
 };
 
 // ─── Series / tier detection (unchanged) ─────────────────────────────────────
@@ -74,6 +81,9 @@ function detectSeries(slug = '', name = '') {
 
 function detectOfflineTier(name = '') {
   const n = name.toUpperCase();
+  // Official Play! Pokémon online championship — own display-only category.
+  // Checked first so it never falls through to a generic substring match.
+  if (n.includes('PLAYERS CUP'))                                       return SERIES.PLAYERS_CUP;
   if (n.includes('WORLD CHAMPIONSHIPS'))                               return SERIES.WORLDS;
   if (n.includes('INTERNATIONAL CHAMPIONSHIPS'))                       return SERIES.WORLDS;
 
