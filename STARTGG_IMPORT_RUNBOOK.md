@@ -49,12 +49,15 @@ All three are `isOnline: false` with UK venues, matching the CSV note ("in-perso
 genuinely offline LANs.
 
 > **✅ DECIDED & IMPLEMENTED (2026-06-17): Option A**, for BOTH sources (Lake Valor is offline too).
-> The start.gg importer now takes an `offline` flag → `is_offline=TRUE` + offline tier + location.
+> The start.gg importer now **auto-labels** each event offline/online from start.gg's own
+> `tournament.isOnline` field → offline LANs get `is_offline=TRUE` + offline tier + location with
+> **no flag needed at import time**. An optional `offline:true/false` in the request body overrides
+> start.gg's value if it's ever wrong.
 > **ELO clarification:** Gabriel chose to let offline events still feed ELO. `recalculate_elo.js`
 > already replays every tournament's matches regardless of `is_offline`, and that was left unchanged
 > — so Option A here is *classification only* (Offline tab + tier + location), not ELO exclusion.
-> Code lives on branch `agent/startgg-offline` (commit `21f2efe`); merge with
-> `node merge-worktree.js startgg-offline` before running the import in §4.
+> Code lives on branch `agent/startgg-offline` (commit `a48d3fb`); cherry-pick onto main (§4 step 0)
+> before running the import.
 
 ### Options (original analysis — A was chosen; B/C kept for the record)
 
@@ -105,35 +108,38 @@ events (id 447), and prints a ready-to-import bracket URL per phase group. Add s
 Artifacts: `lakevalor_startgg_urls.txt`, `nietplay_startgg_urls.txt` (one bracket URL per line,
 `#` comments ignored by `.startsWith('http')` readers).
 
-**Step 0 — land the code on main first.** The `offline` flag lives on branch `agent/startgg-offline`
-(commit `21f2efe`); without it, `offline: $true` in the body is ignored and events import online.
+**Step 0 — land the code on main first.** The offline-labeling lives on branch `agent/startgg-offline`
+(commit `a48d3fb`); without it, events self-label online and these LANs would import as online series.
 ```powershell
 cd C:\Users\pitag\Documents\neos-city
-node merge-worktree.js startgg-offline   # review the staged diff in IntelliJ, then commit
+git cherry-pick a48d3fb          # clean single commit on main; review in IntelliJ
 ```
 
+> **No `offline` flag needed below.** Each event auto-labels from start.gg's `isOnline` field, so the
+> Lake Valor / Nietplay LANs land in the Offline tab on their own. Pass `offline = $true` (or `$false`)
+> only if you ever need to override start.gg's value.
+
 1. **Backend running** (`cd backend; npm run dev` — port 3001) and `ADMIN_TOKEN` set.
-2. **Battle at Lake Valor 1 is multi-phase** (pools + Top 8) — import the whole event as ONE offline
+2. **Battle at Lake Valor 1 is multi-phase** (pools + Top 8) — import the whole event as ONE
    row via the event route (do NOT feed its three phase-group URLs to the batch endpoint; each would
    become a separate row):
    ```powershell
    $token = (Get-Content backend\.env | Select-String '^ADMIN_TOKEN=').ToString().Split('=',2)[1]
-   $body  = @{ url = 'https://www.start.gg/tournament/battle-at-lake-valor/events/pokken-1v1/brackets/1113971/1733274'; offline = $true } | ConvertTo-Json
+   $body  = @{ url = 'https://www.start.gg/tournament/battle-at-lake-valor/events/pokken-1v1/brackets/1113971/1733274' } | ConvertTo-Json
    Invoke-RestMethod -Uri http://localhost:3001/api/tournaments/import-startgg-event -Method Post `
      -Headers @{ 'x-admin-token' = $token } -ContentType 'application/json' -Body $body
    ```
-3. **Batch-import the remaining single-bracket URLs with `offline = $true`** (already-imported
-   phaseGroupIds, incl. BLV1's Top 8 from step 2, are skipped automatically):
+3. **Batch-import the remaining single-bracket URLs** (already-imported phaseGroupIds, incl. BLV1's
+   Top 8 from step 2, are skipped automatically):
    ```powershell
    cd C:\Users\pitag\Documents\neos-city
    $token = (Get-Content backend\.env | Select-String '^ADMIN_TOKEN=').ToString().Split('=',2)[1]
    $urls  = Get-Content lakevalor_startgg_urls.txt | Where-Object { $_ -like 'http*' }
    Invoke-RestMethod -Uri http://localhost:3001/api/tournaments/batch-import-startgg -Method Post `
-     -Headers @{ 'x-admin-token' = $token } -ContentType 'application/json' -Body (@{ urls = $urls; offline = $true } | ConvertTo-Json)
+     -Headers @{ 'x-admin-token' = $token } -ContentType 'application/json' -Body (@{ urls = $urls } | ConvertTo-Json)
    # repeat with nietplay_startgg_urls.txt
    ```
-   ⚠️ The `offline = $true` field is what routes these to the Offline tab. Omit it and they import
-   online. (BLV2 and the Nietplay mains are single-bracket, so the batch endpoint handles them.)
+   (BLV2 and the Nietplay mains are single-bracket, so the batch endpoint handles them.)
 4. **Spot-check classification** (node script or Supabase SQL — don't use Chrome SQL automation):
    ```sql
    SELECT name, series, is_offline, location, source FROM tournaments
