@@ -114,10 +114,18 @@ function detectOfflineTier(name = '') {
   if (n.includes('FINAL ROUND'))                                       return SERIES.MAJOR;
   if (n.includes('NORCAL REGIONALS'))                                  return SERIES.MAJOR;
   if (n.includes('DEFEND THE NORTH'))                                  return SERIES.MAJOR;
+  // Promoted 2026-06-18 (offline-CSV reconciliation): Combo Breaker is a
+  // premier FGC major; both the 2018 and 2019 Pokkén side events qualify.
+  if (n.includes('COMBO BREAKER'))                                     return SERIES.MAJOR;
 
   if (n.includes('WINTER BRAWL'))                                      return SERIES.REGIONAL;
   if (n.includes('SOCAL REGIONALS'))                                   return SERIES.REGIONAL;
   if (n.includes('SUMMER JAM'))                                        return SERIES.REGIONAL;
+  // Promoted 2026-06-18 (offline-CSV reconciliation): large-field start.gg
+  // events. SWITCHFEST covers both "SwitchFest 2018" and "2GG: SwitchFest 2019";
+  // the SMASH.?N.?SPLASH regex tolerates apostrophe/space/none spellings.
+  if (n.includes('SWITCHFEST'))                                        return SERIES.REGIONAL;
+  if (/SMASH.?N.?SPLASH/.test(n))                                      return SERIES.REGIONAL;
   if (n.includes('BATTLE ARENA MELBOURNE') || n.includes('BAM '))      return SERIES.REGIONAL;
   if (n.includes('OZHADOU'))                                           return SERIES.REGIONAL;
   if (n.includes('REVOLUTION'))                                        return SERIES.REGIONAL;

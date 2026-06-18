@@ -1066,9 +1066,18 @@ async function importOneStartgg(phaseGroupId, opts = {}) {
       // challonge_username — that prevents start.gg events from manufacturing
       // a "<name>_lower" duplicate of a player who already exists under their
       // real Challonge slug.
-      let username = entrantName.toLowerCase().replace(/\s+/g, '_');
+      // start.gg entrant names carry sponsor prefixes ("ZB | ThankSwalot",
+      // "Savage | Bosam | ... | XAbsoluted"). Strip to the final "|"-segment so
+      // the player keys on their gamertag and dedupes against the existing row,
+      // rather than minting a "<sponsor>_<tag>" duplicate. A name ending in "|"
+      // (empty result) falls back to the raw entrant name.
+      const stripped = entrantName.includes('|')
+        ? entrantName.split('|').pop().trim()
+        : entrantName;
+      const gamertag = stripped.length ? stripped : entrantName;
+      let username = gamertag.toLowerCase().replace(/\s+/g, '_');
       username = await resolveAlias(username);
-      const displayName = entrantName;
+      const displayName = gamertag;
 
       const { rows: existing } = await db.query(
         `SELECT challonge_username FROM players
