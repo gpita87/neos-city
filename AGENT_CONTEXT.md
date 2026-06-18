@@ -1160,6 +1160,7 @@ Run `node recalculate_elo.js` to replay all matches chronologically and correct 
 
 - **Do NOT run Supabase SQL queries via Chrome automation without asking Gabriel first.** Instead, create a Node.js script in the `neos-city` directory and give him the command to run it himself.
 - For quick DB diagnostics, use `check_import_status.js` or similar one-off scripts rather than the Supabase SQL editor.
+- **Throwaway diagnostic scripts go in `scratch/`** (gitignored). One-off read-only probes — inline `node -e` alternatives, dupe-checks, DB inspection — belong there so they don't pollute `git status` or the repo root. If a probe turns out to be worth keeping (like the start.gg/offline reconciliation scripts), commit it under its real path instead. Don't try to allowlist `node scratch/*.js` — `node` runs arbitrary code, so those prompts are the guardrail working as intended.
 - **Static syntax checks — keep them simple.** Plain JS: `node -c <file>`. JSX:
   - Bash: `npx esbuild --loader=jsx frontend/src/pages/Foo.jsx > /dev/null`
   - PowerShell: `npx esbuild --loader=jsx frontend/src/pages/Foo.jsx > $null`

@@ -106,3 +106,11 @@ WORKTREE_SUMMARY.md
 # ========================================================================
 .claude/settings.local.json
 .claude/worktrees/
+
+# ========================================================================
+# Throwaway diagnostic / scratch scripts
+# One-off read-only probes (DB inspection, dupe-checks, etc.) go here so
+# they don't pollute `git status` / the repo root. Keepers get committed
+# under their real path instead. See AGENT_CONTEXT.md "Agent Preferences".
+# ========================================================================
+scratch/
