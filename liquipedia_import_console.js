@@ -59,7 +59,10 @@ const DELAY_MS = 800; // polite pause between Liquipedia fetches
 // FORCE_REIMPORT every event would be skipped on the second run).
 const FORCE_REIMPORT = true;
 
-// ── All 76 Pokken event base URLs discovered from Liquipedia ─────────────────
+// ── All 80 Pokken event base URLs discovered from Liquipedia ─────────────────
+// (The 4 events below the divider were originally missing from this list, so
+// their /Bracket sub-pages were never fetched — they had canonical placements
+// scraped but 0 matches in the DB. Their bracket pages exist and are valid.)
 const EVENT_URLS = [
   'https://liquipedia.net/fighters/All_In_Together/2023/PokkenDX',
   'https://liquipedia.net/fighters/Battle_Arena_Melbourne/12/PokkenDX',
@@ -137,6 +140,11 @@ const EVENT_URLS = [
   'https://liquipedia.net/fighters/Winter_Brawl/11/Pokken',
   'https://liquipedia.net/fighters/Winter_Brawl/12/PokkenDX',
   'https://liquipedia.net/fighters/Winter_Brawl/2019/3D_Edition/PokkenDX',
+  // ── Previously missing from the list (bracket exists upstream, 0 matches in DB) ──
+  'https://liquipedia.net/fighters/Curtain_Call/2023',        // → Curtain_Call/2023  (60+ matches)
+  'https://liquipedia.net/fighters/Destiny/2018',             // → Destiny/2018       (30+ matches)
+  'https://liquipedia.net/fighters/Eye_of_the_Storm/2018',    // → Eye_of_the_Storm/2018 (~15 matches)
+  'https://liquipedia.net/fighters/Final_Boss/2017',          // → Final_Boss/2017    (~20 matches)
 ];
 
 // ── Legacy bracket parser (.bracket-game template, pre-2020 events) ──────────
@@ -743,8 +751,14 @@ for (let i = 0; i < EVENT_URLS.length; i++) {
 
   console.log(`\n[${i + 1}/${EVENT_URLS.length}] ${slug}`);
 
-  // ── Pass 1: main page → placements table ──────────────────────────────────
-  let mainMeta = null;
+  // ── Pass 1: main page → parse placements table (POST DEFERRED to the end) ──
+  // The bracket importer wipes a tournament's placements and re-inserts
+  // bracket-DERIVED ranks, so the canonical placements (with proper ties) MUST
+  // be POSTed AFTER the bracket pass to win. Previously this POST ran before the
+  // bracket pass, so a single FORCE_REIMPORT run left every re-imported event
+  // with derived placements; canonical ranks only survived via a second
+  // placements-only pass. We now parse here but defer the POST past the bracket.
+  let mainMeta = null, pendingPlacements = null, placementStrategy = null;
   try {
     await sleep(DELAY_MS);
     const resp = await fetch(eventUrl);
@@ -763,32 +777,8 @@ for (let i = 0; i < EVENT_URLS.length; i++) {
         console.log(`  ⏭️  No placements table found on main page`);
         placementsMissing++;
       } else {
-        const summary = placements.slice(0, 4).map(g => `${g.rank}=${g.players.length}p`).join(', ');
-        console.log(`  📋 placements [${strategy}]: ${placements.length} groups (${summary}${placements.length > 4 ? ', ...' : ''})`);
-
-        const postResp = await fetch(`${BACKEND}/api/tournaments/import-liquipedia-placements`, {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json', 'x-admin-token': ADMIN_TOKEN },
-          body: JSON.stringify({
-            eventUrl,
-            name:               mainMeta.name,
-            date:               mainMeta.date,
-            location:           null,
-            prize_pool:         mainMeta.prize_pool,
-            participants_count: mainMeta.participants_count,
-            placements,
-          }),
-        });
-
-        if (!postResp.ok) {
-          const err = await postResp.json().catch(() => ({}));
-          console.error(`  ❌ Placements backend error: ${err.error || postResp.status}`);
-          placementsErrors++;
-        } else {
-          const result = await postResp.json();
-          console.log(`  ✅ ${result.placements_inserted} placements written`);
-          placementsImported++;
-        }
+        pendingPlacements = placements;
+        placementStrategy = strategy;
       }
     }
   } catch (e) {
@@ -796,76 +786,114 @@ for (let i = 0; i < EVENT_URLS.length; i++) {
     placementsErrors++;
   }
 
-  // ── Pass 2: /Bracket sub-page → matches ───────────────────────────────────
-  // Skip cache only applies to the bracket pass. Placements ran above, which
-  // is the part that was previously broken — it's the side we want to refresh
-  // unconditionally on every run.
-  if (alreadyImported.has(slug.toLowerCase()) && !FORCE_REIMPORT) {
-    bracketSkipped++;
-    console.log(`  ⏩ Bracket already in DB — skipping match fetch`);
-    continue;
-  }
-
-  try {
-    await sleep(DELAY_MS);
-    const resp = await fetch(bracketUrl);
-    if (!resp.ok) {
-      console.log(`  ⏭️  Bracket HTTP ${resp.status}, no match data`);
-      bracketMissing++;
-      continue;
+  // ── Pass 2: /Bracket sub-page → matches (runs BEFORE the placements POST) ──
+  // Wrapped in an inner async fn so its early-exits (return) don't skip the
+  // canonical placements POST that follows. Skip cache only applies here.
+  await (async () => {
+    if (alreadyImported.has(slug.toLowerCase()) && !FORCE_REIMPORT) {
+      bracketSkipped++;
+      console.log(`  ⏩ Bracket already in DB — skipping match fetch`);
+      return;
     }
 
-    const html = await resp.text();
-    const doc  = new DOMParser().parseFromString(html, 'text/html');
+    try {
+      await sleep(DELAY_MS);
+      const resp = await fetch(bracketUrl);
+      if (!resp.ok) {
+        console.log(`  ⏭️  Bracket HTTP ${resp.status}, no match data`);
+        bracketMissing++;
+        return;
+      }
 
-    let matches = parseBracket(doc);
-    let parserUsed = 'new';
-    if (matches.length === 0) {
-      matches = parseLegacyBracket(doc);
-      parserUsed = 'legacy';
-    }
+      const html = await resp.text();
+      const doc  = new DOMParser().parseFromString(html, 'text/html');
 
-    if (matches.length === 0) {
-      console.log(`  ⏭️  No bracket matches found`);
-      bracketMissing++;
-      continue;
-    }
+      let matches = parseBracket(doc);
+      let parserUsed = 'new';
+      if (matches.length === 0) {
+        matches = parseLegacyBracket(doc);
+        parserUsed = 'legacy';
+      }
 
-    // Reuse the metadata grabbed off the main page when available; the
-    // bracket sub-page often has thinner infobox content (no prize pool,
-    // no entrant count). Only fall back to the bracket doc if the main
-    // fetch failed.
-    const bracketMeta = mainMeta || extractMeta(doc, bracketUrl);
-    console.log(`  ⚔️  bracket [${parserUsed}]: ${matches.length} matches → "${bracketMeta.name || slug}" (${bracketMeta.date || 'no date'})`);
+      if (matches.length === 0) {
+        console.log(`  ⏭️  No bracket matches found`);
+        bracketMissing++;
+        return;
+      }
 
-    const postResp = await fetch(`${BACKEND}/api/tournaments/import-liquipedia-bracket`, {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json', 'x-admin-token': ADMIN_TOKEN },
-      body: JSON.stringify({
-        bracketUrl,
-        name:               bracketMeta.name,
-        date:               bracketMeta.date,
-        location:           null,
-        prize_pool:         bracketMeta.prize_pool,
-        participants_count: bracketMeta.participants_count,
-        matches,
-      }),
-    });
+      // Reuse the metadata grabbed off the main page when available; the
+      // bracket sub-page often has thinner infobox content (no prize pool,
+      // no entrant count). Only fall back to the bracket doc if the main
+      // fetch failed.
+      const bracketMeta = mainMeta || extractMeta(doc, bracketUrl);
+      console.log(`  ⚔️  bracket [${parserUsed}]: ${matches.length} matches → "${bracketMeta.name || slug}" (${bracketMeta.date || 'no date'})`);
 
-    if (!postResp.ok) {
-      const err = await postResp.json().catch(() => ({}));
-      console.error(`  ❌ Bracket backend error: ${err.error || postResp.status}`);
+      const postResp = await fetch(`${BACKEND}/api/tournaments/import-liquipedia-bracket`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json', 'x-admin-token': ADMIN_TOKEN },
+        body: JSON.stringify({
+          bracketUrl,
+          name:               bracketMeta.name,
+          date:               bracketMeta.date,
+          location:           null,
+          prize_pool:         bracketMeta.prize_pool,
+          participants_count: bracketMeta.participants_count,
+          matches,
+        }),
+      });
+
+      if (!postResp.ok) {
+        const err = await postResp.json().catch(() => ({}));
+        console.error(`  ❌ Bracket backend error: ${err.error || postResp.status}`);
+        bracketErrors++;
+        return;
+      }
+
+      const result = await postResp.json();
+      console.log(`  ✅ ${result.matches_imported} matches written`);
+      bracketImported++;
+      alreadyImported.add(slug); // suppress duplicates within this run
+    } catch (e) {
+      console.error(`  ❌ Bracket fetch error: ${e.message}`);
       bracketErrors++;
-      continue;
     }
+  })();
 
-    const result = await postResp.json();
-    console.log(`  ✅ ${result.matches_imported} matches written`);
-    bracketImported++;
-    alreadyImported.add(slug); // suppress duplicates within this run
-  } catch (e) {
-    console.error(`  ❌ Bracket fetch error: ${e.message}`);
-    bracketErrors++;
+  // ── Pass 3: placements POST LAST — canonical ranks overwrite any bracket-
+  //    derived ones the bracket import just wrote. (mainMeta is guaranteed
+  //    non-null here because pendingPlacements is only set when it succeeded.)
+  if (pendingPlacements) {
+    try {
+      const summary = pendingPlacements.slice(0, 4).map(g => `${g.rank}=${g.players.length}p`).join(', ');
+      console.log(`  📋 placements [${placementStrategy}]: ${pendingPlacements.length} groups (${summary}${pendingPlacements.length > 4 ? ', ...' : ''})`);
+
+      const postResp = await fetch(`${BACKEND}/api/tournaments/import-liquipedia-placements`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json', 'x-admin-token': ADMIN_TOKEN },
+        body: JSON.stringify({
+          eventUrl,
+          name:               mainMeta.name,
+          date:               mainMeta.date,
+          location:           null,
+          prize_pool:         mainMeta.prize_pool,
+          participants_count: mainMeta.participants_count,
+          placements:         pendingPlacements,
+        }),
+      });
+
+      if (!postResp.ok) {
+        const err = await postResp.json().catch(() => ({}));
+        console.error(`  ❌ Placements backend error: ${err.error || postResp.status}`);
+        placementsErrors++;
+      } else {
+        const result = await postResp.json();
+        console.log(`  ✅ ${result.placements_inserted} placements written`);
+        placementsImported++;
+      }
+    } catch (e) {
+      console.error(`  ❌ Placements POST error: ${e.message}`);
+      placementsErrors++;
+    }
   }
 }
 
