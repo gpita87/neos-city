@@ -109,6 +109,17 @@ events (id 447), and prints a ready-to-import bracket URL per phase group. Add s
 
 ## 4. Import runbook (Option A — offline import via start.gg)
 
+> **✅ IMPORTED (2026-06-19).** All 6 brackets are now in the DB as offline (`is_offline=TRUE`,
+> tier `other`), 199 matches total: Battle at Lake Valor (id 1100, all phases, 76 matches),
+> Battle at Lake Valor 2 (1106, 31), Nietplay Tournament (1107, 35) + its 3v3 side (1108, 24),
+> Nietplay 2: Summer Edition (1109, 21) + its 3v3 side (1110, 12). The offline-labeling code was
+> already on `main` (commit `7774345`), so the Step 0 cherry-pick below was **not** needed.
+> Post-import: merged `A_Wild_Gallade` → `AWildGallade`; other substring alias candidates (Kira*,
+> Alpha*, Genesis*, Oreo/Wingtide/MillerTime/Tempus variants) reviewed and left distinct. Run
+> `node recalculate_elo.js` to fold these into ELO + achievements if not already done.
+>
+> The steps below are retained as the reproducible procedure (e.g. for a fresh DB).
+
 Artifacts: `lakevalor_startgg_urls.txt`, `nietplay_startgg_urls.txt` (one bracket URL per line,
 `#` comments ignored by `.startsWith('http')` readers).
 
