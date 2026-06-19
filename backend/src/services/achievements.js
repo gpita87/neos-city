@@ -100,7 +100,9 @@ function detectOfflineTier(name = '') {
   if (/^THE FALL CLASSIC 2017( |-|$)/.test(n))                         return SERIES.MAJOR;
   if (/^SMASH CONFERENCE LXIX( |-|$)/.test(n))                         return SERIES.MAJOR;
 
-  if (n.includes('EVO ') || n === 'EVO')                               return SERIES.MAJOR;
+  // Word-boundary so "EVO 2018"/"Pokken EVO" match but substrings like
+  // "GANSITO SMASH 11 (nuEVO VENUE)" do not (the old n.includes('EVO ') did).
+  if (/\bEVO\b/.test(n))                                               return SERIES.MAJOR;
   if (n.includes('CEO '))                                              return SERIES.MAJOR;
   if (n.includes('DREAMHACK'))                                         return SERIES.MAJOR;
   if (n.includes('FROSTY FAUSTINGS') || n.includes('VORTEX GALLERY'))  return SERIES.MAJOR;
