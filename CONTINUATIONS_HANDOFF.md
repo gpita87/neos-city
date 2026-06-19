@@ -119,3 +119,99 @@ Worktrees cannot reach the DB or the network — run these from the main checkou
 > on main. **Player-merge note:** start.gg keys players on the lowercased gamertag (after
 > sponsor-prefix strip, per commit `80c55ca`); flag newly-created players for manual dedup
 > after any future import.
+
+---
+
+## Part 3 — Session update 2026-06-19 (continuations imported)
+
+### What shipped
+The Part 2 task ran to completion. Of 18 resolved start.gg candidates, **16 were
+imported** (the runner is `scratch/import_continuations.js`, idempotent — skips by
+phaseGroupId). Two were dropped at the last minute because the live DB had moved:
+- **Curtain Call 2023** — its Liquipedia bracket got imported separately (row 561
+  now has 63 matches), so the start.gg copy would have duplicated it.
+- **Battle at Lake Valor** — already in DB (row 1100, start.gg, 76 matches).
+
+The 16 (all `is_offline=true`, tiers as noted): Destiny II (major), Winter Brawl 3D
+2022/2023 (regional), NEC 22 / NEC23 (major), BAM 14/15 (regional), OzHadou 18/19
+(regional), Thermodynamic Throwdown DX (other), Kanto Tournament 7 + Kanto FINAL
+(other, JP), Respawn 3 / Gansito 11 / Camp Coleon / Poke Fight Club (other).
+
+### Other work this session
+- **EVO tier bug fix** — `detectOfflineTier`'s `n.includes('EVO ')` false-matched
+  "Gansito Smash 11 (**nuEVO** venue)". Fixed to `/\bEVO\b/` on branch
+  `agent/evo-tier-fix`, commit **`64bd660`** (clean cherry-pick onto main; not yet
+  landed). Gansito was corrected in-DB via SQL fallback, so this is the durable fix.
+- **Player merges** (display-name collisions from Challonge-slug vs start.gg-synth
+  handles, NOT sponsor prefixes — those auto-strip fine): merged Shady→shadygamerx
+  and lolyousaidtheefword→darrenmatthewward. `merge_players.js <old> <canonical>`.
+
+### Remaining punch-list (next agent / Gabriel)
+1. **🔴 Destiny II imported with 0 matches** (row 1111, pgid 1154048). The bracket
+   import found no sets — likely the wrong phase. Check the start.gg page for the
+   real bracket phaseGroupId and re-import.
+2. **Espeon merge didn't land** — DB still shows `espeon_` (5170) + `espeon` (28384).
+   Re-run `node merge_players.js espeon espeon_`.
+3. **JP region tagging** — Kanto 7 (15/24) + Kanto FINAL (7/8) participants have no
+   region. Run `node scratch/tag_kanto_jp.js` (dry-run) then `--apply`.
+4. **Cherry-pick `64bd660`** + remove the `evo-tier-fix` worktree/branch.
+5. **`recalculate_elo.js`** after the merge + JP tagging settle.
+6. Deferred / Gabriel's call: Shadowcat split (`shadowcat` 5374 + `intheshadows`
+   4791), Lemon split (`lemongrenade` 122 + `lemonjello88` 25285 — separate Challonge
+   accounts), and 17 cosmetic sponsor-prefix display names (latent re-import dupe risk).
+
+### Coverage status — series continuations are DONE; full sweep is NOT
+The recurring offline *brands* were chased to their latest editions. Two gaps remain
+for a guaranteed-complete sweep (low expected yield — Pokkén lost competitive support
+~2019–2020, so the post-2020 offline scene is thin):
+- **(a)** Liquipedia full-page diff (`liquipedia.net/.../Pokkén_Tournament/Tournaments`
+  vs DB) — catches brackets that live only on Liquipedia.
+- **(b)** broad start.gg `isOnline:false` sweep — catches novel-named grassroots
+  offline events that a brand-name-targeted search misses. **Prompt below.**
+
+---
+
+## Part 4 — Prompt for option (b): broad start.gg offline-only sweep (paste into a fresh session)
+
+> **Task: exhaustively find offline Pokkén Tournament DX events on start.gg (2020→now)
+> that are NOT yet in the Neos City DB, by filtering on `isOnline:false` rather than by
+> brand name — to catch novel-named grassroots offline events the brand-targeted sweep
+> missed.**
+>
+> Project: `C:\Users\pitag\Documents\neos-city`. Read `AGENT_CONTEXT.md` (esp. "start.gg
+> Integration", "Offline Tournament Support") and `CONTINUATIONS_HANDOFF.md` Parts 1 & 3.
+> All DB/network scripts run READ-ONLY on **main**; do code edits in a worktree and hand
+> off a cherry-pick. Do NOT run imports, migrations, or `recalculate_elo.js`.
+>
+> **Why:** the prior session resolved start.gg candidates by *known brand name*, and the
+> broad search (`search_startgg_offline.js`) hits a ~1200-result page cap and does not
+> read `isOnline`. So a 2021–2026 offline Pokkén event with an unfamiliar name was never
+> surfaced. Pokkén videogame id = **447**; `STARTGG_TOKEN` is in `backend/.env`.
+>
+> **Steps:**
+> 1. Write a read-only sweep (model it on `search_startgg_offline.js` /
+>    `backend/src/services/startgg.js::discoverPokkenTournaments`) that pages the
+>    `tournaments(query:{filter:{videogameIds:[447], past:true, afterDate:<~2020-01-01>}})`
+>    feed AND fetches each tournament's `isOnline` + `city/countryCode` + each Pokkén
+>    event's `numEntrants` + last-phase `phaseGroups`. Keep `perPage` ≤ 15 (start.gg's
+>    1000-object complexity cap) and page until exhausted or the cap; `log()` if you hit
+>    the page cap so coverage gaps are explicit (no silent truncation).
+> 2. Keep only `isOnline:false` events. For each, build the bracket URL
+>    (`/<eventSlugUrlForm>/brackets/<phaseId>/<phaseGroupId>`) and read what
+>    `detectOfflineTier(realName)` returns.
+> 3. Cross-reference vs the DB **by phaseGroupId AND by name+year** (reuse the approach in
+>    `scratch/verify_import_list.js`) — the importer dedupes on phaseGroupId, but a
+>    Liquipedia twin row (no pgid) can still collide on name, so check both. Bucket each:
+>    (a) already in DB, (b) in DB winner/RU-only, (c) not in DB.
+> 4. For bucket (b)/(c): capture slug + phaseGroupId + entrants + top-3 standings, confirm
+>    `isOnline:false`, and flag any that need a NEW `detectOfflineTier` pattern (recommend,
+>    don't decide — tiering is Gabriel's call).
+> 5. **Deliver:** a table (event → date → entrants → tier → bucket → recommended action),
+>    a ready start.gg URL list for the importable ones (extend
+>    `scratch/import_continuations.js`'s pattern), and any tier patterns to add. Flag
+>    newly-created players for manual dedup (start.gg keys on lowercased gamertag after
+>    sponsor-prefix strip) and JP events for region tagging (`scratch/tag_kanto_jp.js`).
+>
+> **Sanity caps:** the JP scene (Tonamel + start.gg "Kanto" series) and tiny 2–4 player
+> locals are real but low-value; surface them but don't over-invest. Expected yield is
+> low — the point is to *prove* completeness, not to find a flood.
