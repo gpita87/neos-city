@@ -2226,8 +2226,13 @@ async function importOneLiquipediaBracket({ bracketUrl, name, date, location, pr
     if (!p1 || !p2) continue;
 
     const winnerId = m.winner === m.p1 ? p1.id : p2.id;
-    // Use a deterministic match key: tournament_id + round + section + p1 + p2
-    const matchKey = `liq_${tournament.id}_${m.round}_${m.section}_${m.p1}_${m.p2}`.substring(0, 191);
+    // Deterministic match key: tournament_id + round + section + player IDs.
+    // Keyed on resolved player IDs (not the raw parsed name strings) so a
+    // re-import is idempotent even when a player's name spelling differs
+    // between runs — a name-keyed external_id let the same logical match slip
+    // past the ON CONFLICT dedup and get inserted twice (the 2026-06-19
+    // FORCE_REIMPORT doubling). IDs are stable, so re-imports now collapse.
+    const matchKey = `liq_${tournament.id}_${m.round}_${m.section}_${p1.id}_${p2.id}`.substring(0, 191);
 
     const { rows: [inserted] } = await db.query(
       `INSERT INTO matches

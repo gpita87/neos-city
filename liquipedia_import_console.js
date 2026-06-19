@@ -57,7 +57,15 @@ const DELAY_MS = 800; // polite pause between Liquipedia fetches
 // in the DB. Use this after running reset_bracket_placements.js (which wipes
 // rank>2 placements but leaves the tournaments themselves in place — without
 // FORCE_REIMPORT every event would be skipped on the second run).
-const FORCE_REIMPORT = true;
+//
+// ⚠ Default false. A full FORCE_REIMPORT on 2026-06-19 double-inserted matches
+// on ~19 events: bracket external_ids were name-keyed, so events imported under
+// an older parser got new ids on re-import and slipped past ON CONFLICT. The
+// external_id is now player-ID-keyed (see importOneLiquipediaBracket), so events
+// imported AFTER that fix re-import cleanly — but events still carrying the old
+// name-keyed ids will double again. Only flip this to true once those legacy
+// events have been re-cleaned, or when you specifically intend a full refresh.
+const FORCE_REIMPORT = false;
 
 // ── All 80 Pokken event base URLs discovered from Liquipedia ─────────────────
 // (The 4 events below the divider were originally missing from this list, so
