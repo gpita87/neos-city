@@ -162,32 +162,33 @@ git cherry-pick a48d3fb          # clean single commit on main; review in Intell
 
 ## 5. Post-import: catch player aliases needing a manual merge
 
-start.gg keys players on the lowercased entrant name. `importOneStartgg` (tournaments.js ~1051–1063)
-has a fallback that reuses an existing `challonge_username` when an existing player's `display_name`
-matches **case-insensitively** — so `"Rokso"` → merges into existing `rokso`. **But that fallback
-does NOT handle:**
-- **Sponsor tags** — `"TEC | Rokso"` becomes username `tec_|_rokso`, display `TEC | Rokso`; it will
-  NOT match `Rokso` and creates a brand-new duplicate player.
-- **Aliases / handle changes** — a player who entered under a different name on start.gg than their
-  Challonge handle won't auto-merge.
+start.gg keys players on the entrant's gamertag. `importOneStartgg` (tournaments.js, the player-upsert
+block) now **strips a sponsor prefix to the final `|`-segment**, then reuses an existing
+`challonge_username` on a case-insensitive `display_name` match. So sponsor tags merge correctly on
+their own — verified against the real data (`scratch/dump_entrants.js`): e.g. `VRG | TEC` strips to
+`TEC` and collapses with the bare `TEC`; `6Y4A | ShadowMewtwoX` and `TDC | ShadowMewtwoX` both strip
+to `ShadowMewtwoX`. (`TEC` is a **player**, `VRG` the sponsor — the gamertag is what's kept.)
 
-After importing, list newly-created players and eyeball them for aliases of established players:
+**What the strip does NOT catch** — the residual cases to merge by hand:
+- **Non-pipe sponsor prefixes** — a space- or bracket-separated tag (`TEC ThankSwalot`, `[X] Name`)
+  isn't a `|`-segment, so it survives as a new player.
+- **Handle / spelling variants** — a gamertag that nearly (but not exactly) matches an existing
+  Challonge handle, e.g. `DevlinHart` (start.gg) vs the existing `devlinhartfgc`.
 
-```sql
--- Players created during/after the import window
-SELECT id, challonge_username, display_name, created_at
-FROM players
-WHERE created_at > NOW() - INTERVAL '2 hours'
-ORDER BY created_at DESC;
+After importing, run the read-only audit (per project preference — a node script, not Supabase SQL
+automation):
+
+```powershell
+cd C:\Users\pitag\Documents\neos-city
+node scratch/alias_audit.js          # add `--days 3` to also list recently-created players
 ```
 
-Run it via a quick node script (per project preference — don't use Supabase SQL automation), e.g.
-`node check_import_status.js` style, or paste into the Supabase SQL editor manually. For each new row
-that looks like an alias/sponsor-tagged version of an existing player (e.g. `tec_|_rokso` vs `rokso`,
-or a known handle under a new spelling), do a manual merge: repoint that player's `matches` /
-`tournament_placements` to the canonical `players.id`, then delete the duplicate, then re-run
-`node recalculate_elo.js`. Flag anything ambiguous to Gabriel rather than guessing.
+It lists the players these events introduced, flags same-normalized-name collisions [section 2,
+strongest], and substring/sponsor-prefix near-misses [section 3, review by hand]. For each real
+duplicate, merge manually: repoint that player's `matches` / `tournament_placements` to the canonical
+`players.id`, delete the duplicate, then re-run `node recalculate_elo.js`. Flag anything ambiguous
+rather than guessing.
 
 **Watch especially for** UK/EU regulars in the Nietplay brackets and NA regulars in the Lake Valor
-brackets who already exist from Challonge under a plain handle — those are the likely sponsor-tag /
-alias collisions.
+brackets who already exist from Challonge under a slightly different handle — those are the likely
+alias collisions the `|`-strip can't see.
