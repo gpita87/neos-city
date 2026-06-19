@@ -2414,6 +2414,236 @@ router.post('/import-liquipedia-bracket', requireAdmin, async (req, res) => {
   }
 });
 
+// ══════════════════════════════════════════════════════════════════════════════
+// Pokémon Players Cup import — official Play! Pokémon online championship
+//
+// Modeled on importOneLiquipediaBracket (match/player/ELO plumbing), with two
+// deliberate differences:
+//   1. Placements are set EXPLICITLY from the payload (authoritative ranks 1-8
+//      from official broadcast graphics) — NEVER derived from match order. That
+//      is the whole reason this isn't reusing the Liquipedia route, whose
+//      placement derivation assumes a full bracket with known game scores.
+//   2. Imported as is_offline=TRUE with the display-only series 'players_cup',
+//      which is deliberately NOT in ONLINE_SERIES / OFFLINE_TIERS. recalculate_
+//      elo.js no-ops its per-series / tier stats via the if(ss)/if(ot) guards,
+//      so it never enters the online ladder, the Online tab, or any offline
+//      tier bucket. (Like every other offline event, a win/top-2 still folds
+//      into the generic offline_wins / offline_top2 counters — consistent with
+//      recalc, which counts any is_offline placement there.)
+//
+// Dedup is on exact name (names are unique + stable) so re-runs are idempotent.
+// Matches get a stable external_id `pcup_{event.key}_{i}`.
+// ══════════════════════════════════════════════════════════════════════════════
+
+// Parse a Players Cup score string into [winnerGames, loserGames].
+//   '3-0' -> [3, 0]
+//   '' / 'sets 2-1' / any non "N-N" -> [null, null]
+// The blank/sets forms are WF/LF/GF rows where the winner is certain but the
+// game count is unknown — the match is still recorded, just with null scores.
+function parsePlayersCupScore(score) {
+  const m = typeof score === 'string' ? score.trim().match(/^(\d+)\s*-\s*(\d+)$/) : null;
+  if (!m) return [null, null];
+  return [parseInt(m[1], 10), parseInt(m[2], 10)];
+}
+
+async function importOnePlayersCup({ key, name, date, location, prize_pool, participants_count, placements, matches }) {
+  if (!key)  throw new Error('key is required');
+  if (!name) throw new Error('name is required');
+  if (!Array.isArray(placements) || placements.length === 0) throw new Error('placements array is required');
+  if (!Array.isArray(matches) || matches.length === 0) throw new Error('matches array is required');
+
+  const completedAt = date ? new Date(date).toISOString() : null;
+
+  // ── Find or create tournament (dedup on exact name) ──────────────────────
+  let tournament;
+  const { rows: [byName] } = await db.query(
+    `SELECT * FROM tournaments WHERE LOWER(name) = LOWER($1) LIMIT 1`, [name]
+  );
+  if (byName) {
+    const { rows: [updated] } = await db.query(
+      `UPDATE tournaments SET
+         series             = 'players_cup',
+         is_offline         = TRUE,
+         location           = COALESCE($2, location),
+         prize_pool         = COALESCE($3, prize_pool),
+         participants_count = COALESCE($4, participants_count),
+         completed_at       = COALESCE($5, completed_at),
+         started_at         = COALESCE($5, started_at)
+       WHERE id = $1 RETURNING *`,
+      [byName.id, location || null, prize_pool || null, participants_count || null, completedAt]
+    );
+    tournament = updated;
+  } else {
+    const { rows: [created] } = await db.query(
+      `INSERT INTO tournaments
+         (challonge_id, name, is_offline, series, location, prize_pool, participants_count,
+          completed_at, started_at, source)
+       VALUES (NULL, $1, TRUE, 'players_cup', $2, $3, $4, $5, $5, 'players_cup')
+       RETURNING *`,
+      [name, location || null, prize_pool || null, participants_count || null, completedAt]
+    );
+    tournament = created;
+  }
+
+  // ── Upsert players (key on canonical, then resolve aliases) ───────────────
+  // The canonical key is what keeps the two distinct "Kira" players apart
+  // (Kira FR -> kira_fr, Kira_A -> kira_a). resolveAlias routes documented
+  // name-changes to the real player row (jukem->thankswalot1, deity_light->
+  // deitylight, allister->allisterfgc, niet->niet_dev); "Wise" -> challonge_
+  // username 'wise' (the FFC organizer) merges via the plain transform, so no
+  // duplicate is created. ON CONFLICT preserves the existing display_name.
+  const nameToPlayer = new Map(); // payload name string -> player row
+
+  async function upsertByCanonical(displayName, canonical) {
+    let username = (canonical || displayName).toLowerCase().replace(/\s+/g, '_');
+    username = await resolveAlias(username);
+    const { rows: [player] } = await db.query(
+      `INSERT INTO players (challonge_username, display_name)
+       VALUES ($1, $2)
+       ON CONFLICT (challonge_username) DO UPDATE SET display_name = players.display_name
+       RETURNING *`,
+      [username, displayName]
+    );
+    return player;
+  }
+
+  // Placements carry the canonical mapping; upsert them first. Matches
+  // reference players by the same display strings.
+  const canonByName = new Map();
+  for (const p of placements) {
+    const disp = p.display || p.canonical;
+    if (!disp) continue;
+    canonByName.set(disp, p.canonical || disp);
+    nameToPlayer.set(disp, await upsertByCanonical(disp, p.canonical));
+  }
+  // Defensive: any match name not already covered by a placement.
+  for (const m of matches) {
+    for (const nm of [m.winner, m.loser]) {
+      if (nm && !nameToPlayer.has(nm)) {
+        nameToPlayer.set(nm, await upsertByCanonical(nm, canonByName.get(nm) || nm));
+      }
+    }
+  }
+
+  const totalParticipants = participants_count || nameToPlayer.size;
+
+  // ── Upsert matches (winner = player1) ────────────────────────────────────
+  const sectionMap = { W: 'winners', L: 'losers', GF: 'grand finals' };
+  let importedMatches = 0;
+  const insertedMatchIds = [];
+
+  for (let i = 0; i < matches.length; i++) {
+    const m  = matches[i];
+    const p1 = nameToPlayer.get(m.winner); // winner is player1
+    const p2 = nameToPlayer.get(m.loser);
+    if (!p1 || !p2) continue;
+
+    const [winnerGames, loserGames] = parsePlayersCupScore(m.score);
+    const matchKey = `pcup_${key}_${i}`;
+
+    const { rows: [inserted] } = await db.query(
+      `INSERT INTO matches
+         (tournament_id, challonge_match_id, player1_id, player2_id, winner_id,
+          player1_score, player2_score, round, bracket_section, state, played_at)
+       VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,'complete',$10)
+       ON CONFLICT (tournament_id, challonge_match_id) DO NOTHING
+       RETURNING id`,
+      [tournament.id, matchKey, p1.id, p2.id, p1.id,
+       winnerGames, loserGames, m.round, sectionMap[m.section] || 'winners', completedAt]
+    );
+    if (inserted) { insertedMatchIds.push(inserted.id); importedMatches++; }
+  }
+
+  // ── Explicit placements (authoritative — from payload, not match order) ──
+  // Wipe + repopulate so the import is the source of truth and re-runs converge.
+  await db.query(`DELETE FROM tournament_placements WHERE tournament_id = $1`, [tournament.id]);
+  for (const p of placements) {
+    const disp = p.display || p.canonical;
+    const player = nameToPlayer.get(disp);
+    if (!player) continue;
+    await db.query(
+      `INSERT INTO tournament_placements (tournament_id, player_id, final_rank)
+       VALUES ($1, $2, $3)
+       ON CONFLICT (tournament_id, player_id) DO UPDATE SET final_rank = $3`,
+      [tournament.id, player.id, p.final_rank]
+    );
+  }
+
+  // ── ELO (only when new matches landed; recalculate_elo.js is authoritative
+  //    and re-orders all ELO globally afterward) ─────────────────────────────
+  if (insertedMatchIds.length > 0) {
+    const eloMap   = new Map();
+    const gamesMap = new Map();
+    for (const [, p] of nameToPlayer) {
+      eloMap.set(p.id,   p.elo_rating   || 1200);
+      gamesMap.set(p.id, p.games_played || 0);
+    }
+
+    for (const m of matches) {
+      const p1 = nameToPlayer.get(m.winner);
+      const p2 = nameToPlayer.get(m.loser);
+      if (!p1 || !p2) continue;
+      const pAData = { elo: eloMap.get(p1.id) || 1200, games_played: gamesMap.get(p1.id) || 0 };
+      const pBData = { elo: eloMap.get(p2.id) || 1200, games_played: gamesMap.get(p2.id) || 0 };
+      const { playerA, playerB } = calculateNewRatings(pAData, pBData, 1); // p1 (winner) won
+      eloMap.set(p1.id, playerA.newElo);
+      eloMap.set(p2.id, playerB.newElo);
+      gamesMap.set(p1.id, (gamesMap.get(p1.id) || 0) + 1);
+      gamesMap.set(p2.id, (gamesMap.get(p2.id) || 0) + 1);
+    }
+
+    // Placement bonuses from the explicit ranks.
+    for (const p of placements) {
+      const player = nameToPlayer.get(p.display || p.canonical);
+      if (!player || !eloMap.has(player.id)) continue;
+      const bonus = placementBonus(p.final_rank, totalParticipants);
+      if (bonus > 0) eloMap.set(player.id, eloMap.get(player.id) + bonus);
+    }
+
+    for (const [playerId, newElo] of eloMap) {
+      const { rows: [cur] } = await db.query('SELECT elo_rating FROM players WHERE id = $1', [playerId]);
+      const oldElo = cur?.elo_rating || 1200;
+      await db.query(
+        `UPDATE players SET elo_rating = $2, peak_elo = GREATEST(peak_elo, $2) WHERE id = $1`,
+        [playerId, newElo]
+      );
+      if (newElo !== oldElo) {
+        await db.query(
+          `INSERT INTO elo_history (player_id, old_elo, new_elo, delta, reason) VALUES ($1,$2,$3,$4,$5)`,
+          [playerId, oldElo, newElo, newElo - oldElo, `Tournament: ${tournament.name}`]
+        );
+      }
+    }
+  }
+
+  // ── Refresh stats for every affected player ───────────────────────────────
+  for (const [, player] of nameToPlayer) {
+    await refreshOfflineStats(player.id);
+    await updatePlayerStats(player.id, tournament, nameToPlayer, matches, null, totalParticipants);
+  }
+
+  return {
+    success: true,
+    tournament: tournament.name,
+    series: 'players_cup',
+    participants: totalParticipants,
+    placements: placements.length,
+    matches_imported: importedMatches,
+  };
+}
+
+// POST /api/tournaments/import-players-cup
+// Body: { key, name, date, location, prize_pool, participants_count, placements: [...], matches: [...] }
+router.post('/import-players-cup', requireAdmin, async (req, res) => {
+  try {
+    const result = await importOnePlayersCup(req.body);
+    res.json(result);
+  } catch (err) {
+    console.error('Players Cup import error:', err.message);
+    res.status(500).json({ error: err.message });
+  }
+});
+
 // ──────────────────────────────────────────────────────────────────────────────
 // Liquipedia placements importer — canonical placements with proper ties
 // ──────────────────────────────────────────────────────────────────────────────

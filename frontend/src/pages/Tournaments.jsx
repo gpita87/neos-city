@@ -8,19 +8,24 @@ const TABS = [
   { key: 'offline', label: '🏆 Offline' },
 ];
 
-// Offline tier display order and labels
-const TIER_ORDER = ['worlds', 'major', 'regional', 'other'];
+// Offline tier display order and labels.
+// 'players_cup' is the official Play! Pokémon online championship — kept above
+// Worlds and given its own colour so it reads as distinct from the offline
+// LAN tiers below it.
+const TIER_ORDER = ['players_cup', 'worlds', 'major', 'regional', 'other'];
 const TIER_LABELS = {
-  worlds:   '🌍 World Championships',
-  major:    '🏟️ Majors',
-  regional: '📍 Regionals',
-  other:    '🎮 Locals',
+  players_cup: '👑 Pokémon Players Cup',
+  worlds:      '🌍 World Championships',
+  major:       '🏟️ Majors',
+  regional:    '📍 Regionals',
+  other:       '🎮 Locals',
 };
 const TIER_COLORS = {
-  worlds:   'text-yellow-400',
-  major:    'text-cyan-400',
-  regional: 'text-teal-400',
-  other:    'text-slate-400',
+  players_cup: 'text-violet-400',
+  worlds:      'text-yellow-400',
+  major:       'text-cyan-400',
+  regional:    'text-teal-400',
+  other:       'text-slate-400',
 };
 
 // Group offline tournaments by tier, then by year within each tier
