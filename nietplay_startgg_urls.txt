@@ -12,15 +12,19 @@ https://www.start.gg/tournament/nietplay-tournament/events/nietplay-tournament/b
 # ── Nietplay 2: Summer Edition (2019-07-06, venue: Marston Green/Birmingham, GB) — "Nietplay 2", 11 entrants ──
 https://www.start.gg/tournament/nietplay-2-summer-edition/events/nietplay-2/brackets/536419/912143
 #
-# ─────────────────────────── EXCLUDED (not standard 1v1 brackets) ───────────────────────────
-# 3v3 TEAM side brackets — team format; entrant "names" are teams and would pollute the
-#   players table. Do NOT import:
-#   https://www.start.gg/tournament/nietplay-tournament/events/3v3-side-bracket/brackets/521375/890216
-#   https://www.start.gg/tournament/nietplay-2-summer-edition/events/side-bracket-3v3/brackets/536422/912146
-#   https://www.start.gg/tournament/nietplay-3-counter-attack/events/nietplay-3v3-side-event/brackets/747353/1199383
+# ── 3v3 side brackets (a Pokkén game mode: still 1 player vs 1 player, just 3 Pokémon) ──
+#    Entrants are individuals, so they merge with the same players as the 1v1 mains.
+#    The importer appends the event name ("… — Side event: 3v3 …") so these don't collide
+#    with their 1v1 main as duplicate (name, date) rows.
+# Nietplay Tournament — 3v3 (2019-02-09, 13 entrants)
+https://www.start.gg/tournament/nietplay-tournament/events/3v3-side-bracket/brackets/521375/890216
+# Nietplay 2 — 3v3 (2019-07-06, 7 entrants)
+https://www.start.gg/tournament/nietplay-2-summer-edition/events/side-bracket-3v3/brackets/536422/912146
 #
+# ─────────────────────────── EXCLUDED ───────────────────────────
 # Super Smash Bros. Ultimate side event — non-Pokkén (videogame id 1386). Skipped.
 #
-# Nietplay 3: Counter-attack! main event (2020-05-30, Leeds) — only 1 entrant (cancelled/empty,
-#   likely COVID). No usable bracket data. Do NOT import:
-#   https://www.start.gg/tournament/nietplay-3-counter-attack/events/nietplay-3/brackets/747352/1199382
+# Nietplay 3: Counter-attack! (2020-05-30, Leeds) — BOTH its events have only 1 entrant
+#   (cancelled/empty, likely COVID). No usable bracket data. Do NOT import:
+#   https://www.start.gg/tournament/nietplay-3-counter-attack/events/nietplay-3/brackets/747352/1199382        (main)
+#   https://www.start.gg/tournament/nietplay-3-counter-attack/events/nietplay-3v3-side-event/brackets/747353/1199383  (3v3)

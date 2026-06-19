@@ -992,7 +992,23 @@ async function importOneStartgg(phaseGroupId, opts = {}) {
     const tournament = event?.tournament;
     if (!tournament) throw new Error(`No tournament metadata returned for phaseGroup ${phaseGroupId}`);
 
-    const tournamentName = tournament.name || `start.gg #${phaseGroupId}`;
+    // A start.gg tournament can hold several brackets that share ONE tournament
+    // name + date — e.g. a main 1v1 and a 3v3 side event (3v3 here is still 1
+    // player vs 1 player, just 3 Pokémon). Naming each row by the tournament
+    // alone would produce identical (name, date) rows, which the offline-dedup
+    // tooling treats as duplicates to merge. So when the event is a distinct
+    // sub-bracket — not an echo of the tournament name and not a generic "main
+    // bracket" label — append the event name to keep the rows distinguishable.
+    const baseName  = tournament.name || `start.gg #${phaseGroupId}`;
+    const eventName = (event.name || '').trim();
+    const norm = s => s.toLowerCase().replace(/[^a-z0-9]+/g, ' ').trim();
+    const GENERIC_EVENT = /^(bracket|singles|1v1|main( event)?|pokk[eé]n.*1v1|pokken|top \d+|winners?|losers?|grand finals?)$/i;
+    const isEchoEvent =
+      !eventName ||
+      GENERIC_EVENT.test(eventName) ||
+      norm(baseName).includes(norm(eventName)) ||
+      norm(eventName).includes(norm(baseName));
+    const tournamentName = isEchoEvent ? baseName : `${baseName} — ${eventName}`;
     // Offline-ness is read from the tournament's own start.gg details: start.gg
     // records isOnline=false for in-person LANs (Battle at Lake Valor, Nietplay).
     // So by default the event self-labels — no flag needed at import time. An

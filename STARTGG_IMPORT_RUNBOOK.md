@@ -23,8 +23,12 @@ All data below is live from start.gg. "POKKÉN" = videogame id 447 (`Pokkén Tou
 | Nietplay 3 | 2020-05-30 | **false** | Leeds, GB | Nietplay 3 main (1v1) | **1** | 1199382 | `.../events/nietplay-3/brackets/747352/1199382` |
 | Nietplay 3 | 2020-05-30 | **false** | Leeds, GB | Nietplay 3v3 *(side)* | **1** | 1199383 | `.../events/nietplay-3v3-side-event/brackets/747353/1199383` |
 
-**Usable 1v1 Pokkén brackets:** Battle at Lake Valor (Top 8 / event), Battle at Lake Valor 2,
-Nietplay Tournament main, Nietplay 2 main. Everything else is excluded (reasons below).
+**Usable Pokkén brackets:** Battle at Lake Valor (Top 8 / event), Battle at Lake Valor 2,
+Nietplay Tournament main + its 3v3 side, Nietplay 2 main + its 3v3 side. The **3v3 side events are
+included** — in Pokkén "3v3" is still 1 player vs 1 player (just 3 Pokémon), so entrants are
+individuals who merge with the 1v1 players; the importer appends the event name so a 3v3 row doesn't
+collide with its 1v1 main as a duplicate (name, date). **Excluded:** the Smash Ultimate side event
+(non-Pokkén) and all of Nietplay 3 (both events have only 1 entrant — cancelled/empty).
 
 ---
 
