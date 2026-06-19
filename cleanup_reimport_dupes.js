@@ -37,10 +37,23 @@ const db = require('./backend/src/db');
 
 const APPLY = process.argv.includes('--apply');
 
-// The 5 metadata-only rows that got a duplicate created during the re-import.
-// Identified by their stable liquipedia_slug (the OLD row has it; the NEW row
-// does not). Deriving the rows by slug+name avoids hard-coding shifting ids.
-const DUP_SLUGS = ['ceo_2017', 'final_round_20', 'frosty_faustings_9', 'ncr_2017', 'nec_18'];
+// Duplicate event pairs to merge, identified by a stable liquipedia_slug. For
+// each slug there are two rows: one carries the slug, the other carries a
+// liquipedia_url (+ the richer bracket/placement data) but no slug. We keep the
+// url/data row and move the slug onto it, dropping the slug-only row.
+//
+//  - First 5: metadata-only rows that the FORCE_REIMPORT created a richer
+//    partner for ("CEO 2017" vs "CEO 2017 - Pokken", etc.).
+//  - Last 3: the REVERSE shape — offline_import.js (run during recovery) keys on
+//    liquipedia_slug, so for events whose only row had a url-but-no-slug it
+//    inserted a fresh slug-only metadata row. Verified true duplicates (same
+//    winner+runner-up+date): FF XIV (Jukem/Rokso), FF XV (Mewtater/TEC),
+//    Final Round 2019 (Jukem/Raikel). The "Side Tournaments" suffix is just the
+//    Liquipedia page title where FF's Pokkén bracket lives — same event.
+// The keep/drop logic is symmetric (drop the slug-only row, keep the url row),
+// so both shapes are handled identically.
+const DUP_SLUGS = ['ceo_2017', 'final_round_20', 'frosty_faustings_9', 'ncr_2017', 'nec_18',
+                   'frosty_faustings_14', 'frosty_faustings_15', 'final_round_2019'];
 
 const norm = s => (s || '').toLowerCase()
   .replace(/\s*[-–]\s*pokk[eé]n\s*dx$/i, '')
