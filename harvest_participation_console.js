@@ -1,0 +1,240 @@
+/**
+ * Neos City — Challonge Participation Harvest (Browser Console)
+ *
+ * Goal: discover "locals" — Pokkén tournaments run by organizers we DON'T
+ * already track — by crawling a Challonge account's tournament links, both the
+ * ones they ORGANIZED (`/users/<name>/tournaments`) and the ones they
+ * PARTICIPATED in (links surfaced on their profile root `/users/<name>`).
+ *
+ * Why a browser console and not a Node script: Challonge 403s every
+ * server-side / Node request to `/users/...` profile pages (bot detection).
+ * The browser session has the cookies, UA, and TLS fingerprint Challonge
+ * expects, so same-origin `fetch()` from DevTools sails through — same trick
+ * harvest_console.js uses. The v1 API (which Node CAN reach) then validates
+ * each candidate server-side, so this script can over-collect links and let
+ * the backend reject the non-Pokkén / dead ones.
+ *
+ * HOW TO USE
+ * ──────────
+ * 1. Backend running on localhost:3001 (CORS for https://challonge.com is on).
+ * 2. Fill in USERNAMES below:
+ *      - For the zyflair scan: leave it as ['zyflair'] (or add more accounts).
+ *      - For the DCM-players scan: run `node dcm_player_profiles.js` from the
+ *        project root, copy the printed array, and paste it in as USERNAMES.
+ * 3. Inline the admin token + copy to clipboard:
+ *      node prep_console.js harvest_participation_console.js
+ * 4. Open Chrome to ANY page on challonge.com (e.g. https://challonge.com/tournaments).
+ * 5. F12 → Console → Ctrl+V → Enter.
+ * 6. The script walks every username, scrapes their organized + participated
+ *    tournament links, and POSTs them to /api/tournaments/flag-locals. The
+ *    backend dedupes against the DB + harvested_tournaments.txt + flagged_locals.txt,
+ *    validates each via the Pokkén keyword list, and writes the new Pokkén ones
+ *    to flagged_locals.txt for review. New finds are printed live + summarized.
+ *
+ * After this finishes, open flagged_locals.txt in the project root, review the
+ * candidates, and copy the keepers into harvested_tournaments.txt — then
+ * `node pull_new.js` (skip harvest) imports them like any other URL.
+ *
+ * NOTE ON PARTICIPATION DATA
+ * ──────────────────────────
+ * This reads the server-rendered HTML of each profile. If a username you KNOW
+ * has competed yields 0 candidates, Challonge may now render participation
+ * client-side (after JS), in which case the static HTML won't contain those
+ * links and we'd need to adapt (read the live `document` per profile). The
+ * organized-tournaments path (`/users/<name>/tournaments`) is the same one
+ * harvest_console.js scrapes successfully, so that half is reliable.
+ */
+
+// Required — the import endpoint is gated and the script refuses to run if blank.
+// Run `node prep_console.js harvest_participation_console.js` to inline it.
+const ADMIN_TOKEN = '';
+const BACKEND_URL = 'http://localhost:3001';
+
+// ── Who to crawl ────────────────────────────────────────────────────────────
+// Default: the zyflair scan. For the DCM-players scan, replace this array with
+// the output of `node dcm_player_profiles.js`.
+const USERNAMES = ['zyflair'];
+
+const PAGES_PER_USER = 5;    // pages of /users/<name>/tournaments to paginate
+const PAGE_DELAY_MS  = 400;  // breath between page fetches
+const USER_DELAY_MS  = 700;  // breath between usernames
+const BATCH_SIZE     = 60;   // URLs POSTed per /flag-locals call (caps validation time)
+
+// Path segments that look like a tournament link but aren't.
+const NON_TOURNAMENT_SLUGS = new Set([
+  'login', 'logout', 'signup', 'signin', 'settings', 'tournaments', 'users',
+  'search', 'about', 'faq', 'contact', 'privacy', 'terms', 'api', 'help',
+  'participants', 'matches', 'followers', 'following', 'announcements', 'events',
+  'rankings', 'templates', 'partners', 'organizedplay', 'switch_locale',
+  'translate', 'terms_of_service', 'privacy_policy', 'bracket_generator',
+  'communities', 'community', 'organizations', 'me', 'dashboard', 'notifications',
+  'pricing', 'features', 'blog', 'support', 'home', 'discover', 'premium',
+]);
+
+// Two-letter locale prefixes Challonge sometimes injects (/en/users/...).
+const LOCALE_RE = /^[a-z]{2}$/;
+
+const sleep = ms => new Promise(r => setTimeout(r, ms));
+
+if (!ADMIN_TOKEN) {
+  console.error('❌ ADMIN_TOKEN is blank. Run `node prep_console.js harvest_participation_console.js`');
+  console.error('   to inline it from backend/.env, then paste the result.');
+  throw new Error('ADMIN_TOKEN missing');
+}
+
+if (!location.host.endsWith('challonge.com')) {
+  console.warn(
+    `⚠️  You're on ${location.host}, not challonge.com. fetch() will go cross-origin ` +
+    `and Challonge's CORS will likely block it. Navigate to https://challonge.com first.`
+  );
+}
+
+// Pull every tournament-shaped link out of a page's HTML and rebuild it as a
+// full challonge.com URL. Captures both `/<org>/<slug>` (organized OR
+// participated, depending on whose profile) and root `/<slug>`. The backend
+// validates each, so we err toward over-collecting.
+function extractTournamentUrls(html) {
+  const urls = new Set();
+  const hrefRe = /href="([^"]+)"/gi;
+  let m;
+  while ((m = hrefRe.exec(html)) !== null) {
+    let href = m[1];
+    if (href.startsWith('https://challonge.com')) href = href.slice('https://challonge.com'.length);
+    else if (/^https?:\/\//i.test(href)) continue;   // external link
+    if (!href.startsWith('/')) continue;
+    href = href.split('#')[0].split('?')[0];
+
+    let segs = href.split('/').filter(Boolean);
+    if (segs.length && LOCALE_RE.test(segs[0])) segs = segs.slice(1); // drop /en/…
+    if (segs.length < 1 || segs.length > 2) continue;
+    if (NON_TOURNAMENT_SLUGS.has(segs[0].toLowerCase())) continue;
+
+    const slug = segs[segs.length - 1];
+    if (NON_TOURNAMENT_SLUGS.has(slug.toLowerCase())) continue;
+    if (slug.length < 3 || slug.length > 40) continue;
+    if (!/^[a-zA-Z0-9_-]+$/.test(slug)) continue;
+
+    urls.add(`https://challonge.com/${segs.join('/')}`);
+  }
+  return [...urls];
+}
+
+async function fetchHtml(pathUrl) {
+  const resp = await fetch(pathUrl, { credentials: 'include' });
+  if (!resp.ok) throw new Error(`HTTP ${resp.status}`);
+  return resp.text();
+}
+
+// Gather every tournament link for one username: profile root (participated)
+// + paginated organized list.
+async function gatherForUser(username) {
+  const links = new Set();
+
+  // Profile root — surfaces participated-in tournaments (other orgs' slugs).
+  try {
+    const html = await fetchHtml(`/users/${username}`);
+    extractTournamentUrls(html).forEach(u => links.add(u));
+    console.log(`  profile root: ${links.size} link(s)`);
+  } catch (err) {
+    console.warn(`  profile root failed: ${err.message}`);
+  }
+  await sleep(PAGE_DELAY_MS);
+
+  // Organized tournaments — paginated, same heuristic as harvest_console.js.
+  for (let page = 1; page <= PAGES_PER_USER; page++) {
+    const path = `/users/${username}/tournaments${page > 1 ? `?page=${page}` : ''}`;
+    try {
+      const html = await fetchHtml(path);
+      const before = links.size;
+      extractTournamentUrls(html).forEach(u => links.add(u));
+      const added = links.size - before;
+      console.log(`  organized page ${page}: +${added} (total ${links.size})`);
+      if (added < 3 && page > 1) break; // end-of-list heuristic
+    } catch (err) {
+      console.warn(`  organized page ${page} failed: ${err.message}`);
+      break;
+    }
+    if (page < PAGES_PER_USER) await sleep(PAGE_DELAY_MS);
+  }
+
+  return [...links];
+}
+
+async function postBatch(urls, source) {
+  const resp = await fetch(`${BACKEND_URL}/api/tournaments/flag-locals`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json', 'x-admin-token': ADMIN_TOKEN },
+    body: JSON.stringify({ urls, source }),
+  });
+  if (!resp.ok) {
+    const text = await resp.text();
+    throw new Error(`backend ${resp.status}: ${text.slice(0, 200)}`);
+  }
+  return resp.json();
+}
+
+(async () => {
+  console.log(`%cParticipation harvest — ${USERNAMES.length} account(s)`, 'font-size:14px;font-weight:bold');
+  console.log(`Origin: ${location.origin}  Backend: ${BACKEND_URL}\n`);
+
+  // Don't re-submit a slug we've already sent this run (saves the backend
+  // re-validating dead/non-Pokkén links shared across many accounts).
+  const submitted = new Set();
+  const allFlagged = [];
+  const summary = [];
+
+  for (const username of USERNAMES) {
+    console.log(`%c@${username}`, 'font-weight:bold');
+    let links;
+    try {
+      links = await gatherForUser(username);
+    } catch (err) {
+      console.error(`  ❌ ${username}: ${err.message}`);
+      summary.push({ username, links: 0, flagged: 0, error: err.message });
+      await sleep(USER_DELAY_MS);
+      continue;
+    }
+
+    const fresh = links.filter(u => {
+      const slug = u.split('/').pop();
+      if (submitted.has(slug)) return false;
+      submitted.add(slug);
+      return true;
+    });
+
+    let flaggedForUser = 0;
+    for (let i = 0; i < fresh.length; i += BATCH_SIZE) {
+      const batch = fresh.slice(i, i + BATCH_SIZE);
+      try {
+        const r = await postBatch(batch, username);
+        flaggedForUser += r.flagged || 0;
+        if (r.candidates?.length) {
+          for (const c of r.candidates) {
+            allFlagged.push({ source: username, ...c });
+            console.log(`    🏆 ${c.name} (${c.date}) — org:${c.organizer || '-'} — ${c.url}`);
+          }
+        }
+      } catch (err) {
+        console.error(`    ❌ batch POST failed: ${err.message}`);
+      }
+    }
+
+    console.log(`  → ${links.length} link(s), ${fresh.length} new this run, ${flaggedForUser} flagged\n`);
+    summary.push({ username, links: links.length, flagged: flaggedForUser });
+    await sleep(USER_DELAY_MS);
+  }
+
+  console.log('%c─── SUMMARY ───', 'font-weight:bold');
+  console.table(summary);
+  if (allFlagged.length) {
+    console.log(`%c${allFlagged.length} tournament(s) flagged for review:`, 'color:#10b981;font-weight:bold');
+    console.table(allFlagged);
+    console.log('%cReview flagged_locals.txt in the project root, then copy keepers into harvested_tournaments.txt.',
+                'color:#6366f1');
+  } else {
+    console.log('%cNothing new flagged. (All discovered tournaments are already in the DB / queue, or none were Pokkén.)',
+                'color:#94a3b8');
+  }
+})().catch(err => {
+  console.error('Unhandled error:', err);
+});

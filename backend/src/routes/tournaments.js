@@ -783,6 +783,140 @@ router.post('/append-harvest', requireAdmin, async (req, res) => {
   });
 });
 
+// POST /api/tournaments/flag-locals
+// Body: { urls: [...], source?: string }
+//
+// Discovery endpoint for "locals" — Pokkén tournaments run by organizers we
+// don't already track, surfaced by crawling a Challonge account's organized
+// AND participated-in tournaments (see harvest_participation_console.js).
+//
+// Unlike /append-harvest, this does NOT add to the import queue
+// (harvested_tournaments.txt). These come from unknown organizers, so they get
+// written to a human-review file (flagged_locals.txt) with each candidate's
+// name / date / organizer / participant count, and the same rows are returned
+// so the browser console can console.table them. Gabriel eyeballs the file,
+// then promotes the keepers into harvested_tournaments.txt himself.
+//
+// Each candidate is validated against the v1 API + Pokkén keyword list, so the
+// console crawler can over-collect links (every tournament-shaped href on a
+// profile) and let this route reject the non-Pokkén / dead ones.
+router.post('/flag-locals', requireAdmin, async (req, res) => {
+  const fs   = require('fs');
+  const path = require('path');
+  const { urls = [], source = 'unknown' } = req.body;
+
+  if (!Array.isArray(urls) || urls.length === 0) {
+    return res.status(400).json({ error: 'urls array is required' });
+  }
+
+  const harvestPath = path.join(__dirname, '../../../harvested_tournaments.txt');
+  const flaggedPath = path.join(__dirname, '../../../flagged_locals.txt');
+
+  // Pull bare Challonge slugs out of a newline-delimited file of URLs.
+  const readFileSlugs = (file) => {
+    if (!fs.existsSync(file)) return [];
+    return fs.readFileSync(file, 'utf8')
+      .split('\n').map(l => l.trim()).filter(Boolean)
+      .filter(l => l.startsWith('http') && !l.includes('start.gg'))
+      .map(l => challonge.extractSlugFromUrl(l))
+      .filter(Boolean);
+  };
+
+  // Known = already-queued (harvest file) + already-imported (DB) +
+  // already-flagged (review file, so re-runs across many usernames no-op).
+  const fileSlugs    = new Set(readFileSlugs(harvestPath));
+  const flaggedSlugs = new Set(readFileSlugs(flaggedPath));
+  let dbSlugs = new Set();
+  try {
+    const { rows } = await db.query("SELECT challonge_id FROM tournaments WHERE challonge_id IS NOT NULL");
+    dbSlugs = new Set(rows.map(r => r.challonge_id));
+  } catch (err) {
+    console.warn(`flag-locals: DB lookup failed (${err.message})`);
+  }
+  const known = new Set([...fileSlugs, ...dbSlugs, ...flaggedSlugs]);
+
+  // Map URLs -> { url, slug, org }, dedupe within the batch, drop known slugs.
+  const seen = new Set();
+  const candidates = [];
+  for (const raw of urls) {
+    const url = String(raw).trim();
+    if (!url || url.includes('start.gg')) continue;
+    const slug = challonge.extractSlugFromUrl(url);
+    if (!slug || known.has(slug) || seen.has(slug)) continue;
+    seen.add(slug);
+    candidates.push({ url, slug, org: challonge.extractOrganizerFromUrl(url) });
+  }
+
+  if (candidates.length === 0) {
+    return res.json({ flagged: 0, skipped_known: urls.length, rejected: 0, candidates: [] });
+  }
+
+  // Validate each via the v1 API. Bare slug works for most; org-namespaced /
+  // subdomain tournaments can 404 on the bare slug, so retry "<org>-<slug>".
+  const flagged = [];
+  let rejected = 0;
+  for (const c of candidates) {
+    let meta = null;
+    try {
+      const data = await challonge.getTournament(c.slug);
+      meta = data?.tournament || data;
+    } catch (err) {
+      if (err.response?.status === 404 && c.org) {
+        try {
+          const data = await challonge.getTournament(`${c.org}-${c.slug}`);
+          meta = data?.tournament || data;
+        } catch (_) { /* dead slug — fall through to reject */ }
+      }
+    }
+
+    if (meta && challonge.looksLikePokkenTournament(meta)) {
+      const rawDate = meta.started_at || meta.completed_at || meta.created_at || '';
+      flagged.push({
+        url:          meta.full_challonge_url || c.url,
+        slug:         c.slug,
+        organizer:    c.org,
+        name:         meta.name || null,
+        game:         meta.game_name || null,
+        date:         String(rawDate).slice(0, 10) || null,
+        participants: meta.participants_count ?? null,
+      });
+    } else {
+      rejected++;
+    }
+    await new Promise(r => setTimeout(r, 150)); // politeness between v1 calls
+  }
+
+  if (flagged.length === 0) {
+    return res.json({
+      flagged: 0,
+      skipped_known: urls.length - candidates.length,
+      rejected,
+      candidates: [],
+    });
+  }
+
+  // Append to the review file. One comment line of metadata per candidate so
+  // the file is skimmable, followed by the bare URL so keepers can be copied
+  // straight into harvested_tournaments.txt.
+  const existing = fs.existsSync(flaggedPath) ? fs.readFileSync(flaggedPath, 'utf8') : '';
+  const lines = [];
+  if (existing && !existing.endsWith('\n')) lines.push('');
+  lines.push(`# Flagged via flag-locals on ${new Date().toISOString().slice(0, 10)} (source: ${source})`);
+  for (const f of flagged) {
+    lines.push(`#   ${f.name || '?'} | ${f.date || '?'} | org:${f.organizer || '-'} | ${f.participants ?? '?'}p | game:${f.game || '?'}`);
+    lines.push(f.url);
+  }
+  lines.push('');
+  fs.appendFileSync(flaggedPath, lines.join('\n'));
+
+  res.json({
+    flagged: flagged.length,
+    skipped_known: urls.length - candidates.length,
+    rejected,
+    candidates: flagged,
+  });
+});
+
 // ── Update a single player's stats after a tournament import ─────────────────
 async function updatePlayerStats(playerId, tournament, playerMap, matchList, tournamentWinnerId, totalParticipants) {
   const series = tournament.series;

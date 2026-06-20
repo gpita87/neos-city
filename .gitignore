@@ -84,6 +84,14 @@ coverage/
 backups/
 
 # ========================================================================
+# Local-discovery review file (created by /flag-locals via
+# harvest_participation_console.js). Candidate "locals" awaiting Gabriel's
+# review before promotion into harvested_tournaments.txt — generated output,
+# never committed.
+# ========================================================================
+flagged_locals.txt
+
+# ========================================================================
 # Misc local-only files
 # ========================================================================
 .cache/
