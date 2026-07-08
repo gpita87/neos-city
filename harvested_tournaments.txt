@@ -579,3 +579,12 @@ https://challonge.com/rickythe3rd/fizy3udu
 https://www.start.gg/tournament/heaven-s-arena-33/events/heaven-s-arena-33/brackets/2302881/3332735
 # Appended via harvest_console.js on 2026-06-13 (organizer: DCM / devlinhartfgc)
 https://challonge.com/devlinhartfgc/dcmp37
+# Appended via harvest_console.js on 2026-06-26 (organizer: RTG NA / shean96)
+https://challonge.com/shean96/m8k4sv45
+# Appended by harvest_startgg.js on 2026-06-26 (last 90d)
+# 2026-06-23 - Heaven's Arena #34 — Heaven's Arena #34
+https://www.start.gg/tournament/heaven-s-arena-34/events/heaven-s-arena-34/brackets/2315120/3349768
+# Appended via harvest_console.js on 2026-07-07 (organizer: RTG NA / shean96)
+https://challonge.com/shean96/qdtxibb4
+# Appended via harvest_console.js on 2026-07-07 (organizer: RTG NA / rigz_)
+https://challonge.com/rigz_/m0qw4klk
