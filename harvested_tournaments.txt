@@ -588,3 +588,5 @@ https://www.start.gg/tournament/heaven-s-arena-34/events/heaven-s-arena-34/brack
 https://challonge.com/shean96/qdtxibb4
 # Appended via harvest_console.js on 2026-07-07 (organizer: RTG NA / rigz_)
 https://challonge.com/rigz_/m0qw4klk
+# Appended via harvest_console.js on 2026-07-12 (organizer: DCM / devlinhartfgc)
+https://challonge.com/devlinhartfgc/dcmp38
