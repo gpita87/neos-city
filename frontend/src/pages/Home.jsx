@@ -84,9 +84,9 @@ function TournamentCard({ tournament }) {
             <span className={`px-2 py-0.5 rounded border text-[10px] font-display tracking-wider shrink-0 ${series.badge}`}>
               {series.name}
             </span>
-            {isPartial && (
+            {isPartial && partialTopN > 0 && (
               <span className="px-2 py-0.5 rounded border text-[10px] font-display tracking-wider bg-amber-900/40 text-amber-300 border-amber-700/50 shrink-0">
-                🔒 TOP {partialTopN || 'N'} UNREVEALED
+                🔒 TOP {partialTopN} UNREVEALED
               </span>
             )}
             <Link

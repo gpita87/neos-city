@@ -1460,9 +1460,30 @@ router.post('/batch-import-startgg', requireAdmin, async (req, res) => {
 function deriveChallongePartialPlacements(matchList, playerMap, tournamentType) {
   const isDE = (tournamentType || '').toLowerCase().includes('double');
   const elimThreshold = isDE ? 2 : 1;
+  const normalize = (m) => m.attributes || m.match || m;
 
+  // The naive interleave (W_n → 2n-1, L_n → 2n) assumes winners round n and
+  // losers round n happen at the same time. That holds in the MIDDLE of the
+  // bracket but breaks at the top: the losers bracket has ~2× the rounds of the
+  // winners bracket, so the losers final sits at a high round number (large
+  // weight) while the grand finals — which happens chronologically AFTER it —
+  // carries a small winners-side round number. Under the naive formula the
+  // grand-finals loser (the true runner-up, whose only eliminating loss is a
+  // positive-round match) sinks BELOW losers-bracket finishers. In double elim
+  // the grand finals is the only positive round that is ever an *eliminating*
+  // loss (every other winners loss just drops you to losers), so we single out
+  // the deciding round — the deepest positive round with a completed match —
+  // and weight losses there above every losers round.
+  let gfRound = 0;
+  for (const m of matchList) {
+    const a = normalize(m);
+    if (a.state === 'complete' && a.round != null && a.round > gfRound) gfRound = a.round;
+  }
+  const GF_WEIGHT_BASE = 100000; // safely above any 2×|round|
   const weightOf = (round) =>
-    round > 0 ? round * 2 - 1 : Math.abs(round) * 2;
+    round > 0
+      ? (round === gfRound ? GF_WEIGHT_BASE + round : round * 2 - 1)
+      : Math.abs(round) * 2;
 
   const dbIdByChalId = new Map();
   for (const [chalId, p] of playerMap) dbIdByChalId.set(chalId, p.id);
@@ -1500,9 +1521,29 @@ function deriveChallongePartialPlacements(matchList, playerMap, tournamentType) 
 
   eliminated.sort((a, b) => b.weight - a.weight);
   const result = new Map();
-  for (const id of aliveIds) result.set(id, null);
 
-  let rank = aliveIds.length + 1;
+  // A match is only genuinely pending if both slots are filled — an unplayed
+  // grand-finals-reset placeholder (no players assigned) is not a real match.
+  const genuinePending = matchList.some(m => {
+    const a = normalize(m);
+    return a.state !== 'complete' && a.player1_id != null && a.player2_id != null;
+  });
+
+  // When the whole bracket has been played but the organizer hasn't clicked
+  // "Finalize", exactly one player survives with fewer than elimThreshold
+  // losses — but they aren't "unrevealed", they won every match. Awarding them
+  // 1st avoids the nonsensical "TOP 1 UNREVEALED" banner (there's nobody left
+  // to reveal). Genuine mid-reveal holds still have ≥2 survivors and keep them
+  // at final_rank = NULL.
+  let rank;
+  if (aliveIds.length === 1 && !genuinePending) {
+    result.set(aliveIds[0], 1);
+    rank = 2;
+  } else {
+    for (const id of aliveIds) result.set(id, null);
+    rank = aliveIds.length + 1;
+  }
+
   let i = 0;
   while (i < eliminated.length) {
     const w = eliminated[i].weight;

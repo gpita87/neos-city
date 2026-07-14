@@ -152,10 +152,12 @@ export default function TournamentDetail() {
       </div>
 
       {/* ── Partial-bracket banner ────────────────────────────────────────── */}
-      {isPartial && (
+      {/* Only when players are actually held back. A played-but-unfinalized
+          bracket has its champion revealed (partialTopN === 0), so no banner. */}
+      {isPartial && partialTopN > 0 && (
         <div className="rounded-xl border border-amber-500/40 bg-amber-500/10 px-4 py-3 text-sm text-amber-200">
           <span className="font-display tracking-wider text-amber-300">
-            🔒 TOP {partialTopN || 'N'} UNREVEALED
+            🔒 TOP {partialTopN} UNREVEALED
           </span>
           <span className="ml-2 text-amber-200/80">
             The organizer hasn't streamed the final results yet — placements below {partialTopN ? partialTopN : ''} are derived from the bracket.
