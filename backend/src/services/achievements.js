@@ -119,6 +119,9 @@ function detectOfflineTier(name = '') {
   // Promoted 2026-06-18 (offline-CSV reconciliation): Combo Breaker is a
   // premier FGC major; both the 2018 and 2019 Pokkén side events qualify.
   if (n.includes('COMBO BREAKER'))                                     return SERIES.MAJOR;
+  // Promoted 2026-06-19 (start.gg import): both "Battle at Lake Valor" and
+  // "Battle at Lake Valor 2" share the prefix, so the substring covers both.
+  if (n.includes('BATTLE AT LAKE VALOR'))                              return SERIES.MAJOR;
 
   if (n.includes('WINTER BRAWL'))                                      return SERIES.REGIONAL;
   if (n.includes('SOCAL REGIONALS'))                                   return SERIES.REGIONAL;
@@ -138,6 +141,9 @@ function detectOfflineTier(name = '') {
   if (n.includes('CANADA CUP'))                                        return SERIES.REGIONAL;
   if (n.includes('ALL IN TOGETHER'))                                   return SERIES.REGIONAL;
   if (n.includes('FIGHTCLUB CHAMPIONSHIP'))                            return SERIES.REGIONAL;
+  // Added 2026-06-19 (start.gg import): covers "Nietplay Tournament",
+  // "Nietplay 2: Summer Edition", and their "— … 3v3" side-bracket rows.
+  if (n.includes('NIETPLAY'))                                          return SERIES.REGIONAL;
   // Texas Showdown removed 2026-05-08 — falls through to 'other'.
   return SERIES.OTHER;
 }
