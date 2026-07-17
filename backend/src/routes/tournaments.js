@@ -115,6 +115,63 @@ router.get('/recent-placements', async (req, res) => {
   }
 });
 
+// GET /api/tournaments/pending-challonge-urls
+// Reads harvested_tournaments.txt, keeps only Challonge URLs, and drops the
+// ones the DB already has in finalized form (same skip rule as /batch-import:
+// NULL completed_at and is_partial=TRUE rows stay eligible for re-import).
+// Used by challonge_import_console.js so the browser script never needs a
+// hardcoded URL list — the harvested file + DB stay the single source of truth.
+router.get('/pending-challonge-urls', requireAdmin, async (req, res) => {
+  const fs   = require('fs');
+  const path = require('path');
+  const harvestPath = path.join(__dirname, '../../../harvested_tournaments.txt');
+
+  try {
+    if (!fs.existsSync(harvestPath)) {
+      return res.status(500).json({ error: 'harvested_tournaments.txt not found' });
+    }
+
+    // Parse each Challonge URL into { url, org, slug }. Two org forms exist:
+    //   https://challonge.com/<org>/<slug>   (path form — 404s on the web)
+    //   https://<org>.challonge.com/<slug>   (subdomain form)
+    // Root-namespace events are just https://challonge.com/<slug>.
+    const candidates = [];
+    const seen = new Set();
+    for (const raw of fs.readFileSync(harvestPath, 'utf8').split('\n')) {
+      const line = raw.trim();
+      if (!line || line.startsWith('#') || line.includes('start.gg')) continue;
+      const m = line.match(/^https?:\/\/(?:([a-z0-9_-]+)\.)?challonge\.com\/([^\s#?]+)/i);
+      if (!m) continue;
+      const sub = (m[1] || '').toLowerCase() === 'www' ? null : (m[1] || null);
+      const parts = m[2].split('/').filter(Boolean);
+      const slug = parts[parts.length - 1];
+      const org  = sub || (parts.length >= 2 ? parts[0].toLowerCase() : null);
+      if (!slug || seen.has(`${org || ''}/${slug}`)) continue;
+      seen.add(`${org || ''}/${slug}`);
+      candidates.push({ url: line, org, slug });
+    }
+
+    const { rows: existing } = await db.query(
+      `SELECT challonge_id FROM tournaments
+        WHERE challonge_id IS NOT NULL
+          AND completed_at IS NOT NULL
+          AND COALESCE(is_partial, FALSE) = FALSE`
+    );
+    const done = new Set(existing.map(r => r.challonge_id.toLowerCase()));
+
+    // A candidate is pending unless the DB has it under either slug form the
+    // importer could have stored: bare slug or the v1-style "<org>-<slug>".
+    const pending = candidates.filter(c =>
+      !done.has(c.slug.toLowerCase()) &&
+      !(c.org && done.has(`${c.org}-${c.slug}`.toLowerCase()))
+    );
+
+    res.json({ total: candidates.length, pending });
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
 // GET /api/tournaments/:id
 router.get('/:id', async (req, res) => {
   try {
@@ -2037,6 +2094,342 @@ router.post('/batch-import-tonamel', requireAdmin, async (req, res) => {
 });
 
 // ══════════════════════════════════════════════════════════════════════════════
+// Challonge scraped import (browser console — no API key, no v1 quota)
+//
+// challonge_import_console.js runs on a challonge.com tab, same-origin fetches
+// each public bracket page, and extracts the SPA store Challonge server-renders
+// into every page (window._initialStoreState.TournamentStore — full match list
+// with real match ids, rounds, scores, winners) plus the server-rendered
+// /standings table (authoritative final ranks + real Challonge usernames).
+// The parsed payload lands here and is processed the way importOne() processes
+// v1 API data.
+//
+// Idempotency: challonge_id carries the same value the v1 importer would store
+// (bare slug for root-namespace events, "<org>-<slug>" for community-subdomain
+// events), and matches carry the real Challonge match ids, so the tournament
+// and match upserts both dedupe cleanly against past and future v1 imports.
+// ══════════════════════════════════════════════════════════════════════════════
+
+/**
+ * @param {object} payload
+ *   challonge_id       - v1-equivalent slug (root slug, or "<org>-<slug>")
+ *   url                - canonical public URL of the bracket page
+ *   name               - tournament display name (page h1)
+ *   tournament_type    - e.g. 'double elimination' (from the SPA store)
+ *   state              - Challonge state ('complete' | 'awaiting_review' | …)
+ *   is_team            - store flag; team events are rejected
+ *   participants_count - from the page banner ("Players N")
+ *   date               - ISO date string (page start time)
+ *   matches            - [{ id, round, state, group, winner_id, score1, score2,
+ *                          player1: {id, name, avatar}, player2: {…} }]
+ *                        round < 0 = losers bracket; group != null = group stage
+ *   standings          - [{ rank, name, username }] from /standings (may be [])
+ *   profiles           - [{ name, username }] /users/ links found on the
+ *                        bracket page itself (secondary username source)
+ */
+async function importOneChallongeScraped(payload) {
+  const {
+    challonge_id, url, name, tournament_type, state,
+    participants_count, date, matches = [], standings = [],
+  } = payload;
+
+  if (!challonge_id) throw new Error('challonge_id is required');
+  if (!name) throw new Error('name is required');
+  if (payload.is_team) throw new Error('team tournaments are not supported (per-player records would be wrong)');
+
+  const isMatchUsable = (m) =>
+    m && m.player1 && m.player1.id != null && m.player2 && m.player2.id != null;
+  const completeMatches = matches.filter(m =>
+    isMatchUsable(m) && m.state === 'complete' && m.winner_id != null);
+
+  // Stub guard — same rule as importOne(): a bracket nobody played is not a
+  // tournament, and NULL-completed_at stubs poison achievement-date math.
+  if (completeMatches.length === 0) {
+    console.log(`   ⏭️  Skipped "${name}" (${challonge_id}): no completed matches`);
+    return { skipped: true, reason: 'no_completed_matches', name, challonge_id };
+  }
+
+  const series = detectSeries(challonge_id, name);
+
+  // Finalize detection. state === 'complete' means the organizer clicked
+  // "Finalize". Most old locals never got that click and sit in
+  // 'awaiting_review' forever — but when every real match is complete AND the
+  // standings page renders ranks, the result is settled, so treat it as final.
+  // (importOne can afford to stay partial and wait for a finalize re-import;
+  // there is no later pass coming for a decade-old local.)
+  const genuinePending = matches.some(m => isMatchUsable(m) && m.state !== 'complete');
+  const rankedStandings = standings.filter(s => s && s.rank != null && s.name);
+  const isFinalized = state === 'complete' || (!genuinePending && rankedStandings.length > 0);
+  const isPartial = !isFinalized;
+  if (isPartial) {
+    console.log(`   ⚠️  Partial scraped import "${name}" (${challonge_id}): bracket not settled yet`);
+  }
+
+  const completedAt = date ? new Date(date).toISOString() : null;
+
+  // ── Upsert tournament (same conflict rule as importOne) ────────────────────
+  const { rows: [tournament] } = await db.query(
+    `INSERT INTO tournaments
+       (challonge_id, challonge_url, name, series, tournament_type, participants_count, started_at, completed_at, is_partial)
+     VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)
+     ON CONFLICT (challonge_id) DO UPDATE SET
+       name = EXCLUDED.name,
+       series = EXCLUDED.series,
+       participants_count = EXCLUDED.participants_count,
+       completed_at = EXCLUDED.completed_at,
+       is_partial = EXCLUDED.is_partial
+     RETURNING *`,
+    [
+      challonge_id,
+      url || `https://challonge.com/${challonge_id}`,
+      name,
+      series,
+      tournament_type || null,
+      participants_count || null,
+      completedAt,
+      completedAt,
+      isPartial,
+    ]
+  );
+
+  // ── Upsert players ──────────────────────────────────────────────────────────
+  // The store identifies players by display name + a numeric id; the standings
+  // table supplies the real Challonge username where the player has an account.
+  // Key derivation mirrors importOne(): username slug when known, otherwise the
+  // lowercased display name (guest entries).
+  const usernameByName = new Map();
+  for (const s of standings) {
+    if (s && s.name && s.username) usernameByName.set(s.name, String(s.username));
+  }
+  // Secondary source: /users/ profile links scraped off the bracket page
+  // itself. Round-robin standings tables carry no username column, so for RR
+  // events this is the only thing keeping "CC | Savvy" from forking a
+  // duplicate of the existing savvy_ player row.
+  for (const p of (payload.profiles || [])) {
+    if (p && p.name && p.username && !usernameByName.has(p.name)) {
+      usernameByName.set(p.name, String(p.username));
+    }
+  }
+
+  const SERIES_REGION = { rtg_na: 'NA', rtg_eu: 'EU' };
+  const autoRegion = SERIES_REGION[series] || null;
+
+  // Collect every distinct participant: match players first (carry avatar +
+  // store ids), then standings-only entries (ranked participants with no
+  // usable match, e.g. a bye straight into a forfeit).
+  const byName = new Map(); // display name → { chalIds: Set, avatar }
+  for (const m of matches) {
+    if (!isMatchUsable(m)) continue;
+    for (const p of [m.player1, m.player2]) {
+      const entry = byName.get(p.name) || { chalIds: new Set(), avatar: null };
+      entry.chalIds.add(String(p.id));
+      if (!entry.avatar && p.avatar) entry.avatar = p.avatar;
+      byName.set(p.name, entry);
+    }
+  }
+  for (const s of rankedStandings) {
+    if (!byName.has(s.name)) byName.set(s.name, { chalIds: new Set(), avatar: null });
+  }
+
+  const playerMap = new Map();     // store player id (string) → player row
+  const playerByName = new Map();  // display name → player row
+
+  for (const [displayName, entry] of byName) {
+    const profileSlugRaw = usernameByName.get(displayName) || null;
+    let username = (profileSlugRaw || displayName).toLowerCase();
+    username = await resolveAlias(username);
+    const profileSlug = profileSlugRaw
+      ? await resolveAlias(profileSlugRaw.toLowerCase())
+      : null;
+
+    const { rows: [player] } = await db.query(
+      `INSERT INTO players (challonge_username, display_name, avatar_url, challonge_profile_slug, region)
+       VALUES ($1, $2, $3, $4, $5)
+       ON CONFLICT (challonge_username) DO UPDATE SET
+         display_name = CASE WHEN players.display_name_locked
+                             THEN players.display_name
+                             ELSE EXCLUDED.display_name END,
+         avatar_url = COALESCE(EXCLUDED.avatar_url, players.avatar_url),
+         challonge_profile_slug = COALESCE(EXCLUDED.challonge_profile_slug, players.challonge_profile_slug),
+         region = COALESCE(players.region, EXCLUDED.region)
+       RETURNING *`,
+      [username, displayName, entry.avatar || null, profileSlug, autoRegion]
+    );
+
+    playerByName.set(displayName, player);
+    for (const chalId of entry.chalIds) playerMap.set(chalId, player);
+  }
+
+  const uniquePlayers = [...new Map([...playerByName.values()].map(p => [p.id, p])).values()];
+  const totalParticipants = participants_count || uniquePlayers.length;
+
+  // ── Order matches for insert + in-flight ELO ────────────────────────────────
+  // Group-stage matches run before the final stage; within the final stage,
+  // winners/losers rounds interleave (W1 L1 W2 L2 …) with the grand finals
+  // last — the same weighting deriveChallongePartialPlacements() uses.
+  const mainMatches  = completeMatches.filter(m => m.group == null);
+  const groupMatches = completeMatches.filter(m => m.group != null);
+  let gfRound = 0;
+  for (const m of mainMatches) if (m.round > gfRound) gfRound = m.round;
+  const weightOf = (m) => m.round > 0
+    ? (m.round === gfRound ? 100000 + m.round : m.round * 2 - 1)
+    : Math.abs(m.round) * 2;
+  const orderedMatches = [
+    ...groupMatches.sort((a, b) => (a.group - b.group) || (a.round - b.round)),
+    ...mainMatches.sort((a, b) => weightOf(a) - weightOf(b)),
+  ];
+
+  // ── Upsert matches ──────────────────────────────────────────────────────────
+  let importedMatches = 0;
+
+  for (const m of orderedMatches) {
+    const p1 = playerMap.get(String(m.player1.id));
+    const p2 = playerMap.get(String(m.player2.id));
+    const winner = playerMap.get(String(m.winner_id));
+    if (!p1 || !p2 || !winner) continue;
+
+    const section = m.group != null ? 'group' : (m.round > 0 ? 'winners' : 'losers');
+    const { rows: [inserted] } = await db.query(
+      `INSERT INTO matches
+         (tournament_id, challonge_match_id, player1_id, player2_id, winner_id,
+          player1_score, player2_score, round, bracket_section, state, played_at)
+       VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,'complete',$10)
+       ON CONFLICT (tournament_id, challonge_match_id) DO NOTHING
+       RETURNING id`,
+      [tournament.id, String(m.id), p1.id, p2.id, winner.id,
+       Number.isFinite(m.score1) ? m.score1 : null,
+       Number.isFinite(m.score2) ? m.score2 : null,
+       m.round, section, completedAt]
+    );
+    if (inserted) importedMatches++;
+  }
+
+  // ── Placement ranks ─────────────────────────────────────────────────────────
+  // Prefer Challonge's own standings ranks. Fall back to deriving from the
+  // match graph (same helper importOne's partial path uses) — group-stage
+  // matches are excluded from derivation because a group loss isn't an
+  // eliminating loss.
+  const rankByPlayerId = new Map();
+  if (rankedStandings.length > 0) {
+    for (const s of rankedStandings) {
+      const player = playerByName.get(s.name);
+      const rank = parseInt(s.rank);
+      if (player && Number.isFinite(rank)) rankByPlayerId.set(player.id, rank);
+    }
+  } else {
+    const v1Shaped = mainMatches.map(m => ({
+      state: 'complete',
+      round: m.round,
+      player1_id: String(m.player1.id),
+      player2_id: String(m.player2.id),
+      winner_id: String(m.winner_id),
+    }));
+    const derived = deriveChallongePartialPlacements(v1Shaped, playerMap, tournament_type);
+    for (const [playerId, rank] of derived) rankByPlayerId.set(playerId, rank);
+  }
+
+  // ── ELO computation (only when new matches were inserted) ───────────────────
+  if (importedMatches > 0) {
+    const eloMap = new Map(), gamesMap = new Map();
+    for (const p of uniquePlayers) {
+      eloMap.set(p.id, p.elo_rating || 1200);
+      gamesMap.set(p.id, p.games_played || 0);
+    }
+
+    for (const m of orderedMatches) {
+      const p1 = playerMap.get(String(m.player1.id));
+      const p2 = playerMap.get(String(m.player2.id));
+      if (!p1 || !p2) continue;
+
+      const pAData = { elo: eloMap.get(p1.id) || 1200, games_played: gamesMap.get(p1.id) || 0 };
+      const pBData = { elo: eloMap.get(p2.id) || 1200, games_played: gamesMap.get(p2.id) || 0 };
+      const result = String(m.winner_id) === String(m.player1.id) ? 1 : 0;
+      const { playerA, playerB } = calculateNewRatings(pAData, pBData, result);
+
+      eloMap.set(p1.id, playerA.newElo);
+      eloMap.set(p2.id, playerB.newElo);
+      gamesMap.set(p1.id, (gamesMap.get(p1.id) || 0) + 1);
+      gamesMap.set(p2.id, (gamesMap.get(p2.id) || 0) + 1);
+    }
+
+    // Placement bonuses (skipped for partial imports, same as importOne)
+    if (!isPartial) {
+      for (const p of uniquePlayers) {
+        const rank = rankByPlayerId.get(p.id);
+        if (!rank) continue;
+        const bonus = placementBonus(rank, totalParticipants);
+        if (bonus > 0 && eloMap.has(p.id)) eloMap.set(p.id, eloMap.get(p.id) + bonus);
+      }
+    }
+
+    // Persist ELO + history
+    for (const [playerId, newElo] of eloMap) {
+      const { rows: [cur] } = await db.query('SELECT elo_rating FROM players WHERE id = $1', [playerId]);
+      const oldElo = cur?.elo_rating || 1200;
+      await db.query(
+        `UPDATE players SET elo_rating = $2, peak_elo = GREATEST(peak_elo, $2) WHERE id = $1`,
+        [playerId, newElo]
+      );
+      if (newElo !== oldElo) {
+        await db.query(
+          `INSERT INTO elo_history (player_id, old_elo, new_elo, delta, reason)
+           VALUES ($1, $2, $3, $4, $5)`,
+          [playerId, oldElo, newElo, newElo - oldElo, `Tournament: ${tournament.name}`]
+        );
+      }
+    }
+  }
+
+  // ── Tournament placements ───────────────────────────────────────────────────
+  for (const player of uniquePlayers) {
+    const rank = rankByPlayerId.has(player.id) ? rankByPlayerId.get(player.id) : null;
+    await db.query(
+      `INSERT INTO tournament_placements (tournament_id, player_id, final_rank)
+       VALUES ($1, $2, $3)
+       ON CONFLICT (tournament_id, player_id) DO UPDATE SET
+         final_rank = EXCLUDED.final_rank`,
+      [tournament.id, player.id, rank]
+    );
+  }
+
+  // ── Player stats + achievements (skipped for partial imports) ───────────────
+  if (!isPartial) {
+    const tournamentWinnerId =
+      [...rankByPlayerId.entries()].find(([, r]) => r === 1)?.[0] || null;
+    for (const player of uniquePlayers) {
+      await updatePlayerStats(player.id, tournament, playerMap, matches, tournamentWinnerId, totalParticipants);
+    }
+  }
+
+  return {
+    success: true,
+    tournament: name,
+    challonge_id,
+    series,
+    participants: totalParticipants,
+    matches_imported: importedMatches,
+    partial: isPartial,
+    placements_source: rankedStandings.length > 0 ? 'standings' : 'derived',
+  };
+}
+
+// POST /api/tournaments/import-challonge-scraped — one scraped bracket page.
+// Body: the importOneChallongeScraped() payload documented above.
+// No batch variant on purpose: express.json()'s default 100kb body cap can't
+// hold dozens of full match lists, and the console script is the batch driver
+// anyway (it loops single POSTs with progress + a retry queue, exactly like
+// tonamel_import_console.js).
+router.post('/import-challonge-scraped', requireAdmin, async (req, res) => {
+  try {
+    const result = await importOneChallongeScraped(req.body);
+    res.json(result);
+  } catch (err) {
+    console.error('Challonge scraped import error:', err.message);
+    res.status(500).json({ error: err.message });
+  }
+});
+
+// ══════════════════════════════════════════════════════════════════════════════
 // Offline (Liquipedia) import
 // Stores real-world offline tournament results.
 // No match data — only 1st and 2nd place are recorded.
@@ -3037,6 +3430,7 @@ module.exports.importOne                    = importOne;
 module.exports.importOneStartgg             = importOneStartgg;
 module.exports.importStartggEvent           = importStartggEvent;
 module.exports.importOneTonamel             = importOneTonamel;
+module.exports.importOneChallongeScraped    = importOneChallongeScraped;
 module.exports.importOneOffline             = importOneOffline;
 module.exports.importOneLiquipediaBracket   = importOneLiquipediaBracket;
 module.exports.importOneLiquipediaPlacements = importOneLiquipediaPlacements;

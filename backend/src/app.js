@@ -35,6 +35,11 @@ const corsOrigins = [
   'https://liquipedia.net',   // needed for liquipedia_import_console.js
   'https://tonamel.com',      // needed for tonamel_import_console.js
   'https://challonge.com',    // needed for harvest_console.js
+  // Community/organizer events render only on their own subdomain
+  // (e.g. https://ffc.challonge.com), so challonge_import_console.js may run
+  // from any *.challonge.com origin. The `cors` package (and socket.io) accept
+  // RegExp entries in the origin array.
+  /^https:\/\/[a-z0-9_-]+\.challonge\.com$/i,
 ].filter(Boolean);
 app.use(cors({ origin: corsOrigins }));
 app.use(express.json());

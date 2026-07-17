@@ -307,6 +307,43 @@ Backend uses `nodemon` for hot reload. Changes to `.js` files in `backend/src/` 
 
 ## ⚡ NEXT AGENT: What to Do First
 
+### Current state (as of Jul 17 2026 — challonge_import_console.js BUILT; run the import)
+
+The browser-console bulk importer decided on Jul 16 is built (worktree
+`agent/challonge-scraper`). It replaces the quota-dead v1 path for the 94
+curated locals + the Jul-17 FFC backlog. **Do NOT run `pull_new.js` /
+`batch_import.js` for these — v1 is still 429 until ~mid-Aug.**
+
+How it works: every public Challonge bracket page server-renders the full SPA
+store (`window._initialStoreState['TournamentStore']` — real match ids, rounds,
+scores, winners) and `/{slug}/standings` server-renders Challonge's own final
+ranks + real usernames, even for never-finalized events. The console script
+(`challonge_import_console.js`) fetches both same-origin, asks the backend
+which harvested URLs are pending (`GET /api/tournaments/pending-challonge-urls`),
+sorts chronologically, and POSTs each payload to
+`POST /api/tournaments/import-challonge-scraped` (`importOneChallongeScraped()`
+in `tournaments.js`, mirroring `importOne()`; dedupes on the same
+`challonge_id` + real match ids the v1 importer uses). CORS now allows all
+`*.challonge.com` origins for the rare community-subdomain event (stored as
+`<org>-<slug>`, the v1-equivalent slug; the script prints which URLs need a
+subdomain-tab re-run — org URLs like `rickythe3rd.challonge.com/FFC250` just
+redirect to root and import normally).
+
+**The run (backend must be up):**
+```powershell
+cd C:\Users\pitag\Documents\neos-city
+node prep_console.js challonge_import_console.js
+# open https://challonge.com/tournaments → F12 → paste → Enter (~5 min)
+node recalculate_elo.js
+node check_import_status.js
+```
+Expect online count 632 → ~726. Known clean skips: `vf9go0zc`, `Tdome1`
+(1-player, no bracket store). Spot-check a Burst Attack! (round robin) and a
+`PokkenWeeklyReturn*` on the site — series should show as none/local.
+Follow-up after import: region tagging for the new locals (manual SQL,
+Gabriel's call). If a POST 500s, the payload stays queued in the browser —
+fix backend, then run `_challongePhase2()` in the same console.
+
 ### Current state (as of Jul 17 2026 — Live Arena M1 shipped; M2 is the next milestone)
 
 **NOTE:** the Jul 16 TOP PRIORITY below (run `pull_new.js` for the 94 locals) is
