@@ -2,13 +2,15 @@ import { useCallback, useEffect, useRef, useState } from 'react';
 import { Link, useParams } from 'react-router-dom';
 import {
   getArenaTournament, registerArena, withdrawArena, pauseArena, resumeArena,
-  reportArenaMatch, resolveArenaMatch, getArenaMatchChat,
+  reportArenaMatch, resolveArenaMatch, getArenaMatchChat, rateArenaConnection,
 } from '../lib/api';
 import { useAuth } from '../contexts/AuthContext';
 import { useArenaSocket } from '../hooks/useArenaSocket';
 import { ARENA_STATUS_META } from './Arena';
 import IngameNameEditor from '../components/arena/IngameNameEditor';
 import { formatGroupId } from '../lib/groupFormat';
+
+const REGION_FLAGS = { NA: '🇺🇸', EU: '🇪🇺', JP: '🇯🇵' };
 
 // Countdown driven by SERVER time: `offsetMs` is (server_now - client now),
 // captured whenever a payload carrying server_now arrives, so a wrong local
@@ -206,7 +208,14 @@ function CurrentMatchPanel({ match, myUserId, onOpenReport, onOpenResolve, isAdm
           ? <img src={opponent.avatar_url} alt="" className="w-10 h-10 rounded-full object-cover" />
           : <span className="w-10 h-10 rounded-full bg-cyan-500/20 flex items-center justify-center">⚔️</span>}
         <div>
-          <p className="text-slate-200">vs <span className="font-medium">{opponentName}</span></p>
+          <p className="text-slate-200">
+            vs <span className="font-medium">{opponentName}</span>
+            {opponent?.region && (
+              <span className="ml-2 text-xs text-slate-400 border border-[#1a2744] rounded px-1.5 py-0.5">
+                {REGION_FLAGS[opponent.region] || ''} {opponent.region}
+              </span>
+            )}
+          </p>
           <p className="text-sm text-cyan-300">
             In game, look for: <span className="font-semibold">{opponent?.ingame_name || opponentName}</span>
             {!opponent?.ingame_name && <span className="text-xs text-slate-500"> (no in-game name on file — using display name)</span>}
@@ -343,6 +352,58 @@ function CurrentMatchPanel({ match, myUserId, onOpenReport, onOpenResolve, isAdm
   );
 }
 
+// Post-match connection quality prompt (1–5). Renders off me.unrated_match —
+// the user's latest confirmed match with no rating from them — because the
+// CurrentMatchPanel only exists for OPEN matches and vanishes on confirm.
+// Dismiss is client-side state; the prompt returns on reload until rated or
+// dismissed again (acceptable v1).
+function ConnectionRatingPrompt({ match, onRated, onDismiss }) {
+  const [busy, setBusy] = useState(false);
+  const [error, setError] = useState(null);
+
+  const rate = async (rating) => {
+    setBusy(true);
+    setError(null);
+    try {
+      await rateArenaConnection(match.id, rating);
+      onRated();
+    } catch (err) {
+      setError(err.response?.data?.error || 'Failed to save rating');
+      setBusy(false);
+    }
+  };
+
+  return (
+    <div className="bg-[#0c1425] border border-[#1a2744] rounded-xl p-5">
+      <div className="flex items-start justify-between gap-3">
+        <div>
+          <h2 className="font-display text-sm tracking-widest text-cyan-400 uppercase">Connection Check</h2>
+          <p className="mt-1 text-sm text-slate-400">
+            How was your connection vs <span className="text-slate-200 font-medium">{match.opponent_name || 'your opponent'}</span>?
+          </p>
+        </div>
+        <button onClick={onDismiss} disabled={busy} className="text-xs text-slate-500 hover:text-slate-300 shrink-0">
+          Skip
+        </button>
+      </div>
+      <div className="mt-3 flex items-center gap-2 flex-wrap">
+        {[1, 2, 3, 4, 5].map((n) => (
+          <button
+            key={n}
+            onClick={() => rate(n)}
+            disabled={busy}
+            className="w-10 h-10 rounded-lg text-sm border bg-[#050a18] border-[#1a2744] text-slate-300 hover:border-cyan-500/60 hover:text-cyan-200 disabled:opacity-50 transition-colors tabular-nums"
+          >
+            {n}
+          </button>
+        ))}
+        <span className="text-xs text-slate-600 ml-1">1 = unplayable · 5 = flawless</span>
+      </div>
+      {error && <p className="mt-2 text-sm text-red-400">{error}</p>}
+    </div>
+  );
+}
+
 // You/Opponent winner picker + 2-0 / 2-1 score picker. Doubles as the admin
 // force-resolve dialog (same body shape) via the title prop.
 function ReportResultModal({ match, myUserId, onClose, onSubmit, busy, error, title = 'Report Result' }) {
@@ -414,6 +475,8 @@ export default function ArenaTournament() {
   const [resolveBusy, setResolveBusy] = useState(false);
   const [resolveError, setResolveError] = useState(null);
   const [chatMessages, setChatMessages] = useState([]);
+  // Match ids whose connection-rating prompt the user skipped (session-local).
+  const [dismissedRatings, setDismissedRatings] = useState(() => new Set());
 
   const captureServerNow = (serverNow) => {
     if (!serverNow) return;
@@ -612,6 +675,14 @@ export default function ArenaTournament() {
           onOpenReport={() => { setReportError(null); setReportOpen(true); }}
           onOpenResolve={() => { setResolveError(null); setResolveOpen(true); }}
           chat={{ messages: chatMessages, send: (body) => sendChat(myMatchId, body), connected }}
+        />
+      )}
+
+      {me?.unrated_match && !dismissedRatings.has(me.unrated_match.id) && (
+        <ConnectionRatingPrompt
+          match={me.unrated_match}
+          onRated={load}
+          onDismiss={() => setDismissedRatings((s) => new Set(s).add(me.unrated_match.id))}
         />
       )}
 

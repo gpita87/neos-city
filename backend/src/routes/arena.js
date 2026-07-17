@@ -6,6 +6,7 @@
 //
 // M1 surface: list, detail, register/withdraw/pause/resume, admin create/edit.
 // M2 adds: match reporting, disputes, admin resolve. M3: chat history.
+// M5 adds: post-match connection ratings.
 
 const express = require('express');
 const db = require('../db');
@@ -115,7 +116,34 @@ router.get('/:id', attachUser, async (req, res) => {
           ]);
           currentMatch = { ...match, opponent: opp || null, sharedGroups, opponentGroups, reports };
         }
-        me = { participant, match: currentMatch };
+        // Most recent confirmed match still awaiting this user's connection
+        // rating — drives the post-match ConnectionRatingPrompt. Needed because
+        // `match` above only covers OPEN matches: the moment a match confirms
+        // and the client refetches, there'd be nothing to hang the prompt on.
+        // Cancelled matches are excluded — no completed set (and possibly no
+        // connection at all) to rate.
+        const { rows: [unrated] } = await db.query(
+          `SELECT m.id, m.completed_at, m.winner_user_id,
+                  opp.user_id AS opponent_user_id, opp.name AS opponent_name
+           FROM arena_matches m
+           JOIN LATERAL (
+             SELECT u.id AS user_id,
+                    COALESCE(pl.display_name, u.display_name, u.discord_username, 'Player ' || u.id) AS name
+             FROM users u LEFT JOIN players pl ON pl.id = u.player_id
+             WHERE u.id = CASE WHEN m.p1_user_id = $2 THEN m.p2_user_id ELSE m.p1_user_id END
+           ) opp ON TRUE
+           WHERE m.tournament_id = $1
+             AND (m.p1_user_id = $2 OR m.p2_user_id = $2)
+             AND m.status = 'confirmed'
+             AND NOT EXISTS (
+               SELECT 1 FROM arena_connection_reports r
+               WHERE r.match_id = m.id AND r.rater_user_id = $2
+             )
+           ORDER BY m.completed_at DESC NULLS LAST, m.id DESC
+           LIMIT 1`,
+          [id, req.user.id]
+        );
+        me = { participant, match: currentMatch, unrated_match: unrated || null };
       }
     }
 
@@ -273,6 +301,47 @@ router.post('/matches/:id/resolve', requireAdmin, async (req, res) => {
     if (err.status) return res.status(err.status).json({ error: err.message });
     console.error('[arena] resolve failed:', err.message);
     res.status(500).json({ error: 'Failed to resolve match' });
+  }
+});
+
+// ── Connection ratings ───────────────────────────────────────────────────────
+
+// POST /api/arena/matches/:id/connection  { rating }
+// Post-match connection quality, 1–5, players of the match only, once the
+// match is confirmed (cancelled sets have nothing to rate). Upsert: re-rating
+// replaces the previous value. rated_user_id = the opponent — that's the
+// aggregation key for future verified-connection badges.
+router.post('/matches/:id/connection', requireAuth, async (req, res) => {
+  const matchId = parseId(req.params.id);
+  if (!matchId) return res.status(400).json({ error: 'Invalid match id' });
+  const rating = Number((req.body || {}).rating);
+  if (!Number.isInteger(rating) || rating < 1 || rating > 5) {
+    return res.status(400).json({ error: 'rating must be an integer from 1 to 5' });
+  }
+  try {
+    const { rows: [match] } = await db.query(
+      `SELECT id, p1_user_id, p2_user_id, status FROM arena_matches WHERE id = $1`,
+      [matchId]
+    );
+    if (!match) return res.status(404).json({ error: 'Match not found' });
+    const isPlayer = match.p1_user_id === req.user.id || match.p2_user_id === req.user.id;
+    if (!isPlayer) return res.status(403).json({ error: 'Not a player in this match' });
+    if (match.status !== 'confirmed') {
+      return res.status(409).json({ error: 'Only confirmed matches can be rated' });
+    }
+    const ratedUserId = match.p1_user_id === req.user.id ? match.p2_user_id : match.p1_user_id;
+    const { rows: [report] } = await db.query(
+      `INSERT INTO arena_connection_reports (match_id, rater_user_id, rated_user_id, rating)
+       VALUES ($1, $2, $3, $4)
+       ON CONFLICT (match_id, rater_user_id) DO UPDATE
+         SET rating = EXCLUDED.rating, rated_user_id = EXCLUDED.rated_user_id
+       RETURNING *`,
+      [matchId, req.user.id, ratedUserId, rating]
+    );
+    res.json({ report });
+  } catch (err) {
+    console.error('[arena] connection rating failed:', err.message);
+    res.status(500).json({ error: 'Failed to save connection rating' });
   }
 });
 

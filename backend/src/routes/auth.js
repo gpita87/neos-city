@@ -147,8 +147,9 @@ router.get('/me', requireAuth, (req, res) => {
   res.json({ user: req.user });
 });
 
-// PATCH /api/auth/me — self-service profile fields. Currently just ingame_name
-// (the Pokkén in-game name opponents look for inside a Group); M5 adds region.
+// PATCH /api/auth/me — self-service profile fields: ingame_name (the Pokkén
+// in-game name opponents look for inside a Group) and region (self-set
+// connection region — distinct from importer-managed players.region).
 router.patch('/me', requireAuth, async (req, res) => {
   const body = req.body || {};
   const sets = [];
@@ -159,6 +160,13 @@ router.patch('/me', requireAuth, async (req, res) => {
     const name = String(body.ingame_name ?? '').trim();
     if (name.length > 40) return res.status(400).json({ error: 'ingame_name must be 40 characters or fewer' });
     push('ingame_name', name || null); // empty clears it
+  }
+  if (body.region !== undefined) {
+    const region = body.region == null || body.region === '' ? null : String(body.region).toUpperCase();
+    if (region !== null && !['NA', 'EU', 'JP'].includes(region)) {
+      return res.status(400).json({ error: 'region must be NA, EU, or JP' });
+    }
+    push('region', region); // null/'' clears it
   }
   if (!sets.length) return res.status(400).json({ error: 'Nothing to update' });
 

@@ -4,7 +4,7 @@ const db = require('../db');
 // Columns returned for req.user. Never includes password_hash.
 // token_version backs session revocation — see the `tv` check below.
 const USER_COLUMNS = `id, email, email_verified, discord_id, discord_username,
-                      google_id, display_name, ingame_name, avatar_url, player_id, is_admin, token_version`;
+                      google_id, display_name, ingame_name, region, avatar_url, player_id, is_admin, token_version`;
 
 // A session token is only valid while its `tv` claim matches the user's current
 // token_version. Tokens minted before this column existed carry no `tv` claim;

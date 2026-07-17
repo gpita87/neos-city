@@ -114,6 +114,9 @@ export const resolveArenaMatch = (matchId, data) => api.post(`/arena/matches/${m
 // Per-match chat history (players in the match + admins). Live messages arrive
 // over the socket; this restores the thread on reload/reconnect.
 export const getArenaMatchChat = (matchId) => api.get(`/arena/matches/${matchId}/chat`).then(r => r.data);
+// Post-match connection quality (1–5, players of a confirmed match only).
+// Upsert — re-rating replaces the previous value.
+export const rateArenaConnection = (matchId, rating) => api.post(`/arena/matches/${matchId}/connection`, { rating }).then(r => r.data);
 
 // ── Pokkén in-game Groups (lobbies) ──────────────────────────────────────────
 // Players list which Groups they're in (max 6, the in-game cap) so paired

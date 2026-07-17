@@ -3,6 +3,7 @@ import { Link } from 'react-router-dom';
 import { getGroups, getMyGroups, setMyGroups, createGroup, updateGroup, markGroupExpired } from '../lib/api';
 import { useAuth } from '../contexts/AuthContext';
 import IngameNameEditor from '../components/arena/IngameNameEditor';
+import RegionPicker from '../components/arena/RegionPicker';
 import { formatGroupId, matchesGroupQuery } from '../lib/groupFormat';
 
 const MAX_GROUPS = 6;
@@ -418,6 +419,11 @@ export default function ArenaSettings() {
           <div className="bg-[#0c1425] border border-[#1a2744] rounded-xl p-5">
             <h2 className="font-display text-sm tracking-widest text-cyan-400 uppercase mb-3">In-Game Name</h2>
             <IngameNameEditor />
+          </div>
+
+          <div className="bg-[#0c1425] border border-[#1a2744] rounded-xl p-5">
+            <h2 className="font-display text-sm tracking-widest text-cyan-400 uppercase mb-3">Region</h2>
+            <RegionPicker />
           </div>
 
           <div className="bg-[#0c1425] border border-[#1a2744] rounded-xl p-5">
