@@ -307,7 +307,71 @@ Backend uses `nodemon` for hot reload. Changes to `.js` files in `backend/src/` 
 
 ## ⚡ NEXT AGENT: What to Do First
 
-### Current state (as of May 11 2026 — custom domain `neos-city.com` wired up)
+### Current state (as of Jul 16 2026 — local discovery curated, `pull_new.js` NOT yet run)
+
+#### TOP PRIORITY: run the import
+
+94 newly-discovered local tournaments are sitting in `harvested_tournaments.txt`
+(appended in commit `8f06250`, under the `# Appended from flagged_locals.txt on
+2026-07-16` comment) but have **not been imported**. The next step is:
+
+```powershell
+cd C:\Users\pitag\Documents\neos-city
+# backend must be running first (cd backend; npm run dev)
+node pull_new.js
+```
+
+Two cautions for that run:
+
+- **Challonge v1 rate limit.** On Jul 16 the API key was returning 429s
+  (persisted through retries with 20s backoff — the throttle window is
+  minutes-long, not seconds). `pull_new.js`'s preview-dates step probes every
+  new URL, ~94 calls here. If the run starts throwing 429s, stop and retry
+  later — `batch_import.js` skips already-imported slugs, so re-running is
+  safe and loses nothing.
+- **After import:** let `pull_new.js` continue through `recalculate_elo.js`
+  (Pass-2 achievements) and `check_import_status.js`. Expect the online
+  tournament count to rise by ~94. Spot-check a couple of the new locals on
+  the site (e.g. the Burst Attack! series, `PokkenWeeklyReturn*`) and that
+  their series shows as none/local rather than a known series.
+
+#### How the 94 locals were produced (context)
+
+The "local discovery" crawl (Jul 14, commits `bfea9c6`/`83ec927`) scraped the
+Challonge profiles of all 54 DCM players (`dcm_player_profiles.js` roster) plus
+the `zyflair` account from the browser console (`harvest_participation.js` runner
++ `harvest_participation_console.js` — Challonge 403s Node, so profile crawling
+must run in the browser). That produced 215 raw flagged tournaments in
+`flagged_locals.txt` (gitignored).
+
+`node curate_flagged_locals.js` (Jul 16) curated 215 → 96: dropped 116
+known-series events (matched by NAME as well as slug — root/variant/hash slugs
+evade detectSeries), 3 Smash Bros brackets that shared the "Heaven's Arena"
+name, 0 DB duplicates (crawl had already deduped against the DB). The three
+team-format events all 429'd on the entrant check, so entrants were verified by
+reading the public bracket pages in the browser:
+
+- `ncr_2018_pokken_2v2` and `2v2sacpokken2017` — REMOVED, real two-player teams
+  (e.g. "Air Carrier (ThankSwalot & Kino)").
+- `cis00qku` ("THIS IS 3v3", 27 entrants) — KEPT, individual players; "3v3" is
+  the Pokkén game mode.
+
+Final: 94 kept, moved into `harvested_tournaments.txt`. The pre-curation
+snapshot is in `flagged_locals.backup.txt` (gitignored) if the drop decisions
+ever need re-auditing.
+
+#### Follow-ups after the import
+
+- Some locals may deserve `region` tagging (most look NA — Bay Area,
+  Sacramento, Texas, Boston University). No auto-derivation exists; manual SQL.
+- `detectSeries` on these slugs returns null (that's what makes them locals) —
+  they'll have no series badge in the UI. If any local recurs enough to deserve
+  its own series/achievement track (Burst Attack! has ~13 events,
+  PokkenWeeklyReturn ~12), that's a Gabriel decision, not a default.
+
+---
+
+### Prior state (as of May 11 2026 — custom domain `neos-city.com` wired up)
 
 #### What this session shipped
 
