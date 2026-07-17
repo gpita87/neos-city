@@ -89,7 +89,7 @@ backups/
 # review before promotion into harvested_tournaments.txt — generated output,
 # never committed.
 # ========================================================================
-flagged_locals.txt
+flagged_locals*.txt
 
 # ========================================================================
 # Misc local-only files
