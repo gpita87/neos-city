@@ -321,14 +321,35 @@ cd C:\Users\pitag\Documents\neos-city
 node pull_new.js
 ```
 
-Two cautions for that run:
+**BLOCKED (Jul 16): Challonge API quota exhausted — do NOT just re-run.**
+The Jul 16 `pull_new.js` attempt imported 0 of the 94 (verified: none of the
+slugs are in the DB). The v1 key 429s on every call with body
+`"Your plan allows 500 requests per 30 days"` and `Retry-After: 2592000`
+(30 days). This is a metered monthly quota on Challonge's free API plan, not
+a short throttle — the earlier "minutes-long window" theory was wrong. The
+quota was burned by the Jul 14–16 crawl validation + preview-dates probes.
+Every v1 call goes through this quota (`getTournament`, `getParticipants`,
+`getMatches`, `validatePokkenSlugs` — a full import is ~3 calls/tournament,
+so the 94 locals need ~300+ calls, well over the whole monthly allowance).
 
-- **Challonge v1 rate limit.** On Jul 16 the API key was returning 429s
-  (persisted through retries with 20s backoff — the throttle window is
-  minutes-long, not seconds). `pull_new.js`'s preview-dates step probes every
-  new URL, ~94 calls here. If the run starts throwing 429s, stop and retry
-  later — `batch_import.js` skips already-imported slugs, so re-running is
-  safe and loses nothing.
+Options (Gabriel's call, not decided yet):
+1. **Upgrade the Challonge API plan** for a month — check pricing at
+   connect.challonge.com. Fastest unblock; also un-blocks the weekly
+   FFC/RTG/DCM pipeline which is dead until quota resets.
+2. **Browser-console bulk import** — build a challonge.com same-origin
+   console script (pattern already proven by `harvest_console.js` /
+   `tonamel_import_console.js`) that fetches each bracket page's data from
+   the site itself (no API key, no quota) and POSTs to the existing
+   batch-import route. More work, but durable — bulk jobs stop competing
+   with the weekly pipeline for quota forever.
+3. **Wait for the rolling window** (~mid-Aug if the burn was Jul 14–16) —
+   also blocks all weekly imports until then, so probably unacceptable.
+
+Meanwhile: don't spend v1 calls on diagnostics. `scratch/probe_challonge_headers.js`
+does a single raw call and prints the quota body/headers — use that (only)
+to check whether quota is back.
+
+One more caution for the eventual run:
 - **After import:** let `pull_new.js` continue through `recalculate_elo.js`
   (Pass-2 achievements) and `check_import_status.js`. Expect the online
   tournament count to rise by ~94. Spot-check a couple of the new locals on
