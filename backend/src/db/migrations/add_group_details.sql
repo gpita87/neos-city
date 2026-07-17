@@ -18,6 +18,14 @@ ALTER TABLE pokken_groups ADD COLUMN IF NOT EXISTS ingame_id TEXT;
 ALTER TABLE pokken_groups ADD COLUMN IF NOT EXISTS password TEXT;
 ALTER TABLE pokken_groups ADD COLUMN IF NOT EXISTS has_room BOOLEAN NOT NULL DEFAULT TRUE;
 
+-- Groups expire in-game over time. Any signed-in player may mark one
+-- expired/do-not-use (and unmark, e.g. after the owner extends it) —
+-- community-maintained, with a marked-by audit trail. Expired groups stay
+-- visible in the picker (badged) but are never suggested for matches.
+ALTER TABLE pokken_groups ADD COLUMN IF NOT EXISTS expired BOOLEAN NOT NULL DEFAULT FALSE;
+ALTER TABLE pokken_groups ADD COLUMN IF NOT EXISTS expired_marked_by INTEGER REFERENCES users(id) ON DELETE SET NULL;
+ALTER TABLE pokken_groups ADD COLUMN IF NOT EXISTS expired_marked_at TIMESTAMPTZ;
+
 CREATE UNIQUE INDEX IF NOT EXISTS pokken_groups_ingame_id_unique
   ON pokken_groups (ingame_id) WHERE ingame_id IS NOT NULL;
 
@@ -34,8 +42,7 @@ UPDATE pokken_groups SET name = 'Neos City 3'
     AND NOT EXISTS (SELECT 1 FROM pokken_groups WHERE name = 'Neos City 3');
 
 -- Official Neos City groups (Gabriel's; expire 2026-10-15 unless extended).
--- NOTE: 'Neos City 3' id was supplied as 13 digits ("1 less digit is
--- possible") — the others are 14. Verify in-game and PATCH if wrong.
+-- 'Neos City 3' really is 13 digits (join-verified in-game); the rest are 14.
 INSERT INTO pokken_groups (name, is_official, ingame_id, password, has_room, ruleset) VALUES
   ('Neos City 1', TRUE, '39157245790558', 'yup909', TRUE, '{"arena": "fixed", "skill_points": "off", "note": "standard competitive rules"}'),
   ('Neos City 2', TRUE, '17553560291691', 'yup909', TRUE, '{"arena": "fixed", "skill_points": "off", "note": "standard competitive rules"}'),

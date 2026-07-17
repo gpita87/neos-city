@@ -91,7 +91,7 @@ router.get('/:id', attachUser, async (req, res) => {
                FROM pokken_groups g
                JOIN user_groups mine ON mine.group_id = g.id AND mine.user_id = $1
                JOIN user_groups theirs ON theirs.group_id = g.id AND theirs.user_id = $2
-               WHERE g.active
+               WHERE g.active AND NOT g.expired
                ORDER BY g.name`,
               [req.user.id, match.opponent_user_id]
             ),
@@ -101,7 +101,7 @@ router.get('/:id', attachUser, async (req, res) => {
               `SELECT g.id, g.name, g.ruleset, g.ingame_id, g.password, g.has_room
                FROM pokken_groups g
                JOIN user_groups ug ON ug.group_id = g.id AND ug.user_id = $1
-               WHERE g.active
+               WHERE g.active AND NOT g.expired
                ORDER BY g.name`,
               [match.opponent_user_id]
             ),

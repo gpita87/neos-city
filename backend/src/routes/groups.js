@@ -70,7 +70,7 @@ router.get('/', attachUser, async (req, res) => {
     const includeInactive = Boolean(req.user?.is_admin && req.query.include_inactive);
     const { rows: groups } = await db.query(
       `SELECT g.id, g.name, g.is_official, g.ruleset, g.active,
-              g.ingame_id, g.password, g.has_room,
+              g.ingame_id, g.password, g.has_room, g.expired, g.expired_marked_at,
               COUNT(ug.user_id)::int AS member_count
        FROM pokken_groups g
        LEFT JOIN user_groups ug ON ug.group_id = g.id
@@ -91,7 +91,7 @@ router.get('/mine', requireAuth, async (req, res) => {
   try {
     const { rows: groups } = await db.query(
       `SELECT g.id, g.name, g.is_official, g.ruleset, g.active,
-              g.ingame_id, g.password, g.has_room
+              g.ingame_id, g.password, g.has_room, g.expired
        FROM user_groups ug
        JOIN pokken_groups g ON g.id = ug.group_id
        WHERE ug.user_id = $1
@@ -137,7 +137,7 @@ router.put('/mine', requireAuth, async (req, res) => {
 
     const { rows: groups } = await db.query(
       `SELECT g.id, g.name, g.is_official, g.ruleset, g.active,
-              g.ingame_id, g.password, g.has_room
+              g.ingame_id, g.password, g.has_room, g.expired
        FROM user_groups ug
        JOIN pokken_groups g ON g.id = ug.group_id
        WHERE ug.user_id = $1
@@ -151,6 +151,33 @@ router.put('/mine', requireAuth, async (req, res) => {
     res.status(500).json({ error: 'Failed to save your groups' });
   } finally {
     client.release();
+  }
+});
+
+// POST /api/groups/:id/expired  { expired: true|false } — community-maintained
+// "do not use" flag. Groups expire in-game over time; any signed-in player may
+// mark one expired (or unmark it once the owner extends it). Marked-by/at are
+// kept for accountability. Expired groups stay pickable/badged but are never
+// suggested for arena matches.
+router.post('/:id/expired', requireAuth, async (req, res) => {
+  const id = parseId(req.params.id);
+  if (!id) return res.status(400).json({ error: 'Invalid group id' });
+  const expired = Boolean(req.body?.expired);
+  try {
+    const { rows: [group] } = await db.query(
+      `UPDATE pokken_groups
+       SET expired = $2,
+           expired_marked_by = CASE WHEN $2 THEN $3 ELSE NULL END,
+           expired_marked_at = CASE WHEN $2 THEN NOW() ELSE NULL END
+       WHERE id = $1
+       RETURNING *`,
+      [id, expired, req.user.id]
+    );
+    if (!group) return res.status(404).json({ error: 'Group not found' });
+    res.json({ group });
+  } catch (err) {
+    console.error('[groups] mark expired failed:', err.message);
+    res.status(500).json({ error: 'Failed to update group' });
   }
 });
 

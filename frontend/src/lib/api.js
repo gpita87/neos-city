@@ -123,6 +123,9 @@ export const getMyGroups = () => api.get('/groups/mine').then(r => r.data);
 export const setMyGroups = (group_ids) => api.put('/groups/mine', { group_ids }).then(r => r.data);
 export const createGroup = (data) => api.post('/groups', data).then(r => r.data);
 export const updateGroup = (id, data) => api.patch(`/groups/${id}`, data).then(r => r.data);
+// Community-maintained "expired / do not use" flag — any signed-in player may
+// mark or unmark (groups expire in-game over time).
+export const markGroupExpired = (id, expired) => api.post(`/groups/${id}/expired`, { expired }).then(r => r.data);
 
 // Organizers
 export const getOrganizers = () => api.get('/organizers').then(r => r.data);

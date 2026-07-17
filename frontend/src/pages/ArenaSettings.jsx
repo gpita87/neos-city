@@ -1,9 +1,9 @@
 import { useEffect, useState } from 'react';
 import { Link } from 'react-router-dom';
-import { getGroups, getMyGroups, setMyGroups, createGroup, updateGroup } from '../lib/api';
+import { getGroups, getMyGroups, setMyGroups, createGroup, updateGroup, markGroupExpired } from '../lib/api';
 import { useAuth } from '../contexts/AuthContext';
 import IngameNameEditor from '../components/arena/IngameNameEditor';
-import { formatGroupId } from '../lib/groupFormat';
+import { formatGroupId, matchesGroupQuery } from '../lib/groupFormat';
 
 const MAX_GROUPS = 6;
 
@@ -25,6 +25,7 @@ function GroupPicker({ reloadKey }) {
   const [groups, setGroups] = useState(null);
   const [selected, setSelected] = useState(new Set());
   const [savedIds, setSavedIds] = useState(new Set());
+  const [query, setQuery] = useState('');
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState(null);
   const [savedFlash, setSavedFlash] = useState(false);
@@ -76,7 +77,22 @@ function GroupPicker({ reloadKey }) {
     }
   };
 
+  // Community-maintained expired flag; update the row in place, no full reload.
+  const setExpired = async (g, expired) => {
+    setBusy(true);
+    setError(null);
+    try {
+      const { group } = await markGroupExpired(g.id, expired);
+      setGroups((gs) => gs.map((x) => (x.id === group.id ? { ...x, expired: group.expired } : x)));
+    } catch (err) {
+      setError(err.response?.data?.error || 'Failed to update group');
+    } finally {
+      setBusy(false);
+    }
+  };
+
   const atCap = selected.size >= MAX_GROUPS;
+  const visible = groups.filter((g) => matchesGroupQuery(g, query));
 
   return (
     <div>
@@ -89,9 +105,19 @@ function GroupPicker({ reloadKey }) {
         </span>
       </div>
 
+      <input
+        value={query}
+        onChange={(e) => setQuery(e.target.value)}
+        placeholder="Search groups by name or ID…"
+        className="mt-3 w-full bg-[#050a18] border border-[#1a2744] rounded-lg px-3 py-2 text-sm text-slate-200 focus:border-cyan-500/50 focus:outline-none"
+      />
+
       <div className="mt-3 space-y-2">
         {groups.length === 0 && <p className="text-sm text-slate-500">No groups on file yet.</p>}
-        {groups.map((g) => {
+        {groups.length > 0 && visible.length === 0 && (
+          <p className="text-sm text-slate-500">No groups match "{query}".</p>
+        )}
+        {visible.map((g) => {
           const checked = selected.has(g.id);
           const disabled = !checked && atCap;
           return (
@@ -108,15 +134,29 @@ function GroupPicker({ reloadKey }) {
                 onChange={() => toggle(g.id)}
                 className="mt-0.5 accent-cyan-500"
               />
-              <span>
+              <span className="min-w-0 flex-1">
                 <span className="text-sm text-slate-200">
                   {g.name}
                   {g.is_official && <span className="ml-2 text-[10px] font-display tracking-widest uppercase text-cyan-400">Official</span>}
                   {g.active === false && <span className="ml-2 text-[10px] text-amber-400">(inactive)</span>}
+                  {g.expired && <span className="ml-2 text-[10px] font-display tracking-widest uppercase text-red-400">expired — do not use</span>}
                 </span>
                 <GroupDetails g={g} />
                 {g.ruleset?.note && <span className="block text-xs text-slate-600">{g.ruleset.note}</span>}
               </span>
+              <button
+                type="button"
+                disabled={busy}
+                onClick={(e) => { e.preventDefault(); e.stopPropagation(); setExpired(g, !g.expired); }}
+                className={`shrink-0 text-[10px] disabled:opacity-50 ${g.expired
+                  ? 'text-slate-500 hover:text-emerald-300'
+                  : 'text-slate-600 hover:text-red-400'}`}
+                title={g.expired
+                  ? 'It works again (e.g. the owner extended it)? Clear the expired flag.'
+                  : 'Group gone/expired in-game? Flag it so nobody wastes time trying to join.'}
+              >
+                {g.expired ? 'un-mark expired' : 'mark expired'}
+              </button>
             </label>
           );
         })}
@@ -207,6 +247,7 @@ function AdminGroupManager() {
   const [note, setNote] = useState('');
   const [pwEditId, setPwEditId] = useState(null);
   const [pwValue, setPwValue] = useState('');
+  const [query, setQuery] = useState('');
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState(null);
 
@@ -271,13 +312,21 @@ function AdminGroupManager() {
       </form>
       {error && <p className="mt-2 text-sm text-red-400">{error}</p>}
 
+      <input
+        value={query}
+        onChange={(e) => setQuery(e.target.value)}
+        placeholder="Search groups by name or ID…"
+        className={`${inputCls} mt-3 w-full`}
+      />
+
       <ul className="mt-3 divide-y divide-[#1a2744]">
-        {groups.map((g) => (
+        {groups.filter((g) => matchesGroupQuery(g, query)).map((g) => (
           <li key={g.id} className="py-2">
             <div className="flex items-center justify-between gap-3 flex-wrap">
               <span className="text-sm min-w-0">
                 <span className={g.active ? 'text-slate-200' : 'text-slate-500 line-through'}>{g.name}</span>
                 <span className="ml-2 text-xs text-slate-500">{g.member_count} {g.member_count === 1 ? 'member' : 'members'}</span>
+                {g.expired && <span className="ml-2 text-[10px] font-display tracking-widest uppercase text-red-400">expired</span>}
                 <span className="block text-xs text-slate-500">
                   {g.ingame_id ? <span className="tabular-nums">ID {formatGroupId(g.ingame_id)}</span> : 'no ID'}
                   {' · '}
@@ -302,6 +351,13 @@ function AdminGroupManager() {
                   className="text-xs text-slate-500 hover:text-cyan-300 disabled:opacity-50"
                 >
                   {g.password ? 'Edit pw' : 'Set pw'}
+                </button>
+                <button
+                  onClick={() => run(() => markGroupExpired(g.id, !g.expired))}
+                  disabled={busy}
+                  className={`text-xs disabled:opacity-50 ${g.expired ? 'text-slate-500 hover:text-emerald-300' : 'text-slate-500 hover:text-amber-300'}`}
+                >
+                  {g.expired ? 'Clear expired' : 'Mark expired'}
                 </button>
                 <button
                   onClick={() => run(() => updateGroup(g.id, { active: !g.active }))}
