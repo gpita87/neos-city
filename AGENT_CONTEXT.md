@@ -332,18 +332,25 @@ Every v1 call goes through this quota (`getTournament`, `getParticipants`,
 `getMatches`, `validatePokkenSlugs` — a full import is ~3 calls/tournament,
 so the 94 locals need ~300+ calls, well over the whole monthly allowance).
 
-Options (Gabriel's call, not decided yet):
-1. **Upgrade the Challonge API plan** for a month — check pricing at
-   connect.challonge.com. Fastest unblock; also un-blocks the weekly
-   FFC/RTG/DCM pipeline which is dead until quota resets.
-2. **Browser-console bulk import** — build a challonge.com same-origin
-   console script (pattern already proven by `harvest_console.js` /
-   `tonamel_import_console.js`) that fetches each bracket page's data from
-   the site itself (no API key, no quota) and POSTs to the existing
-   batch-import route. More work, but durable — bulk jobs stop competing
-   with the weekly pipeline for quota forever.
-3. **Wait for the rolling window** (~mid-Aug if the burn was Jul 14–16) —
-   also blocks all weekly imports until then, so probably unacceptable.
+**DECIDED (Jul 16): build the browser-console bulk importer** (a
+challonge.com same-origin console script, pattern proven by
+`harvest_console.js` / `tonamel_import_console.js`, that scrapes each
+bracket page from the site itself — no API key, no quota — and POSTs to
+the backend). Rejected alternatives: paying to upgrade the API plan, or
+waiting for the rolling 30-day window (~mid-Aug), which would also block
+weekly imports. Implementation gotchas discovered while verifying pages
+in the browser:
+- Organizer-scoped tournaments render ONLY at the subdomain URL
+  (`rickythe3rd.challonge.com/FFC250`); the path form
+  (`challonge.com/rickythe3rd/FFC250`) 404s on the web even though the
+  harvested file stores it that way. The v1 API's equivalent slug is
+  `<org>-<slug>`. The console importer must translate.
+- Public bracket pages render Players/Format/Game/date/organizer plus the
+  full match list without login — everything an import needs is there.
+- The Jul 17 harvest append went through while validatePokkenSlugs was
+  quota-dead (429 = keep defensively), letting junk through; it was
+  hand-cleaned via browser checks in commit `4c08f4c`. Any future append
+  made while quota is exhausted needs the same manual review.
 
 Meanwhile: don't spend v1 calls on diagnostics. `scratch/probe_challonge_headers.js`
 does a single raw call and prints the quota body/headers — use that (only)
