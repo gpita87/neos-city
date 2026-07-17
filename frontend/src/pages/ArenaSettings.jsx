@@ -3,12 +3,25 @@ import { Link } from 'react-router-dom';
 import { getGroups, getMyGroups, setMyGroups, createGroup, updateGroup } from '../lib/api';
 import { useAuth } from '../contexts/AuthContext';
 import IngameNameEditor from '../components/arena/IngameNameEditor';
+import { formatGroupId } from '../lib/groupFormat';
 
 const MAX_GROUPS = 6;
 
+// One group's in-game join details (ID + password when on file, full marker).
+function GroupDetails({ g }) {
+  if (!g.ingame_id && !g.password && g.has_room !== false) return null;
+  return (
+    <span className="block text-xs text-slate-500">
+      {g.ingame_id && <span className="tabular-nums">ID {formatGroupId(g.ingame_id)}</span>}
+      {g.password && <span>{g.ingame_id ? ' · ' : ''}pw <span className="text-slate-400">{g.password}</span></span>}
+      {g.has_room === false && <span className="text-amber-400"> · full</span>}
+    </span>
+  );
+}
+
 // Checkbox list of active Pokkén Groups with an n/6 counter (the in-game
 // membership cap). Save is full-replace: the checked set IS the membership.
-function GroupPicker() {
+function GroupPicker({ reloadKey }) {
   const [groups, setGroups] = useState(null);
   const [selected, setSelected] = useState(new Set());
   const [savedIds, setSavedIds] = useState(new Set());
@@ -29,7 +42,7 @@ function GroupPicker() {
         setSavedIds(mineIds);
       })
       .catch(() => setError('Failed to load groups'));
-  }, []);
+  }, [reloadKey]);
 
   if (error && !groups) return <p className="text-sm text-red-400">{error}</p>;
   if (!groups) return <p className="text-sm text-slate-500">Loading groups…</p>;
@@ -101,7 +114,8 @@ function GroupPicker() {
                   {g.is_official && <span className="ml-2 text-[10px] font-display tracking-widest uppercase text-cyan-400">Official</span>}
                   {g.active === false && <span className="ml-2 text-[10px] text-amber-400">(inactive)</span>}
                 </span>
-                {g.ruleset?.note && <span className="block text-xs text-slate-500">{g.ruleset.note}</span>}
+                <GroupDetails g={g} />
+                {g.ruleset?.note && <span className="block text-xs text-slate-600">{g.ruleset.note}</span>}
               </span>
             </label>
           );
@@ -129,11 +143,70 @@ function GroupPicker() {
   );
 }
 
-// Minimal admin CRUD: add a group by name, toggle active on existing ones.
+// Community contribution: any signed-in player can add a group we're missing —
+// name + in-game ID only. Passwords are deliberately NOT collected here (an
+// admin fills them in) so inexperienced users are never asked to type a
+// password into this site.
+function AddGroupForm({ onAdded }) {
+  const [name, setName] = useState('');
+  const [ingameId, setIngameId] = useState('');
+  const [busy, setBusy] = useState(false);
+  const [error, setError] = useState(null);
+  const [done, setDone] = useState(false);
+
+  const submit = async (e) => {
+    e.preventDefault();
+    setBusy(true);
+    setError(null);
+    setDone(false);
+    try {
+      await createGroup({ name, ingame_id: ingameId || undefined });
+      setName(''); setIngameId('');
+      setDone(true);
+      onAdded();
+    } catch (err) {
+      setError(err.response?.data?.error || 'Failed to add group');
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  const inputCls = 'bg-[#050a18] border border-[#1a2744] rounded-lg px-3 py-2 text-sm text-slate-200 focus:border-cyan-500/50 focus:outline-none';
+  return (
+    <div className="bg-[#0c1425] border border-[#1a2744] rounded-xl p-5">
+      <h2 className="font-display text-sm tracking-widest text-cyan-400 uppercase">Add a Group</h2>
+      <p className="mt-1 text-xs text-slate-500">
+        Know a Group we're missing? Add its name and in-game ID (spaces are fine).
+        Leave the password out — an admin fills that in. Never enter a password you
+        use anywhere else.
+      </p>
+      <form onSubmit={submit} className="mt-3 flex gap-2 flex-wrap">
+        <input className={inputCls} placeholder="Group name" value={name} onChange={(e) => setName(e.target.value)} required />
+        <input className={`${inputCls} min-w-[14rem]`} placeholder="In-game ID (e.g. 391 572 457 905 58)" value={ingameId} onChange={(e) => setIngameId(e.target.value)} />
+        <button
+          type="submit"
+          disabled={busy}
+          className="px-4 py-2 rounded-lg text-sm font-medium bg-cyan-500 text-[#050a18] hover:bg-cyan-400 disabled:opacity-50 transition-colors"
+        >
+          {busy ? 'Adding…' : 'Add'}
+        </button>
+      </form>
+      {error && <p className="mt-2 text-sm text-red-400">{error}</p>}
+      {done && <p className="mt-2 text-sm text-emerald-300">✓ Added — it's in the picker above now.</p>}
+    </div>
+  );
+}
+
+// Admin CRUD: add groups with full details, set/clear passwords, toggle
+// has-room (groups cap at 100 in-game and fill up), deactivate/reactivate.
 function AdminGroupManager() {
   const [groups, setGroups] = useState(null);
   const [name, setName] = useState('');
+  const [ingameId, setIngameId] = useState('');
+  const [password, setPassword] = useState('');
   const [note, setNote] = useState('');
+  const [pwEditId, setPwEditId] = useState(null);
+  const [pwValue, setPwValue] = useState('');
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState(null);
 
@@ -144,33 +217,37 @@ function AdminGroupManager() {
 
   useEffect(() => { load(); }, []);
 
-  const add = async (e) => {
-    e.preventDefault();
+  const run = async (fn) => {
     setBusy(true);
     setError(null);
     try {
-      await createGroup({ name, ruleset: note ? { note } : {} });
-      setName(''); setNote('');
+      await fn();
       await load();
     } catch (err) {
-      setError(err.response?.data?.error || 'Failed to create group');
+      setError(err.response?.data?.error || 'Update failed');
     } finally {
       setBusy(false);
     }
   };
 
-  const toggleActive = async (g) => {
-    setBusy(true);
-    setError(null);
-    try {
-      await updateGroup(g.id, { active: !g.active });
-      await load();
-    } catch (err) {
-      setError(err.response?.data?.error || 'Failed to update group');
-    } finally {
-      setBusy(false);
-    }
+  const add = (e) => {
+    e.preventDefault();
+    run(async () => {
+      await createGroup({
+        name,
+        ingame_id: ingameId || undefined,
+        password: password || undefined,
+        ruleset: note ? { note } : {},
+      });
+      setName(''); setIngameId(''); setPassword(''); setNote('');
+    });
   };
+
+  const savePw = (g) => run(async () => {
+    await updateGroup(g.id, { password: pwValue || null });
+    setPwEditId(null);
+    setPwValue('');
+  });
 
   if (!groups) return null;
 
@@ -179,34 +256,76 @@ function AdminGroupManager() {
     <div className="bg-[#0c1425] border border-[#1a2744] rounded-xl p-5">
       <h2 className="font-display text-sm tracking-widest text-cyan-400 uppercase">Manage Groups (Admin)</h2>
 
-      <form onSubmit={add} className="mt-3 flex gap-2 flex-wrap">
+      <form onSubmit={add} className="mt-3 grid grid-cols-1 sm:grid-cols-2 gap-2">
         <input className={inputCls} placeholder="Group name" value={name} onChange={(e) => setName(e.target.value)} required />
-        <input className={`${inputCls} flex-1 min-w-[12rem]`} placeholder="Ruleset note (optional)" value={note} onChange={(e) => setNote(e.target.value)} />
+        <input className={inputCls} placeholder="In-game ID" value={ingameId} onChange={(e) => setIngameId(e.target.value)} />
+        <input className={inputCls} placeholder="Password (optional)" value={password} onChange={(e) => setPassword(e.target.value)} />
+        <input className={inputCls} placeholder="Ruleset note (optional)" value={note} onChange={(e) => setNote(e.target.value)} />
         <button
           type="submit"
           disabled={busy}
-          className="px-4 py-2 rounded-lg text-sm font-medium bg-cyan-500 text-[#050a18] hover:bg-cyan-400 disabled:opacity-50 transition-colors"
+          className="px-4 py-2 rounded-lg text-sm font-medium bg-cyan-500 text-[#050a18] hover:bg-cyan-400 disabled:opacity-50 transition-colors justify-self-start"
         >
-          Add
+          Add group
         </button>
       </form>
       {error && <p className="mt-2 text-sm text-red-400">{error}</p>}
 
       <ul className="mt-3 divide-y divide-[#1a2744]">
         {groups.map((g) => (
-          <li key={g.id} className="py-2 flex items-center justify-between gap-3">
-            <span className="text-sm">
-              <span className={g.active ? 'text-slate-200' : 'text-slate-500 line-through'}>{g.name}</span>
-              <span className="ml-2 text-xs text-slate-500">{g.member_count} {g.member_count === 1 ? 'member' : 'members'}</span>
-              {g.ruleset?.note && <span className="ml-2 text-xs text-slate-600">· {g.ruleset.note}</span>}
-            </span>
-            <button
-              onClick={() => toggleActive(g)}
-              disabled={busy}
-              className={`text-xs disabled:opacity-50 ${g.active ? 'text-slate-500 hover:text-red-400' : 'text-slate-500 hover:text-emerald-300'}`}
-            >
-              {g.active ? 'Deactivate' : 'Reactivate'}
-            </button>
+          <li key={g.id} className="py-2">
+            <div className="flex items-center justify-between gap-3 flex-wrap">
+              <span className="text-sm min-w-0">
+                <span className={g.active ? 'text-slate-200' : 'text-slate-500 line-through'}>{g.name}</span>
+                <span className="ml-2 text-xs text-slate-500">{g.member_count} {g.member_count === 1 ? 'member' : 'members'}</span>
+                <span className="block text-xs text-slate-500">
+                  {g.ingame_id ? <span className="tabular-nums">ID {formatGroupId(g.ingame_id)}</span> : 'no ID'}
+                  {' · '}
+                  {g.password ? <>pw <span className="text-slate-400">{g.password}</span></> : 'no password'}
+                  {g.ruleset?.note && <span className="text-slate-600"> · {g.ruleset.note}</span>}
+                </span>
+              </span>
+              <span className="flex items-center gap-3 shrink-0">
+                <label className="text-xs text-slate-400 flex items-center gap-1 cursor-pointer">
+                  <input
+                    type="checkbox"
+                    checked={g.has_room !== false}
+                    disabled={busy}
+                    onChange={() => run(() => updateGroup(g.id, { has_room: !(g.has_room !== false) }))}
+                    className="accent-cyan-500"
+                  />
+                  has room
+                </label>
+                <button
+                  onClick={() => { setPwEditId(g.id); setPwValue(g.password || ''); }}
+                  disabled={busy}
+                  className="text-xs text-slate-500 hover:text-cyan-300 disabled:opacity-50"
+                >
+                  {g.password ? 'Edit pw' : 'Set pw'}
+                </button>
+                <button
+                  onClick={() => run(() => updateGroup(g.id, { active: !g.active }))}
+                  disabled={busy}
+                  className={`text-xs disabled:opacity-50 ${g.active ? 'text-slate-500 hover:text-red-400' : 'text-slate-500 hover:text-emerald-300'}`}
+                >
+                  {g.active ? 'Deactivate' : 'Reactivate'}
+                </button>
+              </span>
+            </div>
+            {pwEditId === g.id && (
+              <div className="mt-2 flex items-center gap-2">
+                <input
+                  className={`${inputCls} text-xs`}
+                  placeholder="Password (blank to clear)"
+                  value={pwValue}
+                  autoFocus
+                  onChange={(e) => setPwValue(e.target.value)}
+                  onKeyDown={(e) => { if (e.key === 'Enter') savePw(g); if (e.key === 'Escape') setPwEditId(null); }}
+                />
+                <button onClick={() => savePw(g)} disabled={busy} className="text-xs text-cyan-300 hover:underline disabled:opacity-50">Save</button>
+                <button onClick={() => setPwEditId(null)} disabled={busy} className="text-xs text-slate-500 hover:text-slate-300">Cancel</button>
+              </div>
+            )}
           </li>
         ))}
       </ul>
@@ -216,6 +335,7 @@ function AdminGroupManager() {
 
 export default function ArenaSettings() {
   const { user, loading } = useAuth();
+  const [groupsVersion, setGroupsVersion] = useState(0);
 
   if (loading) return <p className="text-slate-500">Loading…</p>;
 
@@ -246,9 +366,10 @@ export default function ArenaSettings() {
 
           <div className="bg-[#0c1425] border border-[#1a2744] rounded-xl p-5">
             <h2 className="font-display text-sm tracking-widest text-cyan-400 uppercase mb-3">My Groups</h2>
-            <GroupPicker />
+            <GroupPicker reloadKey={groupsVersion} />
           </div>
 
+          {!user.is_admin && <AddGroupForm onAdded={() => setGroupsVersion((v) => v + 1)} />}
           {user.is_admin && <AdminGroupManager />}
         </>
       )}

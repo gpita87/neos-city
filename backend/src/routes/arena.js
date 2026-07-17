@@ -84,9 +84,10 @@ router.get('/:id', attachUser, async (req, res) => {
                WHERE u.id = $1`,
               [match.opponent_user_id]
             ),
-            // Groups BOTH players belong to — where this match can happen in-game.
+            // Groups BOTH players belong to — where this match can happen
+            // in-game (ingame_id/password are the actual join details).
             db.query(
-              `SELECT g.id, g.name, g.ruleset
+              `SELECT g.id, g.name, g.ruleset, g.ingame_id, g.password, g.has_room
                FROM pokken_groups g
                JOIN user_groups mine ON mine.group_id = g.id AND mine.user_id = $1
                JOIN user_groups theirs ON theirs.group_id = g.id AND theirs.user_id = $2
@@ -97,7 +98,7 @@ router.get('/:id', attachUser, async (req, res) => {
             // ALL of the opponent's groups — when there's no overlap, the UI
             // offers "join one of theirs" so the pairing can still happen.
             db.query(
-              `SELECT g.id, g.name, g.ruleset
+              `SELECT g.id, g.name, g.ruleset, g.ingame_id, g.password, g.has_room
                FROM pokken_groups g
                JOIN user_groups ug ON ug.group_id = g.id AND ug.user_id = $1
                WHERE g.active

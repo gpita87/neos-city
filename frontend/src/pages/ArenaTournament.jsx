@@ -8,6 +8,7 @@ import { useAuth } from '../contexts/AuthContext';
 import { useArenaSocket } from '../hooks/useArenaSocket';
 import { ARENA_STATUS_META } from './Arena';
 import IngameNameEditor from '../components/arena/IngameNameEditor';
+import { formatGroupId } from '../lib/groupFormat';
 
 // Countdown driven by SERVER time: `offsetMs` is (server_now - client now),
 // captured whenever a payload carrying server_now arrives, so a wrong local
@@ -172,11 +173,26 @@ function describeReport(report, opponentName, myUserId) {
   return `${mine ? 'You' : opponentName} won 2–${report.loser_games}`;
 }
 
+// A group chip with its in-game join details (ID + password when on file).
+function GroupChip({ g, tone }) {
+  return (
+    <span className={`inline-flex items-baseline gap-2 mr-1 mb-1 px-2 py-0.5 rounded border text-xs ${tone}`}>
+      <span>{g.name}</span>
+      {g.ingame_id && <span className="opacity-75 tabular-nums">{formatGroupId(g.ingame_id)}</span>}
+      {g.password && <span className="opacity-75">pw {g.password}</span>}
+      {g.has_room === false && <span className="text-amber-400">full</span>}
+    </span>
+  );
+}
+
 // The player's live match: who to fight, where to find them, opponent chat,
 // and result reporting with dual-verification states (awaiting / disputed).
 function CurrentMatchPanel({ match, myUserId, onOpenReport, onOpenResolve, isAdmin, tournamentStatus, chat }) {
   const opponent = match.opponent;
   const opponentName = opponent?.name || 'Opponent';
+  // Groups fill at 100 in-game — only suggest joinable ones (has_room).
+  const opponentGroupList = match.opponentGroups || [];
+  const joinableTheirs = opponentGroupList.filter((g) => g.has_room !== false);
   const reports = match.reports || [];
   const myReport = reports.find((r) => Number(r.reporter_user_id) === Number(myUserId));
   const theirReport = reports.find((r) => Number(r.reporter_user_id) !== Number(myUserId));
@@ -200,23 +216,21 @@ function CurrentMatchPanel({ match, myUserId, onOpenReport, onOpenResolve, isAdm
 
       {match.sharedGroups?.length > 0 ? (
         <div className="mt-3 text-sm text-slate-400">
-          Shared groups:{' '}
-          {match.sharedGroups.map((g) => (
-            <span key={g.id} className="inline-block mr-1 px-2 py-0.5 rounded bg-cyan-900/40 text-cyan-300 border border-cyan-700/50 text-xs">
-              {g.name}
-            </span>
-          ))}
+          <p>Shared groups — meet in one of these:</p>
+          <p className="mt-1">
+            {match.sharedGroups.map((g) => (
+              <GroupChip key={g.id} g={g} tone="bg-cyan-900/40 text-cyan-300 border-cyan-700/50" />
+            ))}
+          </p>
         </div>
       ) : (
         <div className="mt-3 text-sm">
-          {match.opponentGroups?.length > 0 ? (
+          {joinableTheirs.length > 0 ? (
             <>
-              <p className="text-slate-400">
-                No shared groups — join one of theirs:{' '}
-                {match.opponentGroups.map((g) => (
-                  <span key={g.id} className="inline-block mr-1 px-2 py-0.5 rounded bg-slate-800/60 text-slate-300 border border-slate-600/50 text-xs">
-                    {g.name}
-                  </span>
+              <p className="text-slate-400">No shared groups — join one of theirs:</p>
+              <p className="mt-1">
+                {joinableTheirs.map((g) => (
+                  <GroupChip key={g.id} g={g} tone="bg-slate-800/60 text-slate-300 border-slate-600/50" />
                 ))}
               </p>
               <p className="mt-1 text-xs text-slate-500">
@@ -224,6 +238,10 @@ function CurrentMatchPanel({ match, myUserId, onOpenReport, onOpenResolve, isAdm
                 <Link to="/arena/settings" className="text-cyan-300 hover:underline">arena settings</Link> for next time.
               </p>
             </>
+          ) : opponentGroupList.length > 0 ? (
+            <p className="text-slate-500">
+              No shared groups, and {opponentName}'s groups are all full — sort out where to play in the chat below.
+            </p>
           ) : (
             <p className="text-slate-500">
               No shared groups — {opponentName} hasn't listed any. Sort out where to play in the chat below,
