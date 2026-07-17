@@ -686,3 +686,21 @@ https://challonge.com/thelonestar1
 https://challonge.com/tletourney2
 https://challonge.com/tletourney1
 https://challonge.com/runbackpizzapokken
+# Appended via harvest_console.js on 2026-07-17 (organizer: FFC / wise_)
+# (validatePokkenSlugs 429'd during this append — quota exhausted — so junk got
+#  through; hand-cleaned 2026-07-16 via browser checks: dropped 4 site paths,
+#  VRLMock (mock bracket), ql35rkwg (Yoom-Tah!, no game), 9i37vn4c (Smash),
+#  98kbtzsb (Janken 4 English — unofficial mirror of a JP event))
+https://challonge.com/wise_/FFC240
+# Appended via harvest_console.js on 2026-07-17 (organizer: FFC / rickythe3rd)
+https://challonge.com/rickythe3rd/FFC250
+https://challonge.com/rickythe3rd/FFC242
+https://challonge.com/rickythe3rd/FFC230
+https://challonge.com/rickythe3rd/FFC229
+# Appended via harvest_console.js on 2026-07-17 (organizer: RTG NA / shean96)
+https://challonge.com/shean96/FFC221
+# Appended via harvest_console.js on 2026-07-17 (organizer: DCM / devlinhartfgc)
+https://challonge.com/devlinhartfgc/FFC260
+# Appended by harvest_startgg.js on 2026-07-17 (last 90d)
+# 2026-07-14 - Heaven's Arena #35 — Heaven's Arena #35
+https://www.start.gg/tournament/heaven-s-arena-35/events/heaven-s-arena-35/brackets/2343325/3386179
