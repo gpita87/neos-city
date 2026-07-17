@@ -15,6 +15,7 @@ const resourcesRouter = require('./routes/resources');
 const authRouter = require('./routes/auth');
 const twitchRouter = require('./routes/twitch');
 const arenaRouter = require('./routes/arena');
+const groupsRouter = require('./routes/groups');
 
 const app = express();
 
@@ -79,6 +80,7 @@ app.use('/api/resources', resourcesRouter);
 app.use('/api/auth', authRouter);
 app.use('/api/twitch', twitchRouter);
 app.use('/api/arena', arenaRouter);
+app.use('/api/groups', groupsRouter);
 
 app.get('/api/health', (req, res) => res.json({ status: 'ok', app: 'Neos City' }));
 

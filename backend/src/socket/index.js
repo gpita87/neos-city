@@ -105,9 +105,16 @@ function init(server, corsOrigins) {
         lastChatAt = now;
 
         // Must be a player in the match, and the match still open for chat.
+        // The join also resolves the sender's display name the same way the
+        // REST history endpoint does (claimed player's name first), so a
+        // message doesn't change names after a reload.
         const { rows: [m] } = await db.query(
-          `SELECT id, status FROM arena_matches
-           WHERE id = $1 AND (p1_user_id = $2 OR p2_user_id = $2)`,
+          `SELECT m.id, m.status,
+                  COALESCE(pl.display_name, u.display_name, u.discord_username, 'Player ' || u.id) AS sender_name
+           FROM arena_matches m
+           JOIN users u ON u.id = $2
+           LEFT JOIN players pl ON pl.id = u.player_id
+           WHERE m.id = $1 AND (m.p1_user_id = $2 OR m.p2_user_id = $2)`,
           [id, socket.user.id]
         );
         if (!m) return ack?.({ ok: false, error: 'not a player in this match' });
@@ -124,7 +131,7 @@ function init(server, corsOrigins) {
           id: msg.id,
           matchId: msg.match_id,
           senderUserId: msg.sender_user_id,
-          senderName: socket.user.display_name || socket.user.discord_username || 'Player',
+          senderName: m.sender_name,
           body: msg.body,
           at: msg.created_at,
         });

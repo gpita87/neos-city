@@ -2,11 +2,12 @@ import { useCallback, useEffect, useRef, useState } from 'react';
 import { Link, useParams } from 'react-router-dom';
 import {
   getArenaTournament, registerArena, withdrawArena, pauseArena, resumeArena,
-  reportArenaMatch, patchMe,
+  reportArenaMatch, resolveArenaMatch, getArenaMatchChat,
 } from '../lib/api';
 import { useAuth } from '../contexts/AuthContext';
 import { useArenaSocket } from '../hooks/useArenaSocket';
 import { ARENA_STATUS_META } from './Arena';
+import IngameNameEditor from '../components/arena/IngameNameEditor';
 
 // Countdown driven by SERVER time: `offsetMs` is (server_now - client now),
 // captured whenever a payload carrying server_now arrives, so a wrong local
@@ -90,63 +91,79 @@ function Scoreboard({ standings, myUserId }) {
   );
 }
 
-// Inline editor for the user's Pokkén in-game name — what the opponent looks
-// for inside the Group to make sure they matched the right player.
-function IngameNameEditor() {
-  const { user, refresh } = useAuth();
-  const [editing, setEditing] = useState(false);
-  const [value, setValue] = useState('');
-  const [saving, setSaving] = useState(false);
-  const [error, setError] = useState(null);
+// Per-match opponent chat. History comes from REST (parent loads it on match
+// change/reconnect); live messages arrive over the socket. Mine render right
+// in cyan, theirs left. Sends go through the socket (sendChat) so the server
+// can persist + broadcast in one hop.
+function ChatThread({ messages, myUserId, onSend, connected }) {
+  const [draft, setDraft] = useState('');
+  const [sendError, setSendError] = useState(null);
+  const [sending, setSending] = useState(false);
+  const listRef = useRef(null);
 
-  if (!user) return null;
+  // Auto-scroll: keep the newest message in view as the thread grows.
+  useEffect(() => {
+    const el = listRef.current;
+    if (el) el.scrollTop = el.scrollHeight;
+  }, [messages.length]);
 
-  const save = async () => {
-    setSaving(true);
-    setError(null);
+  const send = async () => {
+    const body = draft.trim();
+    if (!body || sending) return;
+    setSending(true);
+    setSendError(null);
     try {
-      await patchMe({ ingame_name: value });
-      await refresh();
-      setEditing(false);
-    } catch (err) {
-      setError(err.response?.data?.error || 'Failed to save');
+      const ack = await onSend(body);
+      if (ack?.ok) setDraft('');
+      else setSendError(ack?.error || 'Failed to send');
     } finally {
-      setSaving(false);
+      setSending(false);
     }
   };
 
-  if (!editing) {
-    return (
-      <span className="text-xs text-slate-400">
-        Your in-game name:{' '}
-        {user.ingame_name
-          ? <span className="text-slate-200 font-medium">{user.ingame_name}</span>
-          : <span className="text-amber-400">not set — opponents need it to find you</span>}
-        <button
-          onClick={() => { setValue(user.ingame_name || ''); setEditing(true); }}
-          className="ml-2 text-cyan-300 hover:underline"
-        >
-          {user.ingame_name ? 'Edit' : 'Set it'}
-        </button>
-      </span>
-    );
-  }
-
   return (
-    <span className="inline-flex items-center gap-2 text-xs">
-      <input
-        value={value}
-        onChange={(e) => setValue(e.target.value)}
-        onKeyDown={(e) => { if (e.key === 'Enter') save(); if (e.key === 'Escape') setEditing(false); }}
-        maxLength={40}
-        placeholder="In-game name"
-        autoFocus
-        className="bg-[#050a18] border border-[#1a2744] rounded px-2 py-1 text-slate-200 text-xs w-44 focus:outline-none focus:border-cyan-500/50"
-      />
-      <button onClick={save} disabled={saving} className="text-cyan-300 hover:underline disabled:opacity-50">Save</button>
-      <button onClick={() => setEditing(false)} disabled={saving} className="text-slate-500 hover:text-slate-300">Cancel</button>
-      {error && <span className="text-red-400">{error}</span>}
-    </span>
+    <div className="mt-4 border-t border-[#1a2744] pt-4">
+      <h3 className="text-xs font-display text-slate-500 tracking-widest uppercase">Match Chat</h3>
+      <div ref={listRef} className="mt-2 max-h-56 overflow-y-auto space-y-1.5 pr-1">
+        {messages.length === 0 && (
+          <p className="text-xs text-slate-600">No messages yet — say hi and sort out where to play.</p>
+        )}
+        {messages.map((m) => {
+          const mine = Number(m.sender_user_id) === Number(myUserId);
+          return (
+            <div key={m.id} className={`flex ${mine ? 'justify-end' : 'justify-start'}`}>
+              <div
+                className={`max-w-[80%] px-3 py-1.5 rounded-lg text-sm break-words ${mine
+                  ? 'bg-cyan-500/15 border border-cyan-500/30 text-cyan-100'
+                  : 'bg-[#050a18] border border-[#1a2744] text-slate-300'}`}
+              >
+                {!mine && <span className="block text-[10px] text-slate-500">{m.sender_name}</span>}
+                {m.body}
+              </div>
+            </div>
+          );
+        })}
+      </div>
+      <div className="mt-2 flex gap-2">
+        <input
+          value={draft}
+          onChange={(e) => setDraft(e.target.value)}
+          onKeyDown={(e) => { if (e.key === 'Enter') send(); }}
+          maxLength={500}
+          placeholder={connected ? 'Message your opponent…' : 'Chat reconnecting…'}
+          disabled={!connected}
+          className="flex-1 bg-[#050a18] border border-[#1a2744] rounded-lg px-3 py-2 text-sm text-slate-200 focus:outline-none focus:border-cyan-500/50 disabled:opacity-50"
+        />
+        <button
+          onClick={send}
+          disabled={!connected || sending || !draft.trim()}
+          className="px-4 py-2 rounded-lg text-sm font-medium bg-cyan-500 text-[#050a18] hover:bg-cyan-400 disabled:opacity-50 transition-colors"
+        >
+          Send
+        </button>
+      </div>
+      {sendError && <p className="mt-1 text-xs text-red-400">{sendError}</p>}
+    </div>
   );
 }
 
@@ -155,9 +172,9 @@ function describeReport(report, opponentName, myUserId) {
   return `${mine ? 'You' : opponentName} won 2–${report.loser_games}`;
 }
 
-// The player's live match: who to fight, where to find them, and result
-// reporting with dual-verification states (awaiting / disputed).
-function CurrentMatchPanel({ match, myUserId, onOpenReport, tournamentStatus }) {
+// The player's live match: who to fight, where to find them, opponent chat,
+// and result reporting with dual-verification states (awaiting / disputed).
+function CurrentMatchPanel({ match, myUserId, onOpenReport, onOpenResolve, isAdmin, tournamentStatus, chat }) {
   const opponent = match.opponent;
   const opponentName = opponent?.name || 'Opponent';
   const reports = match.reports || [];
@@ -191,7 +208,29 @@ function CurrentMatchPanel({ match, myUserId, onOpenReport, tournamentStatus }) 
           ))}
         </div>
       ) : (
-        <p className="mt-3 text-sm text-slate-500">No shared groups on file — coordinate in chat (coming soon).</p>
+        <div className="mt-3 text-sm">
+          {match.opponentGroups?.length > 0 ? (
+            <>
+              <p className="text-slate-400">
+                No shared groups — join one of theirs:{' '}
+                {match.opponentGroups.map((g) => (
+                  <span key={g.id} className="inline-block mr-1 px-2 py-0.5 rounded bg-slate-800/60 text-slate-300 border border-slate-600/50 text-xs">
+                    {g.name}
+                  </span>
+                ))}
+              </p>
+              <p className="mt-1 text-xs text-slate-500">
+                Join it in-game, then add it under{' '}
+                <Link to="/arena/settings" className="text-cyan-300 hover:underline">arena settings</Link> for next time.
+              </p>
+            </>
+          ) : (
+            <p className="text-slate-500">
+              No shared groups — {opponentName} hasn't listed any. Sort out where to play in the chat below,
+              and set yours in <Link to="/arena/settings" className="text-cyan-300 hover:underline">arena settings</Link>.
+            </p>
+          )}
+        </div>
       )}
 
       <p className="mt-3 text-xs text-slate-500">
@@ -264,15 +303,31 @@ function CurrentMatchPanel({ match, myUserId, onOpenReport, tournamentStatus }) 
             >
               Re-report result
             </button>
+            {isAdmin && (
+              <button
+                onClick={onOpenResolve}
+                className="mt-2 ml-3 px-4 py-1.5 rounded-lg text-sm font-medium border border-red-500/50 text-red-300 hover:bg-red-500/10 transition-colors"
+              >
+                Admin: force-resolve
+              </button>
+            )}
           </div>
         )}
       </div>
+
+      <ChatThread
+        messages={chat.messages}
+        myUserId={myUserId}
+        onSend={chat.send}
+        connected={chat.connected}
+      />
     </div>
   );
 }
 
-// You/Opponent winner picker + 2-0 / 2-1 score picker.
-function ReportResultModal({ match, myUserId, onClose, onSubmit, busy, error }) {
+// You/Opponent winner picker + 2-0 / 2-1 score picker. Doubles as the admin
+// force-resolve dialog (same body shape) via the title prop.
+function ReportResultModal({ match, myUserId, onClose, onSubmit, busy, error, title = 'Report Result' }) {
   const opponentName = match.opponent?.name || 'Opponent';
   const [winner, setWinner] = useState('me');
   const [loserGames, setLoserGames] = useState(0);
@@ -293,7 +348,7 @@ function ReportResultModal({ match, myUserId, onClose, onSubmit, busy, error }) 
         className="bg-[#0c1425] border border-[#1a2744] rounded-xl p-6 w-full max-w-sm"
         onClick={(e) => e.stopPropagation()}
       >
-        <h3 className="font-display text-sm tracking-widest text-cyan-400 uppercase">Report Result</h3>
+        <h3 className="font-display text-sm tracking-widest text-cyan-400 uppercase">{title}</h3>
 
         <p className="mt-4 text-xs font-display text-slate-500 tracking-widest uppercase">Who won?</p>
         <div className="mt-2 flex gap-2">
@@ -337,6 +392,10 @@ export default function ArenaTournament() {
   const [reportOpen, setReportOpen] = useState(false);
   const [reportBusy, setReportBusy] = useState(false);
   const [reportError, setReportError] = useState(null);
+  const [resolveOpen, setResolveOpen] = useState(false);
+  const [resolveBusy, setResolveBusy] = useState(false);
+  const [resolveError, setResolveError] = useState(null);
+  const [chatMessages, setChatMessages] = useState([]);
 
   const captureServerNow = (serverNow) => {
     if (!serverNow) return;
@@ -356,7 +415,9 @@ export default function ArenaTournament() {
 
   useEffect(() => { load(); }, [load]);
 
-  const { connected, joinMatch, leaveMatch } = useArenaSocket(tournamentId, {
+  const myMatchId = data?.me?.match?.id;
+
+  const { connected, joinMatch, leaveMatch, sendChat } = useArenaSocket(tournamentId, {
     onReconnect: load,
     onTournamentUpdate: (t) => {
       captureServerNow(t.server_now);
@@ -370,6 +431,20 @@ export default function ArenaTournament() {
     onPairing: load,
     onMatchAssigned: load,
     onMatchUpdate: load,
+    // Live chat push. My own sends come back through here too (the server
+    // broadcasts to the whole match room), so append-with-dedupe is enough —
+    // no local echo needed. Socket payload is camelCase; normalize to the
+    // REST history row shape.
+    onChatMessage: (msg) => {
+      if (Number(msg.matchId) !== Number(myMatchId)) return;
+      setChatMessages((msgs) => (msgs.some((m) => m.id === msg.id) ? msgs : [...msgs, {
+        id: msg.id,
+        sender_user_id: msg.senderUserId,
+        sender_name: msg.senderName,
+        body: msg.body,
+        created_at: msg.at,
+      }]));
+    },
   });
 
   // Poll fallback: if the socket isn't connected, refresh every 10s.
@@ -379,14 +454,24 @@ export default function ArenaTournament() {
     return () => clearInterval(t);
   }, [connected, load]);
 
-  // Join my match's socket room (match-scoped pushes; chat arrives in M3).
-  const myMatchId = data?.me?.match?.id;
+  // Join my match's socket room (match-scoped pushes: chat, match detail).
   useEffect(() => {
     if (!myMatchId || !connected) return undefined;
     joinMatch(myMatchId);
     return () => leaveMatch(myMatchId);
     // joinMatch/leaveMatch are stable wrappers around the singleton socket.
     // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [myMatchId, connected]);
+
+  // Chat history: (re)load when the match changes and on socket reconnect —
+  // pushes missed while disconnected are gone; the REST snapshot has them all.
+  useEffect(() => {
+    if (!myMatchId) { setChatMessages([]); return undefined; }
+    let stale = false;
+    getArenaMatchChat(myMatchId)
+      .then((d) => { if (!stale) setChatMessages(d.messages); })
+      .catch(() => { /* keep whatever we have; sends still work over the socket */ });
+    return () => { stale = true; };
   }, [myMatchId, connected]);
 
   const action = async (fn) => {
@@ -413,6 +498,22 @@ export default function ArenaTournament() {
       setReportError(err.response?.data?.error || 'Failed to report result');
     } finally {
       setReportBusy(false);
+    }
+  };
+
+  // Admin force-confirm of a disputed match (same body shape as a report).
+  const submitResolve = async (body) => {
+    if (!myMatchId) return;
+    setResolveBusy(true);
+    setResolveError(null);
+    try {
+      await resolveArenaMatch(myMatchId, body);
+      setResolveOpen(false);
+      load();
+    } catch (err) {
+      setResolveError(err.response?.data?.error || 'Failed to resolve match');
+    } finally {
+      setResolveBusy(false);
     }
   };
 
@@ -473,6 +574,7 @@ export default function ArenaTournament() {
               )}
               <button onClick={() => action(withdrawArena)} disabled={busy} className="text-xs text-slate-500 hover:text-red-400">Withdraw</button>
               <IngameNameEditor />
+              <Link to="/arena/settings" className="text-xs text-slate-500 hover:text-cyan-300">My groups →</Link>
               {!user.player_id && (
                 <Link to="/link" className="text-xs text-slate-500 hover:text-cyan-300">
                   Tip: claim your player profile so results show under your record →
@@ -487,8 +589,11 @@ export default function ArenaTournament() {
         <CurrentMatchPanel
           match={me.match}
           myUserId={user?.id}
+          isAdmin={Boolean(user?.is_admin)}
           tournamentStatus={tournament.status}
           onOpenReport={() => { setReportError(null); setReportOpen(true); }}
+          onOpenResolve={() => { setResolveError(null); setResolveOpen(true); }}
+          chat={{ messages: chatMessages, send: (body) => sendChat(myMatchId, body), connected }}
         />
       )}
 
@@ -500,6 +605,18 @@ export default function ArenaTournament() {
           error={reportError}
           onClose={() => setReportOpen(false)}
           onSubmit={submitReport}
+        />
+      )}
+
+      {resolveOpen && me?.match && (
+        <ReportResultModal
+          title="Admin: Resolve Match"
+          match={me.match}
+          myUserId={user?.id}
+          busy={resolveBusy}
+          error={resolveError}
+          onClose={() => setResolveOpen(false)}
+          onSubmit={submitResolve}
         />
       )}
 

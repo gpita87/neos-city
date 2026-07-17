@@ -17,6 +17,7 @@ import AuthCallback from './pages/AuthCallback';
 import ClaimPlayer from './pages/ClaimPlayer';
 import Arena from './pages/Arena';
 import ArenaTournament from './pages/ArenaTournament';
+import ArenaSettings from './pages/ArenaSettings';
 import { useAuth } from './contexts/AuthContext';
 import { useFlag } from './hooks/useFlag';
 import FlagPanel from './components/FlagPanel';
@@ -171,6 +172,7 @@ export default function App() {
           {showCreators && <Route path="/creators" element={<Creators />} />}
           {showTwitch && <Route path="/twitch" element={<Twitch />} />}
           {showArena && <Route path="/arena" element={<Arena />} />}
+          {showArena && <Route path="/arena/settings" element={<ArenaSettings />} />}
           {showArena && <Route path="/arena/:id" element={<ArenaTournament />} />}
           <Route path="/live" element={<LiveRoom />} />
           <Route path="/live/:code" element={<LiveRoom />} />

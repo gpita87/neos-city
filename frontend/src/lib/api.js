@@ -111,6 +111,18 @@ export const updateArenaTournament = (id, data) => api.patch(`/arena/${id}`, dat
 // force-confirm a disputed/stuck match with the same body.
 export const reportArenaMatch = (matchId, data) => api.post(`/arena/matches/${matchId}/report`, data).then(r => r.data);
 export const resolveArenaMatch = (matchId, data) => api.post(`/arena/matches/${matchId}/resolve`, data).then(r => r.data);
+// Per-match chat history (players in the match + admins). Live messages arrive
+// over the socket; this restores the thread on reload/reconnect.
+export const getArenaMatchChat = (matchId) => api.get(`/arena/matches/${matchId}/chat`).then(r => r.data);
+
+// ── Pokkén in-game Groups (lobbies) ──────────────────────────────────────────
+// Players list which Groups they're in (max 6, the in-game cap) so paired
+// opponents can see where to play. PUT /mine is full-replace semantics.
+export const getGroups = (params = {}) => api.get('/groups', { params }).then(r => r.data);
+export const getMyGroups = () => api.get('/groups/mine').then(r => r.data);
+export const setMyGroups = (group_ids) => api.put('/groups/mine', { group_ids }).then(r => r.data);
+export const createGroup = (data) => api.post('/groups', data).then(r => r.data);
+export const updateGroup = (id, data) => api.patch(`/groups/${id}`, data).then(r => r.data);
 
 // Organizers
 export const getOrganizers = () => api.get('/organizers').then(r => r.data);

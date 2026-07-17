@@ -128,11 +128,18 @@ export default function Arena() {
 
   return (
     <div className="space-y-8">
-      <div>
-        <h1 className="font-display text-2xl tracking-widest text-cyan-400 uppercase neon-text">Arena</h1>
-        <p className="mt-1 text-sm text-slate-400">
-          Live hour-long tournaments played right here. Win to climb the board — win streaks are worth double.
-        </p>
+      <div className="flex items-start justify-between gap-4 flex-wrap">
+        <div>
+          <h1 className="font-display text-2xl tracking-widest text-cyan-400 uppercase neon-text">Arena</h1>
+          <p className="mt-1 text-sm text-slate-400">
+            Live hour-long tournaments played right here. Win to climb the board — win streaks are worth double.
+          </p>
+        </div>
+        {user && (
+          <Link to="/arena/settings" className="text-sm text-slate-400 hover:text-cyan-300 transition-colors">
+            ⚙ My groups & in-game name
+          </Link>
+        )}
       </div>
 
       {user?.is_admin && <CreateForm onCreated={load} />}

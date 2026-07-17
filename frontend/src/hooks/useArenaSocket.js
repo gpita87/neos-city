@@ -55,8 +55,13 @@ export function useArenaSocket(tournamentId, handlers = {}) {
   const joinMatch = (matchId) =>
     new Promise((resolve) => getSocket().emit('match:join', { matchId }, resolve));
   const leaveMatch = (matchId) => getSocket().emit('match:leave', { matchId });
+  // timeout(): if the connection drops mid-send the ack never arrives — resolve
+  // as a failure instead of leaving the caller's promise (and send button) hung.
   const sendChat = (matchId, body) =>
-    new Promise((resolve) => getSocket().emit('chat:send', { matchId, body }, resolve));
+    new Promise((resolve) => getSocket().timeout(5000).emit(
+      'chat:send', { matchId, body },
+      (err, ack) => resolve(err ? { ok: false, error: 'No connection — try again' } : ack)
+    ));
 
   return { connected, joinMatch, leaveMatch, sendChat };
 }

@@ -75,7 +75,7 @@ router.get('/:id', attachUser, async (req, res) => {
         );
         let currentMatch = null;
         if (match) {
-          const [{ rows: [opp] }, { rows: sharedGroups }, { rows: reports }] = await Promise.all([
+          const [{ rows: [opp] }, { rows: sharedGroups }, { rows: opponentGroups }, { rows: reports }] = await Promise.all([
             db.query(
               `SELECT u.id AS user_id, u.region, u.ingame_name,
                       COALESCE(pl.display_name, u.display_name, u.discord_username, 'Player ' || u.id) AS name,
@@ -94,6 +94,16 @@ router.get('/:id', attachUser, async (req, res) => {
                ORDER BY g.name`,
               [req.user.id, match.opponent_user_id]
             ),
+            // ALL of the opponent's groups — when there's no overlap, the UI
+            // offers "join one of theirs" so the pairing can still happen.
+            db.query(
+              `SELECT g.id, g.name, g.ruleset
+               FROM pokken_groups g
+               JOIN user_groups ug ON ug.group_id = g.id AND ug.user_id = $1
+               WHERE g.active
+               ORDER BY g.name`,
+              [match.opponent_user_id]
+            ),
             // Both players' filed reports — lets the UI render awaiting/disputed
             // states, including the opponent's conflicting claim.
             db.query(
@@ -102,7 +112,7 @@ router.get('/:id', attachUser, async (req, res) => {
               [match.id]
             ),
           ]);
-          currentMatch = { ...match, opponent: opp || null, sharedGroups, reports };
+          currentMatch = { ...match, opponent: opp || null, sharedGroups, opponentGroups, reports };
         }
         me = { participant, match: currentMatch };
       }
@@ -178,6 +188,46 @@ async function setParticipantStatus(req, res, newStatus) {
 router.post('/:id/withdraw', requireAuth, (req, res) => setParticipantStatus(req, res, 'withdrawn'));
 router.post('/:id/pause', requireAuth, (req, res) => setParticipantStatus(req, res, 'paused'));
 router.post('/:id/resume', requireAuth, (req, res) => setParticipantStatus(req, res, 'active'));
+
+// ── Match chat ───────────────────────────────────────────────────────────────
+
+// GET /api/arena/matches/:id/chat — history for reconnect/reload. Live
+// messages arrive over the socket (chat:message); this is the snapshot layer.
+// Players in the match + admins only.
+router.get('/matches/:id/chat', requireAuth, async (req, res) => {
+  const matchId = parseId(req.params.id);
+  if (!matchId) return res.status(400).json({ error: 'Invalid match id' });
+  try {
+    const { rows: [match] } = await db.query(
+      `SELECT id, p1_user_id, p2_user_id FROM arena_matches WHERE id = $1`,
+      [matchId]
+    );
+    if (!match) return res.status(404).json({ error: 'Match not found' });
+    const isPlayer = match.p1_user_id === req.user.id || match.p2_user_id === req.user.id;
+    if (!isPlayer && !req.user.is_admin) {
+      return res.status(403).json({ error: 'Not a player in this match' });
+    }
+
+    // Newest 200, returned oldest-first for straight rendering. The 1 msg/sec
+    // socket throttle makes hitting the cap unlikely, but a full hour of chat
+    // could — keeping the tail (not the head) is what a reload wants.
+    const { rows } = await db.query(
+      `SELECT c.id, c.match_id, c.sender_user_id, c.body, c.created_at,
+              COALESCE(pl.display_name, u.display_name, u.discord_username, 'Player ' || u.id) AS sender_name
+       FROM arena_chat_messages c
+       JOIN users u ON u.id = c.sender_user_id
+       LEFT JOIN players pl ON pl.id = u.player_id
+       WHERE c.match_id = $1
+       ORDER BY c.id DESC
+       LIMIT 200`,
+      [matchId]
+    );
+    res.json({ messages: rows.reverse() });
+  } catch (err) {
+    console.error('[arena] chat history failed:', err.message);
+    res.status(500).json({ error: 'Failed to load chat' });
+  }
+});
 
 // ── Match results ────────────────────────────────────────────────────────────
 
