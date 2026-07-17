@@ -2176,6 +2176,7 @@ async function importOneChallongeScraped(payload) {
        name = EXCLUDED.name,
        series = EXCLUDED.series,
        participants_count = EXCLUDED.participants_count,
+       started_at = EXCLUDED.started_at,
        completed_at = EXCLUDED.completed_at,
        is_partial = EXCLUDED.is_partial
      RETURNING *`,
@@ -2302,6 +2303,18 @@ async function importOneChallongeScraped(payload) {
        m.round, section, completedAt]
     );
     if (inserted) importedMatches++;
+  }
+
+  // Re-imports can carry a corrected tournament date (e.g. the year-less
+  // start-time fix); the DO NOTHING upsert above would leave stale played_at
+  // on rows from the earlier import, and recalculate_elo.js replays matches
+  // in played_at order.
+  if (completedAt) {
+    await db.query(
+      `UPDATE matches SET played_at = $1
+        WHERE tournament_id = $2 AND played_at IS DISTINCT FROM $1`,
+      [completedAt, tournament.id]
+    );
   }
 
   // ── Placement ranks ─────────────────────────────────────────────────────────

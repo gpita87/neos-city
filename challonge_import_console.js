@@ -156,7 +156,15 @@ function pageMeta(doc) {
   if (st) {
     // "July 31, 2016 at 5:00 PM EDT" → keep the date part; format as
     // YYYY-MM-DD from local date parts so no timezone math shifts the day.
-    const d = new Date((st.textContent || '').trim().split(/\s+at\s+/i)[0]);
+    const raw = (st.textContent || '').trim().split(/\s+at\s+/i)[0].trim();
+    let d = new Date(raw);
+    // Challonge omits the year for current-year events ("January 11" instead
+    // of "January 11, 2026") and Date() then defaults to 2001. Re-parse with
+    // the current year, rolling back one if that would land in the future.
+    if (!isNaN(d) && !/\b\d{4}\b/.test(raw)) {
+      d = new Date(`${raw}, ${new Date().getFullYear()}`);
+      if (!isNaN(d) && d.getTime() > Date.now()) d.setFullYear(d.getFullYear() - 1);
+    }
     if (!isNaN(d)) {
       out.date = `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`;
     }
