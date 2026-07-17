@@ -1,0 +1,266 @@
+// Live Arena tournaments — REST layer.
+//
+// REST is the source of truth / snapshot layer; socket.io (src/socket) is push
+// only. Spectators need no login: GET / and GET /:id are public, and GET /:id
+// doubles as the poll fallback for clients whose socket won't connect.
+//
+// M1 surface: list, detail, register/withdraw/pause/resume, admin create/edit.
+// M2 adds: match reporting, disputes, admin resolve. M3: chat history.
+
+const express = require('express');
+const db = require('../db');
+const { requireAuth, attachUser } = require('../middleware/requireAuth');
+const requireAdmin = require('../middleware/requireAdmin');
+const { getSnapshot, endsAtSql } = require('../services/arenaState');
+const { pairTournament, emitScoreboard, emitTournamentUpdate } = require('../services/arenaEngine');
+
+const router = express.Router();
+
+const OPEN_MATCH_STATUSES = ['active', 'awaiting_confirm', 'disputed'];
+
+function parseId(raw) {
+  const id = Number(raw);
+  return Number.isInteger(id) && id > 0 ? id : null;
+}
+
+// ── Public reads ─────────────────────────────────────────────────────────────
+
+// GET /api/arena — all tournaments with participant counts (client groups by status)
+router.get('/', async (req, res) => {
+  try {
+    const { rows } = await db.query(
+      `SELECT t.id, t.name, t.description, t.starts_at, t.duration_minutes,
+              t.status, t.created_at, ${endsAtSql()} AS ends_at,
+              COUNT(ap.id)::int AS participants_count
+       FROM arena_tournaments t
+       LEFT JOIN arena_participants ap ON ap.tournament_id = t.id
+       GROUP BY t.id
+       ORDER BY t.starts_at DESC`
+    );
+    res.json({ tournaments: rows, server_now: new Date().toISOString() });
+  } catch (err) {
+    console.error('[arena] list failed:', err.message);
+    res.status(500).json({ error: 'Failed to load arena tournaments' });
+  }
+});
+
+// GET /api/arena/:id — full snapshot; when logged in, includes `me`
+// (participant row + current open match + shared groups with the opponent).
+router.get('/:id', attachUser, async (req, res) => {
+  const id = parseId(req.params.id);
+  if (!id) return res.status(400).json({ error: 'Invalid tournament id' });
+  try {
+    const snapshot = await getSnapshot(id);
+    if (!snapshot) return res.status(404).json({ error: 'Tournament not found' });
+
+    let me = null;
+    if (req.user) {
+      const { rows: [participant] } = await db.query(
+        `SELECT * FROM arena_participants WHERE tournament_id = $1 AND user_id = $2`,
+        [id, req.user.id]
+      );
+      if (participant) {
+        const { rows: [match] } = await db.query(
+          `SELECT m.*,
+                  CASE WHEN m.p1_user_id = $2 THEN m.p2_user_id ELSE m.p1_user_id END AS opponent_user_id
+           FROM arena_matches m
+           WHERE m.tournament_id = $1
+             AND (m.p1_user_id = $2 OR m.p2_user_id = $2)
+             AND m.status = ANY($3)
+           ORDER BY m.created_at DESC LIMIT 1`,
+          [id, req.user.id, OPEN_MATCH_STATUSES]
+        );
+        let currentMatch = null;
+        if (match) {
+          const [{ rows: [opp] }, { rows: sharedGroups }] = await Promise.all([
+            db.query(
+              `SELECT u.id AS user_id, u.region,
+                      COALESCE(pl.display_name, u.display_name, u.discord_username, 'Player ' || u.id) AS name,
+                      COALESCE(pl.avatar_url, u.avatar_url) AS avatar_url
+               FROM users u LEFT JOIN players pl ON pl.id = u.player_id
+               WHERE u.id = $1`,
+              [match.opponent_user_id]
+            ),
+            // Groups BOTH players belong to — where this match can happen in-game.
+            db.query(
+              `SELECT g.id, g.name, g.ruleset
+               FROM pokken_groups g
+               JOIN user_groups mine ON mine.group_id = g.id AND mine.user_id = $1
+               JOIN user_groups theirs ON theirs.group_id = g.id AND theirs.user_id = $2
+               WHERE g.active
+               ORDER BY g.name`,
+              [req.user.id, match.opponent_user_id]
+            ),
+          ]);
+          currentMatch = { ...match, opponent: opp || null, sharedGroups };
+        }
+        me = { participant, match: currentMatch };
+      }
+    }
+
+    res.json({ ...snapshot, me });
+  } catch (err) {
+    console.error('[arena] detail failed:', err.message);
+    res.status(500).json({ error: 'Failed to load tournament' });
+  }
+});
+
+// ── Player actions ───────────────────────────────────────────────────────────
+
+// POST /api/arena/:id/register — join (late join allowed while live)
+router.post('/:id/register', requireAuth, async (req, res) => {
+  const id = parseId(req.params.id);
+  if (!id) return res.status(400).json({ error: 'Invalid tournament id' });
+  try {
+    const { rows: [t] } = await db.query(
+      `SELECT id, status FROM arena_tournaments WHERE id = $1`, [id]
+    );
+    if (!t) return res.status(404).json({ error: 'Tournament not found' });
+    if (!['scheduled', 'live'].includes(t.status)) {
+      return res.status(409).json({ error: 'Registration is closed for this tournament' });
+    }
+
+    // Idempotent: re-registering while already active is a no-op (keeps queue
+    // priority); returning after a withdrawal reactivates with score intact.
+    const { rows: [participant] } = await db.query(
+      `INSERT INTO arena_participants (tournament_id, user_id)
+       VALUES ($1, $2)
+       ON CONFLICT (tournament_id, user_id) DO UPDATE
+         SET status = 'active',
+             waiting_since = CASE WHEN arena_participants.status = 'active'
+                                  THEN arena_participants.waiting_since ELSE NOW() END
+       RETURNING *`,
+      [id, req.user.id]
+    );
+
+    await emitScoreboard(id);
+    if (t.status === 'live') await pairTournament(id);
+    res.json({ participant });
+  } catch (err) {
+    console.error('[arena] register failed:', err.message);
+    res.status(500).json({ error: 'Failed to register' });
+  }
+});
+
+// Shared handler for withdraw/pause/resume status flips.
+async function setParticipantStatus(req, res, newStatus) {
+  const id = parseId(req.params.id);
+  if (!id) return res.status(400).json({ error: 'Invalid tournament id' });
+  try {
+    const waitingReset = newStatus === 'active' ? ', waiting_since = NOW()' : '';
+    const { rows: [participant] } = await db.query(
+      `UPDATE arena_participants SET status = $3${waitingReset}
+       WHERE tournament_id = $1 AND user_id = $2
+       RETURNING *`,
+      [id, req.user.id, newStatus]
+    );
+    if (!participant) return res.status(404).json({ error: 'Not registered in this tournament' });
+
+    await emitScoreboard(id);
+    if (newStatus === 'active') await pairTournament(id);
+    res.json({ participant });
+  } catch (err) {
+    console.error(`[arena] ${newStatus} failed:`, err.message);
+    res.status(500).json({ error: 'Failed to update registration' });
+  }
+}
+
+router.post('/:id/withdraw', requireAuth, (req, res) => setParticipantStatus(req, res, 'withdrawn'));
+router.post('/:id/pause', requireAuth, (req, res) => setParticipantStatus(req, res, 'paused'));
+router.post('/:id/resume', requireAuth, (req, res) => setParticipantStatus(req, res, 'active'));
+
+// ── Admin ────────────────────────────────────────────────────────────────────
+
+// POST /api/arena — create a tournament
+router.post('/', requireAdmin, async (req, res) => {
+  const { name, description, starts_at, duration_minutes } = req.body || {};
+  if (!name || !String(name).trim()) return res.status(400).json({ error: 'name is required' });
+  const startsAt = new Date(starts_at);
+  if (Number.isNaN(startsAt.getTime())) return res.status(400).json({ error: 'starts_at must be a valid date' });
+  const duration = duration_minutes == null ? 60 : Number(duration_minutes);
+  if (!Number.isInteger(duration) || duration < 5 || duration > 240) {
+    return res.status(400).json({ error: 'duration_minutes must be 5–240' });
+  }
+  try {
+    const { rows: [tournament] } = await db.query(
+      `INSERT INTO arena_tournaments (name, description, starts_at, duration_minutes, created_by)
+       VALUES ($1, $2, $3, $4, $5) RETURNING *`,
+      [String(name).trim(), description || null, startsAt.toISOString(), duration, req.user?.id ?? null]
+    );
+    res.status(201).json({ tournament });
+  } catch (err) {
+    console.error('[arena] create failed:', err.message);
+    res.status(500).json({ error: 'Failed to create tournament' });
+  }
+});
+
+// PATCH /api/arena/:id — edit while scheduled; cancel any time before finalized
+router.patch('/:id', requireAdmin, async (req, res) => {
+  const id = parseId(req.params.id);
+  if (!id) return res.status(400).json({ error: 'Invalid tournament id' });
+  const { name, description, starts_at, duration_minutes, status } = req.body || {};
+  try {
+    const { rows: [t] } = await db.query(
+      `SELECT id, status FROM arena_tournaments WHERE id = $1`, [id]
+    );
+    if (!t) return res.status(404).json({ error: 'Tournament not found' });
+
+    if (status !== undefined) {
+      if (status !== 'cancelled') {
+        return res.status(400).json({ error: 'Only status=cancelled may be set directly' });
+      }
+      if (['finalized', 'cancelled'].includes(t.status)) {
+        return res.status(409).json({ error: `Tournament is already ${t.status}` });
+      }
+    }
+
+    const fieldEdits = [name, description, starts_at, duration_minutes].some((v) => v !== undefined);
+    if (fieldEdits && t.status !== 'scheduled') {
+      return res.status(409).json({ error: 'Details can only be edited before the tournament starts' });
+    }
+
+    const sets = [];
+    const vals = [];
+    const push = (sql, v) => { vals.push(v); sets.push(`${sql} = $${vals.length}`); };
+    if (name !== undefined) {
+      if (!String(name).trim()) return res.status(400).json({ error: 'name cannot be empty' });
+      push('name', String(name).trim());
+    }
+    if (description !== undefined) push('description', description || null);
+    if (starts_at !== undefined) {
+      const d = new Date(starts_at);
+      if (Number.isNaN(d.getTime())) return res.status(400).json({ error: 'starts_at must be a valid date' });
+      push('starts_at', d.toISOString());
+    }
+    if (duration_minutes !== undefined) {
+      const dur = Number(duration_minutes);
+      if (!Number.isInteger(dur) || dur < 5 || dur > 240) {
+        return res.status(400).json({ error: 'duration_minutes must be 5–240' });
+      }
+      push('duration_minutes', dur);
+    }
+    if (status !== undefined) push('status', status);
+    if (!sets.length) return res.status(400).json({ error: 'Nothing to update' });
+
+    vals.push(id);
+    const { rows: [tournament] } = await db.query(
+      `UPDATE arena_tournaments SET ${sets.join(', ')} WHERE id = $${vals.length} RETURNING *`,
+      vals
+    );
+    if (status === 'cancelled') {
+      // Close out any open matches so nothing lingers, then tell the room.
+      await db.query(
+        `UPDATE arena_matches SET status = 'cancelled', completed_at = NOW()
+         WHERE tournament_id = $1 AND status = ANY($2)`,
+        [id, OPEN_MATCH_STATUSES]
+      );
+      await emitTournamentUpdate(id);
+    }
+    res.json({ tournament });
+  } catch (err) {
+    console.error('[arena] update failed:', err.message);
+    res.status(500).json({ error: 'Failed to update tournament' });
+  }
+});
+
+module.exports = router;

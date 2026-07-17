@@ -43,6 +43,11 @@ export const FLAGS = {
     description: 'Twitch streamers page — live status + last Pokkén-category stream per channel.',
     default: true,
   },
+  arena: {
+    label: 'Live Arena',
+    description: 'On-site live arena tournaments (hour-long, streak scoring, live scoreboard). In development.',
+    default: false,
+  },
 };
 
 // ── Storage ───────────────────────────────────────────────────────────────────

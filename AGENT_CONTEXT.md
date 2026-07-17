@@ -307,7 +307,49 @@ Backend uses `nodemon` for hot reload. Changes to `.js` files in `backend/src/` 
 
 ## ⚡ NEXT AGENT: What to Do First
 
-### Current state (as of Jul 16 2026 — local discovery curated, `pull_new.js` NOT yet run)
+### Current state (as of Jul 17 2026 — Live Arena M1 shipped; M2 is the next milestone)
+
+**NOTE:** the Jul 16 TOP PRIORITY below (run `pull_new.js` for the 94 locals) is
+still outstanding and unrelated to this — whichever matters more to Gabriel goes first.
+
+**Live Arena** = on-site, hour-long, lichess-arena-style tournaments (login-gated
+registration with late join, score-proximity auto-pairing, streak scoring win=2 /
+streak-win=4, dual result verification, per-match chat, Pokkén Group coordination,
+live public scoreboard over socket.io). Full design: `~/.claude/plans/elegant-baking-snowflake.md`
+(Gabriel-approved). Key decisions: socket.io (not polling); arena results SEPARATE
+from career records/ELO/achievements in v1; admin-created tournaments; arena identity
+keys on `users(id)`, not `players(id)`.
+
+**M1 (merged from `agent/arena-m1`) shipped:** `add_arena.sql` migration (ALL arena
+tables incl. groups/chat/connection-reports + `users.region`), `http.createServer`
+refactor + `backend/src/socket/index.js` (JWT handshake, spectator fallback, rooms
+`arena:t:{id}` / `arena:m:{id}` / `user:{id}`, working `chat:send` handler),
+`backend/src/routes/arena.js` (list/detail/register/withdraw/pause/resume + admin
+create/patch), `backend/src/services/arenaEngine.js` (5s tick: scheduled→live→
+finished→finalized; `pairTournament()` is a documented no-op seam),
+`backend/src/services/arenaState.js` (snapshot/standings helpers), and frontend
+`pages/Arena.jsx` + `pages/ArenaTournament.jsx` behind `?ff=arena` (flag default-off),
+with `lib/socket.js` + `hooks/useArenaSocket.js` (10s poll fallback). After merging,
+run: `node run_migration.js backend/src/db/migrations/add_arena.sql`.
+
+**Next milestones** (each in its own `spawn-worktree.js` worktree; plan has details):
+- **M2 — the game:** pairing pass inside `pairTournament` (transaction +
+  `pg_advisory_xact_lock`, score-proximity, no immediate rematch, 45s rematch waiver),
+  `arenaScoring.js` (report upsert → agree/confirm | conflict/disputed; streak points;
+  5-min auto-confirm + zombie-match cancel in the engine tick; admin resolve route),
+  Scoreboard/CurrentMatchPanel/ReportResultModal UI. Unit tests via `node --test`.
+- **M3 — chat UI** (server side already works), **M4 — groups UI** (`routes/groups.js`,
+  ≤6 memberships, shared-group highlight — API already returns `sharedGroups`),
+  **M5 — region picker + connection ratings** (add `region` to `USER_COLUMNS`!).
+
+**Blockers to real use:** Discord/Google OAuth apps still not registered
+(AUTH_HANDOFF.md) — test with hand-minted JWTs (`{sub, tv:0}` signed with local
+`JWT_SECRET`). Placeholder seed group names in the migration need Gabriel's real
+in-game Group names before launch.
+
+---
+
+### Prior state (as of Jul 16 2026 — local discovery curated, `pull_new.js` NOT yet run)
 
 #### TOP PRIORITY: run the import
 

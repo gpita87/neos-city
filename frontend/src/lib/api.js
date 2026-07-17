@@ -93,6 +93,19 @@ export const getClaimSuggestions = () => api.get('/auth/claim-suggestions').then
 export const discordLoginUrl = () => `${import.meta.env.VITE_API_URL || ''}/api/auth/discord`;
 export const googleLoginUrl = () => `${import.meta.env.VITE_API_URL || ''}/api/auth/google`;
 
+// ── Live Arena tournaments ────────────────────────────────────────────────────
+// Reads are public (spectators). Register/withdraw/pause/resume need a session;
+// create/update need admin. Live updates arrive over socket.io (lib/socket.js) —
+// these REST calls are the snapshot layer / reconnect fallback.
+export const getArenaTournaments = () => api.get('/arena').then(r => r.data);
+export const getArenaTournament = (id) => api.get(`/arena/${id}`).then(r => r.data);
+export const registerArena = (id) => api.post(`/arena/${id}/register`).then(r => r.data);
+export const withdrawArena = (id) => api.post(`/arena/${id}/withdraw`).then(r => r.data);
+export const pauseArena = (id) => api.post(`/arena/${id}/pause`).then(r => r.data);
+export const resumeArena = (id) => api.post(`/arena/${id}/resume`).then(r => r.data);
+export const createArenaTournament = (data) => api.post('/arena', data).then(r => r.data);
+export const updateArenaTournament = (id, data) => api.patch(`/arena/${id}`, data).then(r => r.data);
+
 // Organizers
 export const getOrganizers = () => api.get('/organizers').then(r => r.data);
 export const addOrganizer = (data) => api.post('/organizers', data).then(r => r.data);

@@ -1,4 +1,5 @@
 require('dotenv').config();
+const http = require('http');
 const express = require('express');
 const cors = require('cors');
 const rateLimit = require('express-rate-limit');
@@ -13,6 +14,7 @@ const creatorsRouter = require('./routes/creators');
 const resourcesRouter = require('./routes/resources');
 const authRouter = require('./routes/auth');
 const twitchRouter = require('./routes/twitch');
+const arenaRouter = require('./routes/arena');
 
 const app = express();
 
@@ -71,6 +73,7 @@ app.use('/api/creators', creatorsRouter);
 app.use('/api/resources', resourcesRouter);
 app.use('/api/auth', authRouter);
 app.use('/api/twitch', twitchRouter);
+app.use('/api/arena', arenaRouter);
 
 app.get('/api/health', (req, res) => res.json({ status: 'ok', app: 'Neos City' }));
 
@@ -102,10 +105,18 @@ app.get('/api/health/challonge', async (req, res) => {
 });
 
 const { startCreatorPolling, startTwitchPolling } = require('./services/poller');
+const { startArenaEngine } = require('./services/arenaEngine');
+
+// Explicit http.Server (instead of app.listen) so socket.io can share the port.
+// Socket.io reuses the SAME corsOrigins allow-list — if they ever diverge, prod
+// socket connections fail silently while REST keeps working.
+const server = http.createServer(app);
+require('./socket').init(server, corsOrigins);
 
 const PORT = process.env.PORT || 3001;
-app.listen(PORT, () => {
+server.listen(PORT, () => {
   console.log(`🏙️  Neos City backend running on port ${PORT}`);
   startCreatorPolling();
   startTwitchPolling();
+  startArenaEngine();
 });

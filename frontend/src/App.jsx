@@ -15,6 +15,8 @@ import Twitch from './pages/Twitch';
 import Login from './pages/Login';
 import AuthCallback from './pages/AuthCallback';
 import ClaimPlayer from './pages/ClaimPlayer';
+import Arena from './pages/Arena';
+import ArenaTournament from './pages/ArenaTournament';
 import { useAuth } from './contexts/AuthContext';
 import { useFlag } from './hooks/useFlag';
 import FlagPanel from './components/FlagPanel';
@@ -88,10 +90,12 @@ export default function App() {
   const showCreators = useFlag('creators');
   const showAuth = useFlag('auth');
   const showTwitch = useFlag('twitch');
+  const showArena = useFlag('arena');
   const [menuOpen, setMenuOpen] = useState(false);
 
   const links = [
     ...NAV_LINKS,
+    ...(showArena ? [{ to: '/arena', label: 'Arena' }] : []),
     ...(showCreators ? [{ to: '/creators', label: 'YouTube' }] : []),
     ...(showTwitch ? [{ to: '/twitch', label: 'Twitch' }] : []),
   ];
@@ -166,6 +170,8 @@ export default function App() {
           <Route path="/achievements" element={<Achievements />} />
           {showCreators && <Route path="/creators" element={<Creators />} />}
           {showTwitch && <Route path="/twitch" element={<Twitch />} />}
+          {showArena && <Route path="/arena" element={<Arena />} />}
+          {showArena && <Route path="/arena/:id" element={<ArenaTournament />} />}
           <Route path="/live" element={<LiveRoom />} />
           <Route path="/live/:code" element={<LiveRoom />} />
           <Route path="/organizers" element={<Organizers />} />
