@@ -78,19 +78,32 @@ router.get('/recent-placements', async (req, res) => {
     // For each tournament, fetch top N placements. For partial brackets the
     // unrevealed top-N players sit at final_rank=NULL and we want them ABOVE
     // the visible 5/6/7/8 rows, so order NULLS FIRST and include the whole
-    // null tier as "Top N".
+    // null tier as "Top N". For finalized brackets a NULL rank means the
+    // player never made Challonge's final standings (removed/inactive
+    // entrant) — those add nothing to a top-N card, so drop them.
     const results = [];
     for (const t of tournaments) {
-      const { rows: placements } = await db.query(
-        `SELECT tp.player_id, tp.final_rank,
-                p.display_name, p.challonge_username, p.region, p.avatar_url
-         FROM tournament_placements tp
-         JOIN players p ON tp.player_id = p.id
-         WHERE tp.tournament_id = $1
-           AND (tp.final_rank IS NULL OR tp.final_rank <= $2)
-         ORDER BY tp.final_rank ASC NULLS FIRST, p.display_name ASC`,
-        [t.id, placementLimit]
-      );
+      const { rows: placements } = t.is_partial
+        ? await db.query(
+            `SELECT tp.player_id, tp.final_rank,
+                    p.display_name, p.challonge_username, p.region, p.avatar_url
+             FROM tournament_placements tp
+             JOIN players p ON tp.player_id = p.id
+             WHERE tp.tournament_id = $1
+               AND (tp.final_rank IS NULL OR tp.final_rank <= $2)
+             ORDER BY tp.final_rank ASC NULLS FIRST, p.display_name ASC`,
+            [t.id, placementLimit]
+          )
+        : await db.query(
+            `SELECT tp.player_id, tp.final_rank,
+                    p.display_name, p.challonge_username, p.region, p.avatar_url
+             FROM tournament_placements tp
+             JOIN players p ON tp.player_id = p.id
+             WHERE tp.tournament_id = $1
+               AND tp.final_rank <= $2
+             ORDER BY tp.final_rank ASC, p.display_name ASC`,
+            [t.id, placementLimit]
+          );
       // Surface the unrevealed-player count so the frontend can render
       // "TOP N UNREVEALED" without re-deriving it.
       const unrevealedTopN = t.is_partial
