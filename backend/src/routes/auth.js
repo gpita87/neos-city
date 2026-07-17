@@ -6,7 +6,7 @@ const axios = require('axios');
 
 const db = require('../db');
 const requireAdmin = require('../middleware/requireAdmin');
-const { requireAuth } = require('../middleware/requireAuth');
+const { requireAuth, USER_COLUMNS } = require('../middleware/requireAuth');
 
 // ── Config / helpers ────────────────────────────────────────────────────────
 //
@@ -145,6 +145,35 @@ async function resolveOAuthUser({ provider, providerId, email, emailVerified, us
 // GET /api/auth/me
 router.get('/me', requireAuth, (req, res) => {
   res.json({ user: req.user });
+});
+
+// PATCH /api/auth/me — self-service profile fields. Currently just ingame_name
+// (the Pokkén in-game name opponents look for inside a Group); M5 adds region.
+router.patch('/me', requireAuth, async (req, res) => {
+  const body = req.body || {};
+  const sets = [];
+  const vals = [];
+  const push = (col, v) => { vals.push(v); sets.push(`${col} = $${vals.length}`); };
+
+  if (body.ingame_name !== undefined) {
+    const name = String(body.ingame_name ?? '').trim();
+    if (name.length > 40) return res.status(400).json({ error: 'ingame_name must be 40 characters or fewer' });
+    push('ingame_name', name || null); // empty clears it
+  }
+  if (!sets.length) return res.status(400).json({ error: 'Nothing to update' });
+
+  try {
+    vals.push(req.user.id);
+    const { rows: [user] } = await db.query(
+      `UPDATE users SET ${sets.join(', ')}, updated_at = NOW()
+       WHERE id = $${vals.length} RETURNING ${USER_COLUMNS}`,
+      vals
+    );
+    res.json({ user });
+  } catch (err) {
+    console.error('[auth] patch me failed:', err.message);
+    res.status(500).json({ error: 'Failed to update profile' });
+  }
 });
 
 // ── Discord OAuth2 ──────────────────────────────────────────────────────────

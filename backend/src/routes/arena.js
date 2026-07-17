@@ -12,7 +12,10 @@ const db = require('../db');
 const { requireAuth, attachUser } = require('../middleware/requireAuth');
 const requireAdmin = require('../middleware/requireAdmin');
 const { getSnapshot, endsAtSql } = require('../services/arenaState');
-const { pairTournament, emitScoreboard, emitTournamentUpdate } = require('../services/arenaEngine');
+const {
+  pairTournament, emitScoreboard, emitTournamentUpdate, handleScoringOutcome,
+} = require('../services/arenaEngine');
+const { applyReport, adminResolve } = require('../services/arenaScoring');
 
 const router = express.Router();
 
@@ -72,9 +75,9 @@ router.get('/:id', attachUser, async (req, res) => {
         );
         let currentMatch = null;
         if (match) {
-          const [{ rows: [opp] }, { rows: sharedGroups }] = await Promise.all([
+          const [{ rows: [opp] }, { rows: sharedGroups }, { rows: reports }] = await Promise.all([
             db.query(
-              `SELECT u.id AS user_id, u.region,
+              `SELECT u.id AS user_id, u.region, u.ingame_name,
                       COALESCE(pl.display_name, u.display_name, u.discord_username, 'Player ' || u.id) AS name,
                       COALESCE(pl.avatar_url, u.avatar_url) AS avatar_url
                FROM users u LEFT JOIN players pl ON pl.id = u.player_id
@@ -91,8 +94,15 @@ router.get('/:id', attachUser, async (req, res) => {
                ORDER BY g.name`,
               [req.user.id, match.opponent_user_id]
             ),
+            // Both players' filed reports — lets the UI render awaiting/disputed
+            // states, including the opponent's conflicting claim.
+            db.query(
+              `SELECT reporter_user_id, winner_user_id, loser_games, reported_at
+               FROM arena_match_reports WHERE match_id = $1 ORDER BY reported_at ASC`,
+              [match.id]
+            ),
           ]);
-          currentMatch = { ...match, opponent: opp || null, sharedGroups };
+          currentMatch = { ...match, opponent: opp || null, sharedGroups, reports };
         }
         me = { participant, match: currentMatch };
       }
@@ -168,6 +178,52 @@ async function setParticipantStatus(req, res, newStatus) {
 router.post('/:id/withdraw', requireAuth, (req, res) => setParticipantStatus(req, res, 'withdrawn'));
 router.post('/:id/pause', requireAuth, (req, res) => setParticipantStatus(req, res, 'paused'));
 router.post('/:id/resume', requireAuth, (req, res) => setParticipantStatus(req, res, 'active'));
+
+// ── Match results ────────────────────────────────────────────────────────────
+
+// POST /api/arena/matches/:id/report  { winner_user_id, loser_games }
+// Players only (enforced in applyReport). Re-reporting is allowed while the
+// match is open — a disputed match converges when the reports come to agree.
+router.post('/matches/:id/report', requireAuth, async (req, res) => {
+  const matchId = parseId(req.params.id);
+  if (!matchId) return res.status(400).json({ error: 'Invalid match id' });
+  const { winner_user_id, loser_games } = req.body || {};
+  try {
+    const outcome = await applyReport({
+      matchId,
+      reporterUserId: req.user.id,
+      winnerUserId: Number(winner_user_id),
+      loserGames: Number(loser_games),
+    });
+    await handleScoringOutcome(outcome);
+    res.json({ result: outcome });
+  } catch (err) {
+    if (err.status) return res.status(err.status).json({ error: err.message });
+    console.error('[arena] report failed:', err.message);
+    res.status(500).json({ error: 'Failed to report result' });
+  }
+});
+
+// POST /api/arena/matches/:id/resolve  { winner_user_id, loser_games }
+// Admin force-confirm of a disputed/stuck match (confirm_method 'admin').
+router.post('/matches/:id/resolve', requireAdmin, async (req, res) => {
+  const matchId = parseId(req.params.id);
+  if (!matchId) return res.status(400).json({ error: 'Invalid match id' });
+  const { winner_user_id, loser_games } = req.body || {};
+  try {
+    const outcome = await adminResolve({
+      matchId,
+      winnerUserId: Number(winner_user_id),
+      loserGames: Number(loser_games),
+    });
+    await handleScoringOutcome(outcome);
+    res.json({ result: outcome });
+  } catch (err) {
+    if (err.status) return res.status(err.status).json({ error: err.message });
+    console.error('[arena] resolve failed:', err.message);
+    res.status(500).json({ error: 'Failed to resolve match' });
+  }
+});
 
 // ── Admin ────────────────────────────────────────────────────────────────────
 

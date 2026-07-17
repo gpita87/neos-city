@@ -26,7 +26,7 @@ async function getTournamentRow(id) {
 async function getStandings(tournamentId) {
   const { rows } = await db.query(
     `SELECT ap.user_id, ap.score, ap.streak, ap.wins, ap.losses, ap.status,
-            ap.joined_at, u.player_id,
+            ap.joined_at, u.player_id, u.ingame_name,
             ${NAME_SQL} AS name, ${AVATAR_SQL} AS avatar_url
      FROM arena_participants ap
      JOIN users u ON u.id = ap.user_id

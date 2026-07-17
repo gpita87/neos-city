@@ -88,6 +88,8 @@ export const unlinkPlayer = () => api.post('/auth/unlink').then(r => r.data);
 // post-login "Is this you?" claim step. Returns { suggestions: [...] } ([] when
 // nothing matches or the account is already linked).
 export const getClaimSuggestions = () => api.get('/auth/claim-suggestions').then(r => r.data);
+// Self-service profile fields; currently { ingame_name } (Arena M2).
+export const patchMe = (data) => api.patch('/auth/me', data).then(r => r.data);
 // OAuth sign-in is a full-page navigation (not an XHR), so build raw URLs.
 // In dev VITE_API_URL is unset and the Vite proxy forwards /api → backend.
 export const discordLoginUrl = () => `${import.meta.env.VITE_API_URL || ''}/api/auth/discord`;
@@ -105,6 +107,10 @@ export const pauseArena = (id) => api.post(`/arena/${id}/pause`).then(r => r.dat
 export const resumeArena = (id) => api.post(`/arena/${id}/resume`).then(r => r.data);
 export const createArenaTournament = (data) => api.post('/arena', data).then(r => r.data);
 export const updateArenaTournament = (id, data) => api.patch(`/arena/${id}`, data).then(r => r.data);
+// Match results: players report ({ winner_user_id, loser_games }); admins
+// force-confirm a disputed/stuck match with the same body.
+export const reportArenaMatch = (matchId, data) => api.post(`/arena/matches/${matchId}/report`, data).then(r => r.data);
+export const resolveArenaMatch = (matchId, data) => api.post(`/arena/matches/${matchId}/resolve`, data).then(r => r.data);
 
 // Organizers
 export const getOrganizers = () => api.get('/organizers').then(r => r.data);
