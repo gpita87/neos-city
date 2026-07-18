@@ -2340,7 +2340,13 @@ async function importOneChallongeScraped(payload) {
     for (const s of rankedStandings) {
       const player = playerByName.get(s.name);
       const rank = parseInt(s.rank);
-      if (player && Number.isFinite(rank)) rankByPlayerId.set(player.id, rank);
+      if (!player || !Number.isFinite(rank)) continue;
+      // Duplicate display names collapse onto one player row (e.g.
+      // thelonestar1 listed a linked-account "Bolimar" at rank 1 AND an
+      // anonymous "Bolimar" at rank 9) — keep the best rank rather than
+      // letting whichever row parses last win.
+      const prev = rankByPlayerId.get(player.id);
+      if (prev == null || rank < prev) rankByPlayerId.set(player.id, rank);
     }
   } else {
     const v1Shaped = mainMatches.map(m => ({
@@ -2352,6 +2358,41 @@ async function importOneChallongeScraped(payload) {
     }));
     const derived = deriveChallongePartialPlacements(v1Shaped, playerMap, tournament_type);
     for (const [playerId, rank] of derived) rankByPlayerId.set(playerId, rank);
+  }
+
+  // ── Champion fallback ───────────────────────────────────────────────────────
+  // The standings table has lost the winner's row before (TdomeR9/12/17: ranks
+  // 2..N parsed, no rank 1 → blank winner on the site). When a settled
+  // elimination bracket parsed some ranks but none of them is a 1, crown the
+  // grand-finals winner from the match data. Only fills the gap — a parsed
+  // rank 1 is never overridden, and a fully rank-less table (the intentional
+  // never-finalized partial pattern) is left alone.
+  const hasRankOne = () => [...rankByPlayerId.values()].includes(1);
+  let championFromMatches = false;
+  if (!isPartial && !hasRankOne() && rankByPlayerId.size > 0 &&
+      /elimination/i.test(tournament_type || '') && mainMatches.length > 0) {
+    // Highest-weight completed match = the deciding set. A bracket reset adds
+    // a second max-round GF match; ids are allocated in creation order, so the
+    // higher id is the later (deciding) set.
+    const gf = mainMatches.reduce((best, m) =>
+      !best
+        || weightOf(m) > weightOf(best)
+        || (weightOf(m) === weightOf(best) && Number(m.id) > Number(best.id))
+        ? m : best, null);
+    const champion = gf ? playerMap.get(String(gf.winner_id)) : null;
+    if (champion && rankByPlayerId.get(champion.id) == null) {
+      rankByPlayerId.set(champion.id, 1);
+      championFromMatches = true;
+      console.warn(`   🏆 "${name}" (${challonge_id}): standings had no rank-1 row — champion "${champion.display_name}" assigned from the grand-finals winner`);
+    }
+  }
+
+  // Defensive check: completed matches with parsed ranks but still no rank-1
+  // placement means a blank winner column on the site — make it loud during
+  // the run instead of surfacing months later.
+  const missingChampion = !isPartial && rankByPlayerId.size > 0 && !hasRankOne();
+  if (missingChampion) {
+    console.warn(`   🚨 "${name}" (${challonge_id}): finalized import has completed matches but NO rank-1 placement — winner will render blank`);
   }
 
   // ── ELO computation (only when new matches were inserted) ───────────────────
@@ -2436,6 +2477,8 @@ async function importOneChallongeScraped(payload) {
     matches_imported: importedMatches,
     partial: isPartial,
     placements_source: rankedStandings.length > 0 ? 'standings' : 'derived',
+    champion_fallback: championFromMatches,
+    missing_champion: missingChampion,
   };
 }
 

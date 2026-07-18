@@ -231,14 +231,17 @@ function parseStandings(doc) {
     const cells = [...row.cells].map((c) => (c.textContent || '').replace(/\s+/g, ' ').trim());
     const rank = parseInt(cells[0]);
     const name = cells[1] || '';
-    if (!Number.isFinite(rank) || !name) continue;
+    if (!name) continue;
+    // Keep rows whose rank cell doesn't parse (rank: null) instead of dropping
+    // them — the backend still wants the name→username mapping, and a dropped
+    // champion row is exactly how tournaments end up with no rank-1 placement.
     let username = null;
     const a = row.querySelector('a[href*="/users/"]');
     if (a) {
       const m = (a.getAttribute('href') || '').match(/\/users\/([^\/?#]+)/);
       if (m && m[1] !== 'new') username = decodeURIComponent(m[1]);
     }
-    out.push({ rank, name, username });
+    out.push({ rank: Number.isFinite(rank) ? rank : null, name, username });
   }
   return out;
 }
@@ -461,8 +464,11 @@ window._challongePhase2 = async function _challongePhase2() {
         console.log(`⏭️  ${payload.name} — backend skipped (${result.reason})`);
       } else {
         const src = result.placements_source === 'standings' ? '🏷 standings' : '🧮 derived';
+        const flags = (result.partial ? ' · PARTIAL' : '')
+          + (result.champion_fallback ? ' · 🏆 champion from GF winner' : '')
+          + (result.missing_champion ? ' · 🚨 NO RANK-1 PLACEMENT' : '');
         console.log(`✅ ${payload.name} — ${result.matches_imported} matches, ` +
-          `${result.participants} players, ${src}${result.partial ? ' · PARTIAL' : ''}`);
+          `${result.participants} players, ${src}${flags}`);
       }
       ok++;
       window._challongeScrapedQueue = window._challongeScrapedQueue.filter(
