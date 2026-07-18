@@ -728,7 +728,7 @@ export default function ArenaTournament() {
           {tournament.description && <p className="mt-1 text-sm text-slate-400">{tournament.description}</p>}
           <p className="mt-2 text-xs text-slate-500">
             {new Date(tournament.starts_at).toLocaleString()} · {tournament.duration_minutes} minutes ·
-            win = 2 pts, wins on a 2+ streak = 4 pts · best 2 of 3
+            win = 2 pts, wins on a 2+ streak = 4 pts · losing to a higher division keeps your streak · best 2 of 3
           </p>
         </div>
         <ArenaClock tournament={tournament} offsetMs={offsetMs} />

@@ -14,6 +14,7 @@ const {
   resolveReports,
   computePairings,
   divisionsWalled,
+  streakSurvivesLoss,
   REMATCH_WAIVER_MS,
 } = require('../src/services/arenaScoring');
 
@@ -236,6 +237,34 @@ describe('divisionsWalled', () => {
   it('treats a missing division as intermediate (pre-migration rows)', () => {
     assert.equal(divisionsWalled({}, p('veteran')), false);
     assert.equal(divisionsWalled({ division: null }, p('rookie')), false);
+  });
+});
+
+describe('streakSurvivesLoss — losing up keeps your streak', () => {
+  const p = (division) => ({ division });
+
+  it('survives a loss to a strictly higher division', () => {
+    assert.equal(streakSurvivesLoss(p('rookie'), p('intermediate')), true);
+    assert.equal(streakSurvivesLoss(p('intermediate'), p('veteran')), true);
+    // Unreachable through pairing (the wall), but the rule holds.
+    assert.equal(streakSurvivesLoss(p('rookie'), p('veteran')), true);
+  });
+
+  it('resets on a same-division loss', () => {
+    assert.equal(streakSurvivesLoss(p('rookie'), p('rookie')), false);
+    assert.equal(streakSurvivesLoss(p('intermediate'), p('intermediate')), false);
+    assert.equal(streakSurvivesLoss(p('veteran'), p('veteran')), false);
+  });
+
+  it('resets on a loss to a lower division', () => {
+    assert.equal(streakSurvivesLoss(p('veteran'), p('intermediate')), false);
+    assert.equal(streakSurvivesLoss(p('intermediate'), p('rookie')), false);
+  });
+
+  it('treats missing divisions as intermediate (pre-migration rows)', () => {
+    assert.equal(streakSurvivesLoss({}, p('veteran')), true);
+    assert.equal(streakSurvivesLoss({}, {}), false);
+    assert.equal(streakSurvivesLoss(p('rookie'), { division: null }), true);
   });
 });
 

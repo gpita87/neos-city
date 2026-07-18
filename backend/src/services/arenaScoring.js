@@ -18,6 +18,8 @@
 //   active 15+ min past clock end   → cancelled  (zombie cap, engine tick)
 //
 // Lichess scoring: win = 2 pts; each win while already ON a 2+ streak = 4 pts.
+// A loss to a player in a HIGHER skill division doesn't break the loser's
+// streak (streakSurvivesLoss); any other loss resets it to 0.
 // Trailing matches (tournament 'finished') score through this same path —
 // only NEW pairings gate on 'live'.
 
@@ -69,6 +71,17 @@ function skillDivision(row) {
 function divisionsWalled(a, b) {
   const pair = [skillDivision(a), skillDivision(b)];
   return pair.includes('rookie') && pair.includes('veteran');
+}
+
+const SKILL_DIVISION_RANK = { rookie: 0, intermediate: 1, veteran: 2 };
+
+// Losing "up" is expected: a loss to a player in a HIGHER skill division
+// doesn't break the loser's win streak (their next win still builds on it).
+// Same or lower division → normal streak reset. With the pairing wall in
+// place this fires for rookie-vs-intermediate and intermediate-vs-veteran.
+function streakSurvivesLoss(loserRow, winnerRow) {
+  return SKILL_DIVISION_RANK[skillDivision(winnerRow)]
+    > SKILL_DIVISION_RANK[skillDivision(loserRow)];
 }
 
 // Score-proximity pairing over the waiting pool. Input rows:
@@ -126,13 +139,15 @@ async function confirmMatchTx(client, match, winnerUserId, loserGames, confirmMe
     ? match.p2_user_id : match.p1_user_id;
 
   const { rows: parts } = await client.query(
-    `SELECT user_id, streak FROM arena_participants
+    `SELECT user_id, streak, division FROM arena_participants
      WHERE tournament_id = $1 AND user_id = ANY($2)
      ORDER BY user_id FOR UPDATE`,
     [match.tournament_id, [match.p1_user_id, match.p2_user_id]]
   );
   const winnerRow = parts.find((p) => Number(p.user_id) === Number(winnerUserId));
+  const loserRow = parts.find((p) => Number(p.user_id) === Number(loserUserId));
   const points = pointsForWin(winnerRow ? winnerRow.streak : 0);
+  const keepStreak = streakSurvivesLoss(loserRow || {}, winnerRow || {});
 
   await client.query(
     `UPDATE arena_matches
@@ -147,9 +162,11 @@ async function confirmMatchTx(client, match, winnerUserId, loserGames, confirmMe
      WHERE tournament_id = $1 AND user_id = $2`,
     [match.tournament_id, winnerUserId]
   );
+  // Losing to a higher skill division preserves the loser's streak
+  // (streakSurvivesLoss); otherwise the loss resets it.
   await client.query(
     `UPDATE arena_participants
-     SET streak = 0, losses = losses + 1, waiting_since = NOW()
+     SET ${keepStreak ? '' : 'streak = 0,'} losses = losses + 1, waiting_since = NOW()
      WHERE tournament_id = $1 AND user_id = $2`,
     [match.tournament_id, loserUserId]
   );
@@ -339,6 +356,7 @@ module.exports = {
   resolveReports,
   computePairings,
   divisionsWalled,
+  streakSurvivesLoss,
   REMATCH_WAIVER_MS,
   // db
   applyReport,
