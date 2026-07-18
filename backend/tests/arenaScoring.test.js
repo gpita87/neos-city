@@ -13,6 +13,7 @@ const {
   pointsForWin,
   resolveReports,
   computePairings,
+  divisionsWalled,
   REMATCH_WAIVER_MS,
 } = require('../src/services/arenaScoring');
 
@@ -20,12 +21,13 @@ const {
 
 const T0 = 1_700_000_000_000; // fixed "now" for pairing tests
 
-function waiter(user_id, score, waitedMs = 0, last_opponent_user_id = null) {
+function waiter(user_id, score, waitedMs = 0, last_opponent_user_id = null, division = 'intermediate') {
   return {
     user_id,
     score,
     waiting_since: new Date(T0 - waitedMs),
     last_opponent_user_id,
+    division,
   };
 }
 
@@ -203,6 +205,108 @@ describe('computePairings', () => {
     const pool = [
       { user_id: 1, score: 2, waiting_since: new Date(T0 - 5000).toISOString(), last_opponent_user_id: null },
       { user_id: 2, score: 2, waiting_since: new Date(T0).toISOString(), last_opponent_user_id: null },
+    ];
+    assert.deepEqual(ids(computePairings(pool, T0)), [[1, 2]]);
+  });
+});
+
+// ═══════════════════════════════════════════════════════════════════════════════
+//  Skill divisions — the rookie↔veteran pairing wall
+// ═══════════════════════════════════════════════════════════════════════════════
+
+describe('divisionsWalled', () => {
+  const p = (division) => ({ division });
+
+  it('walls rookie↔veteran in both directions', () => {
+    assert.equal(divisionsWalled(p('rookie'), p('veteran')), true);
+    assert.equal(divisionsWalled(p('veteran'), p('rookie')), true);
+  });
+
+  it('lets intermediate pair with everyone', () => {
+    assert.equal(divisionsWalled(p('intermediate'), p('rookie')), false);
+    assert.equal(divisionsWalled(p('intermediate'), p('veteran')), false);
+    assert.equal(divisionsWalled(p('intermediate'), p('intermediate')), false);
+  });
+
+  it('same-division pairs are never walled', () => {
+    assert.equal(divisionsWalled(p('rookie'), p('rookie')), false);
+    assert.equal(divisionsWalled(p('veteran'), p('veteran')), false);
+  });
+
+  it('treats a missing division as intermediate (pre-migration rows)', () => {
+    assert.equal(divisionsWalled({}, p('veteran')), false);
+    assert.equal(divisionsWalled({ division: null }, p('rookie')), false);
+  });
+});
+
+describe('computePairings — skill division wall', () => {
+  const ids = (pairs) => pairs.map(([a, b]) => [a.user_id, b.user_id]);
+
+  it('never pairs a lone rookie with a lone veteran — both keep waiting', () => {
+    const pool = [
+      waiter(1, 0, 0, null, 'rookie'),
+      waiter(2, 0, 0, null, 'veteran'),
+    ];
+    assert.deepEqual(computePairings(pool, T0), []);
+  });
+
+  it('the wall is HARD — no wait time waives it (unlike the rematch rule)', () => {
+    const tenMinutes = 10 * 60 * 1000;
+    const pool = [
+      waiter(1, 0, tenMinutes, null, 'rookie'),
+      waiter(2, 0, tenMinutes, null, 'veteran'),
+    ];
+    assert.deepEqual(computePairings(pool, T0), []);
+  });
+
+  it('an intermediate pairs with a rookie or a veteran', () => {
+    // Veteran seeds first (highest score) and the intermediate is their only
+    // legal candidate; the rookie sits out.
+    const pool = [
+      waiter(1, 4, 0, null, 'veteran'),
+      waiter(2, 2, 0, null, 'intermediate'),
+      waiter(3, 2, 0, null, 'rookie'),
+    ];
+    assert.deepEqual(ids(computePairings(pool, T0)), [[1, 2]]);
+  });
+
+  it('skips over a closer-scored walled candidate to a legal one', () => {
+    // Rookie 2 is closest to veteran 1 by score, but walled — 1 pairs with
+    // intermediate 3 instead.
+    const pool = [
+      waiter(1, 6, 0, null, 'veteran'),
+      waiter(2, 6, 0, null, 'rookie'),
+      waiter(3, 0, 0, null, 'intermediate'),
+    ];
+    assert.deepEqual(ids(computePairings(pool, T0)), [[1, 3]]);
+  });
+
+  it('the rematch waiver never reaches across the wall', () => {
+    // Veteran 1 waited past the waiver and their only non-last-opponent
+    // candidate is a rookie: walled, so the waiver falls back to the legal
+    // candidate list — which only holds their last opponent (2).
+    const pool = [
+      waiter(1, 4, REMATCH_WAIVER_MS, 2, 'veteran'),
+      waiter(2, 4, REMATCH_WAIVER_MS, 1, 'intermediate'),
+      waiter(3, 4, 0, null, 'rookie'),
+    ];
+    assert.deepEqual(ids(computePairings(pool, T0)), [[1, 2]]);
+  });
+
+  it('rookies and veterans pair within their own divisions', () => {
+    const pool = [
+      waiter(1, 4, 0, null, 'veteran'),
+      waiter(2, 4, 0, null, 'rookie'),
+      waiter(3, 2, 0, null, 'veteran'),
+      waiter(4, 2, 0, null, 'rookie'),
+    ];
+    assert.deepEqual(ids(computePairings(pool, T0)), [[1, 3], [2, 4]]);
+  });
+
+  it('rows without a division behave as intermediate', () => {
+    const pool = [
+      { user_id: 1, score: 2, waiting_since: new Date(T0), last_opponent_user_id: null },
+      waiter(2, 2, 0, null, 'veteran'),
     ];
     assert.deepEqual(ids(computePairings(pool, T0)), [[1, 2]]);
   });

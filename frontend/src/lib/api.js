@@ -101,7 +101,15 @@ export const googleLoginUrl = () => `${import.meta.env.VITE_API_URL || ''}/api/a
 // these REST calls are the snapshot layer / reconnect fallback.
 export const getArenaTournaments = () => api.get('/arena').then(r => r.data);
 export const getArenaTournament = (id) => api.get(`/arena/${id}`).then(r => r.data);
-export const registerArena = (id) => api.post(`/arena/${id}/register`).then(r => r.data);
+// Registration carries the self-reported skill division ('rookie' |
+// 'intermediate' | 'veteran'); omitted → server defaults to intermediate on
+// first registration and preserves the existing choice on re-register.
+export const registerArena = (id, division) =>
+  api.post(`/arena/${id}/register`, division ? { division } : {}).then(r => r.data);
+// Change skill division without touching registration status. Locked (409)
+// once the player has any match in this tournament.
+export const setArenaDivision = (id, division) =>
+  api.post(`/arena/${id}/division`, { division }).then(r => r.data);
 export const withdrawArena = (id) => api.post(`/arena/${id}/withdraw`).then(r => r.data);
 export const pauseArena = (id) => api.post(`/arena/${id}/pause`).then(r => r.data);
 export const resumeArena = (id) => api.post(`/arena/${id}/resume`).then(r => r.data);

@@ -156,10 +156,35 @@ router.get('/:id', attachUser, async (req, res) => {
 
 // ── Player actions ───────────────────────────────────────────────────────────
 
-// POST /api/arena/:id/register — join (late join allowed while live)
+// Self-reported SKILL divisions (distinct from the future "connection
+// division" in the M6 rules text). Per-tournament; splits the scoreboard and
+// walls rookie↔veteran pairings. Locked once the player has any match here.
+const SKILL_DIVISIONS = ['rookie', 'intermediate', 'veteran'];
+
+// True once ANY arena_matches row exists for this user in this tournament
+// (cancelled ones included) — the point where their division locks.
+async function hasPlayedInTournament(tournamentId, userId) {
+  const { rows: [row] } = await db.query(
+    `SELECT 1 FROM arena_matches
+     WHERE tournament_id = $1 AND (p1_user_id = $2 OR p2_user_id = $2)
+     LIMIT 1`,
+    [tournamentId, userId]
+  );
+  return Boolean(row);
+}
+
+// POST /api/arena/:id/register — join (late join allowed while live).
+// Body may carry {division}; omitted → 'intermediate' on first registration,
+// and an existing registration's division is NEVER silently reset — it only
+// changes when explicitly provided (and only before their first match).
 router.post('/:id/register', requireAuth, async (req, res) => {
   const id = parseId(req.params.id);
   if (!id) return res.status(400).json({ error: 'Invalid tournament id' });
+  const rawDivision = (req.body || {}).division;
+  if (rawDivision !== undefined && !SKILL_DIVISIONS.includes(rawDivision)) {
+    return res.status(400).json({ error: `division must be one of: ${SKILL_DIVISIONS.join(', ')}` });
+  }
+  const division = rawDivision === undefined ? null : rawDivision;
   try {
     const { rows: [t] } = await db.query(
       `SELECT id, status FROM arena_tournaments WHERE id = $1`, [id]
@@ -169,17 +194,31 @@ router.post('/:id/register', requireAuth, async (req, res) => {
       return res.status(409).json({ error: 'Registration is closed for this tournament' });
     }
 
+    // Re-registering with a DIFFERENT division counts as a division change,
+    // which locks after the first match (admin override is a later milestone).
+    if (division) {
+      const { rows: [existing] } = await db.query(
+        `SELECT division FROM arena_participants WHERE tournament_id = $1 AND user_id = $2`,
+        [id, req.user.id]
+      );
+      if (existing && existing.division !== division
+          && await hasPlayedInTournament(id, req.user.id)) {
+        return res.status(409).json({ error: 'Skill division is locked after your first match' });
+      }
+    }
+
     // Idempotent: re-registering while already active is a no-op (keeps queue
     // priority); returning after a withdrawal reactivates with score intact.
     const { rows: [participant] } = await db.query(
-      `INSERT INTO arena_participants (tournament_id, user_id)
-       VALUES ($1, $2)
+      `INSERT INTO arena_participants (tournament_id, user_id, division)
+       VALUES ($1, $2, COALESCE($3, 'intermediate'))
        ON CONFLICT (tournament_id, user_id) DO UPDATE
          SET status = 'active',
+             division = COALESCE($3, arena_participants.division),
              waiting_since = CASE WHEN arena_participants.status = 'active'
                                   THEN arena_participants.waiting_since ELSE NOW() END
        RETURNING *`,
-      [id, req.user.id]
+      [id, req.user.id, division]
     );
 
     await emitScoreboard(id);
@@ -188,6 +227,39 @@ router.post('/:id/register', requireAuth, async (req, res) => {
   } catch (err) {
     console.error('[arena] register failed:', err.message);
     res.status(500).json({ error: 'Failed to register' });
+  }
+});
+
+// POST /api/arena/:id/division  { division } — change skill division without
+// touching registration status (register would reactivate a paused player).
+// Allowed until the player's first match in this tournament; 409 after.
+router.post('/:id/division', requireAuth, async (req, res) => {
+  const id = parseId(req.params.id);
+  if (!id) return res.status(400).json({ error: 'Invalid tournament id' });
+  const { division } = req.body || {};
+  if (!SKILL_DIVISIONS.includes(division)) {
+    return res.status(400).json({ error: `division must be one of: ${SKILL_DIVISIONS.join(', ')}` });
+  }
+  try {
+    const { rows: [existing] } = await db.query(
+      `SELECT division FROM arena_participants WHERE tournament_id = $1 AND user_id = $2`,
+      [id, req.user.id]
+    );
+    if (!existing) return res.status(404).json({ error: 'Not registered in this tournament' });
+    if (existing.division !== division && await hasPlayedInTournament(id, req.user.id)) {
+      return res.status(409).json({ error: 'Skill division is locked after your first match' });
+    }
+    const { rows: [participant] } = await db.query(
+      `UPDATE arena_participants SET division = $3
+       WHERE tournament_id = $1 AND user_id = $2
+       RETURNING *`,
+      [id, req.user.id, division]
+    );
+    await emitScoreboard(id);
+    res.json({ participant });
+  } catch (err) {
+    console.error('[arena] division change failed:', err.message);
+    res.status(500).json({ error: 'Failed to change division' });
   }
 });
 

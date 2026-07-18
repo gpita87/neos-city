@@ -22,11 +22,12 @@ async function getTournamentRow(id) {
 }
 
 // Standings, best score first. Withdrawn players stay on the board (their
-// points were earned) but sort by score like everyone else.
+// points were earned) but sort by score like everyone else. division lets
+// the client split the board into skill-division sections.
 async function getStandings(tournamentId) {
   const { rows } = await db.query(
     `SELECT ap.user_id, ap.score, ap.streak, ap.wins, ap.losses, ap.status,
-            ap.joined_at, u.player_id, u.ingame_name,
+            ap.division, ap.joined_at, u.player_id, u.ingame_name,
             ${NAME_SQL} AS name, ${AVATAR_SQL} AS avatar_url
      FROM arena_participants ap
      JOIN users u ON u.id = ap.user_id

@@ -3,6 +3,7 @@ import { Link, useParams } from 'react-router-dom';
 import {
   getArenaTournament, registerArena, withdrawArena, pauseArena, resumeArena,
   reportArenaMatch, resolveArenaMatch, getArenaMatchChat, rateArenaConnection,
+  setArenaDivision,
 } from '../lib/api';
 import { useAuth } from '../contexts/AuthContext';
 import { useArenaSocket } from '../hooks/useArenaSocket';
@@ -11,6 +12,64 @@ import IngameNameEditor from '../components/arena/IngameNameEditor';
 import { formatGroupId } from '../lib/groupFormat';
 
 const REGION_FLAGS = { NA: '🇺🇸', EU: '🇪🇺', JP: '🇯🇵' };
+
+// Self-reported SKILL divisions (per-tournament; unrelated to the future
+// "connection division"). Scoreboard renders best-first (veteran on top);
+// the registration picker lists rookie-first to match its descriptions.
+const DIVISION_META = {
+  veteran: {
+    label: 'Veteran',
+    desc: 'Seasoned / top-level player',
+    text: 'text-amber-300',
+    badge: 'bg-amber-500/10 text-amber-300 border-amber-500/40',
+    active: 'bg-amber-500/15 border-amber-500/60 text-amber-200',
+  },
+  intermediate: {
+    label: 'Intermediate',
+    desc: 'The default if unsure',
+    text: 'text-cyan-300',
+    badge: 'bg-cyan-500/10 text-cyan-300 border-cyan-500/40',
+    active: 'bg-cyan-500/15 border-cyan-500/60 text-cyan-200',
+  },
+  rookie: {
+    label: 'Rookie',
+    desc: 'New or still learning',
+    text: 'text-emerald-300',
+    badge: 'bg-emerald-500/10 text-emerald-300 border-emerald-500/40',
+    active: 'bg-emerald-500/15 border-emerald-500/60 text-emerald-200',
+  },
+};
+const SCOREBOARD_DIVISION_ORDER = ['veteran', 'intermediate', 'rookie'];
+const PICKER_DIVISION_ORDER = ['rookie', 'intermediate', 'veteran'];
+
+// Rows from before the divisions migration have no division — treat as the default.
+const divisionOf = (p) => p.division || 'intermediate';
+
+// Three-button skill-division picker. No preselection on registration —
+// `value` stays null until the player makes the choice explicitly.
+function DivisionPicker({ value, onPick, disabled }) {
+  return (
+    <div className="flex gap-2 flex-wrap">
+      {PICKER_DIVISION_ORDER.map((key) => {
+        const d = DIVISION_META[key];
+        const isActive = value === key;
+        return (
+          <button
+            key={key}
+            onClick={() => onPick(key)}
+            disabled={disabled}
+            className={`text-left px-3 py-2 rounded-lg border transition-colors disabled:opacity-50 ${isActive
+              ? d.active
+              : 'bg-[#050a18] border-[#1a2744] hover:border-slate-500'}`}
+          >
+            <span className={`block text-sm font-medium ${isActive ? '' : d.text}`}>{d.label}</span>
+            <span className="block text-xs text-slate-500">{d.desc}</span>
+          </button>
+        );
+      })}
+    </div>
+  );
+}
 
 // Countdown driven by SERVER time: `offsetMs` is (server_now - client now),
 // captured whenever a payload carrying server_now arrives, so a wrong local
@@ -48,10 +107,9 @@ function ArenaClock({ tournament, offsetMs }) {
   );
 }
 
-function Scoreboard({ standings, myUserId }) {
-  if (!standings.length) {
-    return <p className="text-slate-500 text-sm">No players registered yet.</p>;
-  }
+// One division's table. `standings` arrive globally sorted by score, so a
+// filtered slice is already ranked within its section.
+function ScoreboardTable({ rows, myUserId }) {
   return (
     <table className="w-full text-sm">
       <thead>
@@ -64,7 +122,7 @@ function Scoreboard({ standings, myUserId }) {
         </tr>
       </thead>
       <tbody>
-        {standings.map((p, i) => (
+        {rows.map((p, i) => (
           <tr
             key={p.user_id}
             className={`border-t border-[#1a2744] ${p.user_id === myUserId ? 'bg-cyan-500/5' : ''} ${p.status !== 'active' ? 'opacity-50' : ''}`}
@@ -91,6 +149,30 @@ function Scoreboard({ standings, myUserId }) {
         ))}
       </tbody>
     </table>
+  );
+}
+
+// Scoreboard split by skill division: Veteran → Intermediate → Rookie, each
+// ranked within itself, empty sections hidden. Finalized standings render
+// through this same component, so the final board keeps the split.
+function Scoreboard({ standings, myUserId }) {
+  if (!standings.length) {
+    return <p className="text-slate-500 text-sm">No players registered yet.</p>;
+  }
+  const sections = SCOREBOARD_DIVISION_ORDER
+    .map((key) => ({ key, rows: standings.filter((p) => divisionOf(p) === key) }))
+    .filter((s) => s.rows.length > 0);
+  return (
+    <div className="space-y-5">
+      {sections.map(({ key, rows }) => (
+        <div key={key}>
+          <h3 className={`text-xs font-display tracking-widest uppercase ${DIVISION_META[key].text}`}>
+            {DIVISION_META[key].label} <span className="text-slate-600 normal-case">({rows.length})</span>
+          </h3>
+          <ScoreboardTable rows={rows} myUserId={myUserId} />
+        </div>
+      ))}
+    </div>
   );
 }
 
@@ -477,6 +559,11 @@ export default function ArenaTournament() {
   const [chatMessages, setChatMessages] = useState([]);
   // Match ids whose connection-rating prompt the user skipped (session-local).
   const [dismissedRatings, setDismissedRatings] = useState(() => new Set());
+  // Skill division: explicit pick pre-registration (null until chosen), plus
+  // the post-registration "change" flow (open until the first match locks it).
+  const [pickedDivision, setPickedDivision] = useState(null);
+  const [changingDivision, setChangingDivision] = useState(false);
+  const [divisionError, setDivisionError] = useState(null);
 
   const captureServerNow = (serverNow) => {
     if (!serverNow) return;
@@ -567,6 +654,26 @@ export default function ArenaTournament() {
     }
   };
 
+  // Change skill division in place (doesn't touch registration status).
+  // The server 409s once the player has any match here — surface that inline.
+  const changeDivision = async (division) => {
+    if (division === data?.me?.participant?.division) {
+      setChangingDivision(false);
+      return;
+    }
+    setBusy(true);
+    setDivisionError(null);
+    try {
+      await setArenaDivision(tournamentId, division);
+      setChangingDivision(false);
+      await load();
+    } catch (err) {
+      setDivisionError(err.response?.data?.error || 'Failed to change division');
+    } finally {
+      setBusy(false);
+    }
+  };
+
   const submitReport = async (body) => {
     if (!myMatchId) return;
     setReportBusy(true);
@@ -635,19 +742,42 @@ export default function ArenaTournament() {
               <Link to="/login" className="text-cyan-300 hover:underline">Sign in</Link> to enter this tournament.
             </p>
           ) : !registered ? (
-            <div className="flex items-center gap-4 flex-wrap">
-              <button
-                onClick={() => action(registerArena)}
-                disabled={busy}
-                className="px-5 py-2 rounded-lg text-sm font-medium bg-cyan-500 text-[#050a18] hover:bg-cyan-400 disabled:opacity-50 transition-colors"
-              >
-                {tournament.status === 'live' ? 'Join now (late entry)' : 'Register'}
-              </button>
-              <IngameNameEditor />
+            <div>
+              <p className="text-xs font-display text-slate-500 tracking-widest uppercase">Skill division</p>
+              <div className="mt-2">
+                <DivisionPicker value={pickedDivision} onPick={setPickedDivision} disabled={busy} />
+              </div>
+              <div className="mt-3 flex items-center gap-4 flex-wrap">
+                <button
+                  onClick={() => action((tid) => registerArena(tid, pickedDivision))}
+                  disabled={busy || !pickedDivision}
+                  className="px-5 py-2 rounded-lg text-sm font-medium bg-cyan-500 text-[#050a18] hover:bg-cyan-400 disabled:opacity-50 transition-colors"
+                >
+                  {tournament.status === 'live' ? 'Join now (late entry)' : 'Register'}
+                </button>
+                {!pickedDivision && (
+                  <span className="text-xs text-slate-500">Pick a division to enter — you can change it until your first match.</span>
+                )}
+                <IngameNameEditor />
+              </div>
             </div>
           ) : (
             <div className="flex items-center gap-3 flex-wrap">
               <span className="text-sm text-emerald-300">✓ You're in{me.participant.status === 'paused' ? ' (paused)' : ''}</span>
+              <span className={`text-xs px-2 py-0.5 rounded border ${DIVISION_META[divisionOf(me.participant)].badge}`}>
+                {DIVISION_META[divisionOf(me.participant)].label}
+              </span>
+              {(me.participant.wins + me.participant.losses > 0 || me.match) ? (
+                <span className="text-xs text-slate-600">(division locked after first match)</span>
+              ) : (
+                <button
+                  onClick={() => { setDivisionError(null); setChangingDivision((v) => !v); }}
+                  disabled={busy}
+                  className="text-xs text-slate-400 hover:text-cyan-300"
+                >
+                  {changingDivision ? 'cancel change' : 'change'}
+                </button>
+              )}
               {me.participant.status === 'active' ? (
                 <button onClick={() => action(pauseArena)} disabled={busy} className="text-xs text-slate-400 hover:text-amber-300">Pause pairing</button>
               ) : (
@@ -660,6 +790,12 @@ export default function ArenaTournament() {
                 <Link to="/link" className="text-xs text-slate-500 hover:text-cyan-300">
                   Tip: claim your player profile so results show under your record →
                 </Link>
+              )}
+              {changingDivision && (
+                <div className="w-full mt-1">
+                  <DivisionPicker value={divisionOf(me.participant)} onPick={changeDivision} disabled={busy} />
+                  {divisionError && <p className="mt-1 text-xs text-red-400">{divisionError}</p>}
+                </div>
               )}
             </div>
           )}

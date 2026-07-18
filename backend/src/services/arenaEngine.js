@@ -135,9 +135,10 @@ async function pairTournament(tournamentId) {
       return [];
     }
 
-    // Waiting pool: active participants with no open match.
+    // Waiting pool: active participants with no open match. division feeds
+    // the rookie↔veteran pairing wall in computePairings.
     const { rows: waiting } = await client.query(
-      `SELECT ap.user_id, ap.score, ap.waiting_since, ap.last_opponent_user_id
+      `SELECT ap.user_id, ap.score, ap.waiting_since, ap.last_opponent_user_id, ap.division
        FROM arena_participants ap
        WHERE ap.tournament_id = $1 AND ap.status = 'active'
          AND NOT EXISTS (

@@ -56,15 +56,31 @@ function tsMs(v) {
   return v instanceof Date ? v.getTime() : new Date(v).getTime();
 }
 
+// Self-reported skill division, defaulting rows from before the divisions
+// migration (or test fixtures without one) to 'intermediate'.
+function skillDivision(row) {
+  return row.division || 'intermediate';
+}
+
+// The skill-division wall: a self-reported rookie is NEVER paired with a
+// self-reported veteran, either direction. Intermediate pairs with everyone.
+// This is a HARD constraint — unlike the rematch rule, no amount of waiting
+// waives it.
+function divisionsWalled(a, b) {
+  const pair = [skillDivision(a), skillDivision(b)];
+  return pair.includes('rookie') && pair.includes('veteran');
+}
+
 // Score-proximity pairing over the waiting pool. Input rows:
-//   { user_id, score, waiting_since, last_opponent_user_id }
+//   { user_id, score, waiting_since, last_opponent_user_id, division }
 // Returns [[a, b], ...] pairs of those rows.
 //
 // Walks the pool best-score-first (waiting_since breaks ties); each player is
-// matched to the candidate with the closest score. An immediate rematch
-// (either side's last_opponent) is skipped unless the seeking player has
-// already waited 45s+ — better a rematch than a player idling forever in a
-// small pool. A player with no legal candidate sits out this pass and keeps
+// matched to the candidate with the closest score. Rookie↔veteran candidates
+// are excluded outright (divisionsWalled — hard, never waived). An immediate
+// rematch (either side's last_opponent) is skipped unless the seeking player
+// has already waited 45s+ — better a rematch than a player idling forever in
+// a small pool. A player with no legal candidate sits out this pass and keeps
 // their waiting_since priority for the next one.
 function computePairings(waiting, nowMs = tsMs(new Date())) {
   const queue = [...waiting].sort(
@@ -73,16 +89,18 @@ function computePairings(waiting, nowMs = tsMs(new Date())) {
   const pairs = [];
   while (queue.length >= 2) {
     const p = queue.shift();
-    const candidates = [...queue].sort(
-      (x, y) => Math.abs(x.score - p.score) - Math.abs(y.score - p.score)
-        || tsMs(x.waiting_since) - tsMs(y.waiting_since)
-    );
+    const candidates = [...queue]
+      .filter((c) => !divisionsWalled(p, c))
+      .sort(
+        (x, y) => Math.abs(x.score - p.score) - Math.abs(y.score - p.score)
+          || tsMs(x.waiting_since) - tsMs(y.waiting_since)
+      );
     const isRematch = (c) =>
       Number(c.user_id) === Number(p.last_opponent_user_id)
       || Number(c.last_opponent_user_id) === Number(p.user_id);
     let chosen = candidates.find((c) => !isRematch(c));
     if (!chosen && nowMs - tsMs(p.waiting_since) >= REMATCH_WAIVER_MS) {
-      chosen = candidates[0]; // rematch waiver
+      chosen = candidates[0]; // rematch waiver — only ever among un-walled candidates
     }
     if (!chosen) continue;
     queue.splice(queue.indexOf(chosen), 1);
@@ -320,6 +338,7 @@ module.exports = {
   pointsForWin,
   resolveReports,
   computePairings,
+  divisionsWalled,
   REMATCH_WAIVER_MS,
   // db
   applyReport,
