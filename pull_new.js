@@ -8,9 +8,13 @@
 //   2. Optionally refresh harvested_tournaments.txt via harvest_new.js
 //      (Node), harvest_console.js (browser fallback for Challonge's 403
 //      block), and harvest_startgg.js.
-//   3. Run batch_import.js (Challonge + start.gg, date-sorted).
+//   3. Optionally run batch_import.js (Challonge v1 API + start.gg,
+//      date-sorted). The v1 API is metered (500 req / 30 days) — skip this
+//      while the quota is exhausted and use the browser-console Challonge
+//      importer in step 4 instead.
 //   4. Prompt for any browser-console steps the user still needs to do
-//      (Tonamel and Liquipedia brackets - those need a real Chrome session).
+//      (Challonge brackets, Tonamel, Liquipedia - those need a real
+//      Chrome session).
 //   5. Run recalculate_elo.js so Pass-2 achievements and full ELO are correct.
 //   6. Run check_import_status.js for a final sanity check.
 //   7. Run backup_db.js for a logical Supabase dump under neos-city/backups/.
@@ -121,6 +125,10 @@ function banner(title) {
   console.log('                              DevTools on challonge.com, uses your session cookies');
   console.log('                              to bypass the 403. Walks all 7 organizers in one go.');
   console.log('    - harvest_startgg.js      start.gg GraphQL query for past Pokken tournaments');
+  console.log('  NOTE: harvest validation (validatePokkenSlugs) spends Challonge v1 API');
+  console.log('        calls. While the monthly quota is exhausted, 429s keep slugs');
+  console.log('        defensively, so junk can slip into the file — manually review');
+  console.log('        anything appended during a quota outage.');
   const harvestAnswer = await ask('  Run all three harvest steps now? (Y/n): ');
   if (harvestAnswer === 'n' || harvestAnswer === 'no') {
     console.log('  Skipping harvest. Importing only URLs already in the file.');
@@ -150,15 +158,25 @@ function banner(title) {
     }
   }
 
-  // 3. Run batch_import.js
+  // 3. Optionally run batch_import.js (v1 API path — metered monthly quota)
   console.log('\nStep 3/7: Importing Challonge + start.gg URLs from harvested_tournaments.txt');
-  console.log('          (URLs will be date-sorted via /preview-dates before import)');
-  try {
-    await runScript('batch_import.js');
-  } catch (err) {
-    console.error(`\n  batch_import.js failed: ${err.message}`);
-    const cont = await ask('  Continue with the rest of the workflow anyway? (y/N): ');
-    if (cont !== 'y' && cont !== 'yes') process.exit(1);
+  console.log('          batch_import.js walks the file via the Challonge v1 API, which is');
+  console.log('          metered (500 requests / 30 days; ~3 calls per tournament plus the');
+  console.log('          /preview-dates probes). If the quota is exhausted (429s), say no');
+  console.log('          here and use the browser-console Challonge importer in Step 4 -');
+  console.log('          it scrapes challonge.com directly, no quota. Caveat: skipping also');
+  console.log('          skips start.gg imports (the console importer is Challonge-only).');
+  const batchAnswer = await ask('  Run batch_import.js now? (y/N): ');
+  if (batchAnswer !== 'y' && batchAnswer !== 'yes') {
+    console.log('  Skipping batch_import.js.');
+  } else {
+    try {
+      await runScript('batch_import.js');
+    } catch (err) {
+      console.error(`\n  batch_import.js failed: ${err.message}`);
+      const cont = await ask('  Continue with the rest of the workflow anyway? (y/N): ');
+      if (cont !== 'y' && cont !== 'yes') process.exit(1);
+    }
   }
 
   // 4. Browser-console steps (manual, not automatable from Node)
@@ -166,6 +184,13 @@ function banner(title) {
   console.log('  These sources need a real Chrome tab to run their scrapers.');
   console.log('  For each one I can copy the script (with ADMIN_TOKEN pre-filled) to');
   console.log('  your clipboard and print the page to open.');
+
+  await offerConsoleImport({
+    label:    'Challonge',
+    script:   'challonge_import_console.js',
+    targetUrl: 'https://challonge.com/tournaments',
+    blurb:    'Scrapes pending harvested brackets from challonge.com itself (asks the backend which URLs are still missing, imports chronologically). No API quota - primary Challonge path while the v1 quota is exhausted.',
+  });
 
   await offerConsoleImport({
     label:    'Tonamel',
