@@ -704,3 +704,9 @@ https://challonge.com/devlinhartfgc/FFC260
 # Appended by harvest_startgg.js on 2026-07-17 (last 90d)
 # 2026-07-14 - Heaven's Arena #35 — Heaven's Arena #35
 https://www.start.gg/tournament/heaven-s-arena-35/events/heaven-s-arena-35/brackets/2343325/3386179
+
+# Added manually 2026-07-18 — Norcal 2023 local 1 (Euphnet), Jul 22 2023, 4p,
+# TapuCocoa 1st / Pitaguy 2nd. Sibling of ncpokken2 (DB id 1375). After import,
+# flag it offline: node flag_ncpokken1_offline.js --apply
+#   Norcal 2023 local 1 (Euphnet) | 2023-07-22 | 4p | game:Pokkén Tournament DX
+https://challonge.com/ncpokken1

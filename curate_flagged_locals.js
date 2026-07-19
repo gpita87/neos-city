@@ -10,6 +10,12 @@
 //      MTM) — matched by NAME as well as slug, because these came in under
 //      root/variant/hash slugs that detectSeries' slug patterns miss
 //      (e.g. "Road To Greatness #11" with slug q4m4e2ez).
+//      ⚠ ONLY dropped when the event is ALREADY IN THE DB (challonge_id exact
+//      or "<org>-<slug>" org-prefix form, or name+date). A series-name match
+//      alone is not proof of presence — the Jul 16 run dropped 129 series
+//      events that were never imported (recovered by recurate_dropped_series.js).
+//      Series events NOT in the DB are kept and tagged with their series key.
+//      If the DB is unreachable, nothing is dropped by this rule.
 //   2. Wrong-game entries (the Smash "Heaven's Arena" brackets, etc.) — any
 //      row whose game_name isn't Pokkén.
 //   3. Likely duplicates already in the DB under a different slug — matched by
@@ -86,12 +92,22 @@ async function loadDbTournaments() {
     );
     const byNameDate = new Set();
     const bySlug     = new Set();
+    const slugList   = [];
     for (const r of rows) {
-      if (r.challonge_id) bySlug.add(String(r.challonge_id).toLowerCase());
+      if (r.challonge_id) {
+        bySlug.add(String(r.challonge_id).toLowerCase());
+        slugList.push(String(r.challonge_id).toLowerCase());
+      }
       const d = r.started_at ? new Date(r.started_at).toISOString().slice(0, 10) : '';
       byNameDate.add(`${normName(r.name)}|${d}`);
     }
-    return { byNameDate, bySlug };
+    // Presence check under either slug form the importers store: the bare
+    // slug, or the v1-style "<org>-<slug>" for community-subdomain events.
+    const hasSlug = (slug) => {
+      const s = String(slug).toLowerCase();
+      return bySlug.has(s) || slugList.some(id => id.endsWith(`-${s}`));
+    };
+    return { byNameDate, bySlug, hasSlug };
   } catch (err) {
     console.warn(`  DB lookup failed (${err.message}) — skipping duplicate reconcile.\n`);
     return null;
@@ -141,13 +157,19 @@ async function loadDbTournaments() {
     // Rule 2: wrong game (game known and not Pokkén). '?' / blank = keep.
     if (game && game !== '?' && !POKKEN_RE.test(game)) { droppedGame.push({ ...r, why: game }); continue; }
 
-    // Rule 1: known series (by name or slug)
+    // Rule 1: known series (by name or slug) — dropped ONLY when the event is
+    // already in the DB. A series match alone doesn't mean it was imported
+    // (the Jul 16 run dropped 129 never-imported series events this way).
     const series = knownSeries(name, r.slug);
-    if (series) { droppedSeries.push({ ...r, why: series }); continue; }
+    if (series) {
+      const present = db && (db.hasSlug(r.slug) || db.byNameDate.has(`${normName(name)}|${date}`));
+      if (present) { droppedSeries.push({ ...r, why: series }); continue; }
+      r.seriesTag = series; // kept — falls through with a tag for the review file
+    }
 
     // Rule 3: duplicate already in DB under a different slug
     if (db) {
-      const dupSlug = db.bySlug.has(r.slug.toLowerCase());
+      const dupSlug = db.hasSlug(r.slug);
       const dupND   = db.byNameDate.has(`${normName(name)}|${date}`);
       if (dupSlug || dupND) { droppedDup.push({ ...r, why: dupSlug ? 'slug' : 'name+date' }); continue; }
     }
@@ -180,17 +202,20 @@ async function loadDbTournaments() {
                ''];
   for (const r of kept) {
     const m = r.meta;
-    const teamTag = TEAM_RE.test(m.name || '') ? '   ⚠ TEAM? verify entrants are individuals' : '';
-    out.push(`#   ${m.name || '?'} | ${m.date || '?'} | ${m.participants || '?'}p | game:${m.game || '?'}${teamTag}`);
+    const teamTag   = TEAM_RE.test(m.name || '') ? '   ⚠ TEAM? verify entrants are individuals' : '';
+    const seriesTag = r.seriesTag ? `   ⚑ series:${r.seriesTag} (not in DB — import will tag it)` : '';
+    out.push(`#   ${m.name || '?'} | ${m.date || '?'} | ${m.participants || '?'}p | game:${m.game || '?'}${teamTag}${seriesTag}`);
     out.push(r.url);
   }
   out.push('');
   fs.writeFileSync(FLAGGED, out.join('\n'));
 
   // ── Report ─────────────────────────────────────────────────────────────────
+  const keptSeries = kept.filter(r => r.seriesTag);
   console.log('='.repeat(64));
-  console.log(`KEPT (true locals):        ${kept.length}`);
-  console.log(`dropped — known series:    ${droppedSeries.length}`);
+  console.log(`KEPT (true locals):        ${kept.length - keptSeries.length}`);
+  console.log(`KEPT (series, not in DB):  ${keptSeries.length}`);
+  console.log(`dropped — series in DB:    ${droppedSeries.length}`);
   console.log(`dropped — wrong game:      ${droppedGame.length}`);
   console.log(`dropped — DB duplicate:    ${droppedDup.length}`);
   console.log('='.repeat(64));

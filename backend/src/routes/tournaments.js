@@ -2498,6 +2498,172 @@ router.post('/import-challonge-scraped', requireAdmin, async (req, res) => {
   }
 });
 
+// ── Scraped standings backfill onto an EXISTING tournament row ────────────────
+// For events already in the DB under another source whose Challonge bracket
+// holds fuller data. First case: NAIC 2022 (DB id 568, source 'liquipedia') —
+// Liquipedia gave it matches + top-8 placements, but ranks 9+ and the entrant
+// count only exist on the official bracket's /standings page
+// (pokkentournament.challonge.com/gcrniykz, 49 players). Importing that slug
+// via /import-challonge-scraped would CREATE A DUPLICATE tournament row; this
+// endpoint merges the scraped standings into the existing row instead.
+//
+// Semantics (deliberately conservative):
+//   - dry_run defaults to TRUE — the response lists per-row actions and writes
+//     nothing until the same payload is re-POSTed with dry_run:false.
+//   - players resolve by alias-resolved Challonge username, then the
+//     alias-resolved lowercased display name (the standard player key), then
+//     case-insensitive display_name. Unresolved rows create a new player —
+//     surfaced in dry-run so merge_players.js batches can be planned first.
+//   - existing placement rows KEEP their final_rank (mismatches are reported,
+//     not overwritten); NULL ranks are filled; missing rows are inserted.
+//   - participants_count is only filled when currently NULL.
+//   - matches, ELO, and stats are untouched — run recalculate_elo.js after.
+async function backfillScrapedPlacements(payload) {
+  const { tournament_id, participants_count, standings = [] } = payload;
+  const dryRun = payload.dry_run !== false; // default true
+  if (!tournament_id) throw new Error('tournament_id is required');
+
+  const { rows: [tournament] } = await db.query(
+    'SELECT * FROM tournaments WHERE id = $1', [tournament_id]);
+  if (!tournament) throw new Error(`tournament id ${tournament_id} not found`);
+
+  const ranked = standings
+    .map(s => ({
+      rank: parseInt(s && s.rank),
+      name: ((s && s.name) || '').trim(),
+      username: (s && s.username) ? String(s.username) : null,
+    }))
+    .filter(s => s.name && Number.isFinite(s.rank));
+  if (ranked.length === 0) throw new Error('no ranked standings rows in payload');
+
+  const { rows: existingRows } = await db.query(
+    `SELECT tp.player_id, tp.final_rank
+       FROM tournament_placements tp
+      WHERE tp.tournament_id = $1`, [tournament_id]);
+  const placementByPlayerId = new Map(existingRows.map(r => [r.player_id, r]));
+
+  const actions = [];
+  const seenPlayerIds = new Set();
+  for (const s of ranked) {
+    const keys = [];
+    if (s.username) keys.push(await resolveAlias(s.username.toLowerCase()));
+    const nameKey = await resolveAlias(s.name.toLowerCase());
+    if (!keys.includes(nameKey)) keys.push(nameKey);
+
+    let player = null, matchedBy = null;
+    for (const key of keys) {
+      const { rows: [p] } = await db.query(
+        'SELECT * FROM players WHERE challonge_username = $1', [key]);
+      if (p) { player = p; matchedBy = `username:${key}`; break; }
+    }
+    if (!player) {
+      const { rows: [p] } = await db.query(
+        `SELECT * FROM players WHERE LOWER(display_name) = LOWER($1) ORDER BY id LIMIT 1`,
+        [s.name]);
+      if (p) { player = p; matchedBy = 'display_name'; }
+    }
+
+    if (player && seenPlayerIds.has(player.id)) {
+      // Duplicate display names collapsing onto one player (same pattern the
+      // scraped importer guards) — first (best) rank wins, later rows skip.
+      actions.push({ rank: s.rank, name: s.name, action: 'skip-duplicate',
+                     detail: `standings row collapses onto already-handled player ${player.id}` });
+      continue;
+    }
+
+    if (!player) {
+      actions.push({ rank: s.rank, name: s.name, action: 'create-player+insert',
+                     detail: `no player matches [${keys.join(', ')}] — new player row` });
+      if (!dryRun) {
+        const profileSlug = s.username ? await resolveAlias(s.username.toLowerCase()) : null;
+        const { rows: [created] } = await db.query(
+          `INSERT INTO players (challonge_username, display_name, challonge_profile_slug)
+           VALUES ($1, $2, $3)
+           ON CONFLICT (challonge_username) DO UPDATE SET
+             challonge_profile_slug = COALESCE(players.challonge_profile_slug, EXCLUDED.challonge_profile_slug)
+           RETURNING *`,
+          [keys[0], s.name, profileSlug]);
+        await db.query(
+          `INSERT INTO tournament_placements (tournament_id, player_id, final_rank)
+           VALUES ($1, $2, $3)
+           ON CONFLICT (tournament_id, player_id) DO UPDATE SET
+             final_rank = COALESCE(tournament_placements.final_rank, EXCLUDED.final_rank)`,
+          [tournament_id, created.id, s.rank]);
+        seenPlayerIds.add(created.id);
+      }
+      continue;
+    }
+
+    seenPlayerIds.add(player.id);
+    const existing = placementByPlayerId.get(player.id);
+    if (existing) {
+      if (existing.final_rank != null) {
+        const agree = Number(existing.final_rank) === s.rank;
+        actions.push({ rank: s.rank, name: s.name, player_id: player.id, matched_by: matchedBy,
+                       action: 'keep-existing',
+                       detail: agree ? `already placed (rank ${existing.final_rank})`
+                                     : `RANK MISMATCH — keeping existing ${existing.final_rank}, standings say ${s.rank}` });
+      } else {
+        actions.push({ rank: s.rank, name: s.name, player_id: player.id, matched_by: matchedBy,
+                       action: 'fill-rank', detail: 'existing placement row has NULL rank' });
+        if (!dryRun) {
+          await db.query(
+            `UPDATE tournament_placements SET final_rank = $3
+              WHERE tournament_id = $1 AND player_id = $2 AND final_rank IS NULL`,
+            [tournament_id, player.id, s.rank]);
+        }
+      }
+      continue;
+    }
+
+    actions.push({ rank: s.rank, name: s.name, player_id: player.id, matched_by: matchedBy,
+                   action: 'insert' });
+    if (!dryRun) {
+      await db.query(
+        `INSERT INTO tournament_placements (tournament_id, player_id, final_rank)
+         VALUES ($1, $2, $3)
+         ON CONFLICT (tournament_id, player_id) DO UPDATE SET
+           final_rank = COALESCE(tournament_placements.final_rank, EXCLUDED.final_rank)`,
+        [tournament_id, player.id, s.rank]);
+    }
+  }
+
+  let countAction = 'unchanged';
+  const n = parseInt(participants_count);
+  if (Number.isFinite(n)) {
+    if (tournament.participants_count == null) {
+      countAction = `set to ${n}`;
+      if (!dryRun) {
+        await db.query('UPDATE tournaments SET participants_count = $2 WHERE id = $1',
+                       [tournament_id, n]);
+      }
+    } else if (Number(tournament.participants_count) !== n) {
+      countAction = `kept existing ${tournament.participants_count} (payload said ${n})`;
+    }
+  }
+
+  const counts = {};
+  for (const a of actions) counts[a.action] = (counts[a.action] || 0) + 1;
+  return {
+    success: true,
+    dry_run: dryRun,
+    tournament: { id: tournament.id, name: tournament.name, source: tournament.source },
+    standings_rows: ranked.length,
+    participants_count: countAction,
+    counts,
+    actions,
+  };
+}
+
+router.post('/backfill-scraped-placements', requireAdmin, async (req, res) => {
+  try {
+    res.json(await backfillScrapedPlacements(req.body));
+  } catch (err) {
+    console.error('Scraped placement backfill error:', err.message);
+    res.status(500).json({ error: err.message });
+  }
+});
+
 // ══════════════════════════════════════════════════════════════════════════════
 // Offline (Liquipedia) import
 // Stores real-world offline tournament results.

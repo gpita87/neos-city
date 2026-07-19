@@ -307,6 +307,57 @@ Backend uses `nodemon` for hot reload. Changes to `.js` files in `backend/src/` 
 
 ## ⚡ NEXT AGENT: What to Do First
 
+### Current state (as of Jul 18 2026 — import-repair toolkit built; Gabriel runs the recovery)
+
+A Jul 18 investigation found the Jul 16 curation dropped 129 never-imported
+series events (its known-series rule never checked DB presence). This session
+built the repair toolkit; **all DB-touching runs are Gabriel's, from main,
+after cherry-picking. v1 quota is still dead until ~mid-Aug — Challonge
+imports go through the console importer only.**
+
+What shipped (worktree `worktree-import-repair`):
+1. **`recurate_dropped_series.js`** (new, dry-run default / `--apply`) — reads
+   `flagged_locals.backup.txt`, keeps every entry absent from the DB
+   (challonge_id exact AND `<org>-<slug>` form), excludes the legitimate drops
+   (2v2 team events, Smash HA brackets, 1-player stubs vf9go0zc/Tdome1),
+   dedupes against `harvested_tournaments.txt`, and on `--apply` appends the
+   keepers (~129 expected) for the console import.
+2. **ncpokken1** appended to `harvested_tournaments.txt` (Norcal 2023 local 1,
+   Jul 22 2023, 4p). After import, `node flag_ncpokken1_offline.js --apply`
+   (new script, dry-run default) mirrors ncpokken2's (id 1375) offline flags
+   onto it (is_offline=TRUE, location 'NorCal, CA', same series tier).
+3. **`curate_flagged_locals.js` root-cause fix** — the known-series drop now
+   fires only when the event is already in the DB (slug exact / org-prefix /
+   name+date); series events not in the DB are KEPT and tagged `⚑ series:<key>`.
+   DB unreachable → nothing dropped by that rule.
+4. **`harvest_participation_console.js` overhaul** — the paginated
+   `/users/<name>/tournaments` history (which includes Participant-role rows —
+   106 for tapucocoafgc) is now walked to exhaustion (cap 40 pages, stops on
+   first no-new-links page; the old `added < 3` heuristic truncated long
+   histories). Organizer-subdomain hrefs are normalized to
+   `challonge.com/<org>/<slug>`. Roster comment now pins pitaguy /
+   tapucocoafgc / zyflair as never-remove.
+5. **NAIC 2022 backfill** — new `POST /api/tournaments/backfill-scraped-placements`
+   (dry_run default TRUE; merges scraped standings into an EXISTING row:
+   existing ranks kept, NULL ranks filled, missing rows inserted,
+   participants_count filled only when NULL) + `naic_backfill_console.js`
+   (paste on the https://pokkentournament.challonge.com/gcrniykz tab; dry-run
+   first, `_naicBackfillApply()` to write). Do NOT import gcrniykz as a new
+   tournament — it must merge into row 568.
+
+**Run order for Gabriel (backend running, from main):** cherry-pick →
+`node recurate_dropped_series.js` (review) → `--apply` →
+`node prep_console.js challonge_import_console.js` → paste on challonge.com
+(expect ~130 imports; re-imports refresh started_at per 299d7f8) →
+`node flag_ncpokken1_offline.js` / `--apply` → NAIC console backfill →
+`node recalculate_elo.js` → `node check_import_status.js`.
+Spot-checks: a recovered DCM event shows series 'dcm'; RTG EU count jumps from
+4; Pitaguy gains the ncpokken1 runner-up; TapuCocoa gains DCM/NAIC results.
+Expect player-alias dupes from 2021-era brackets — propose merge_players.js
+batches (dry-run) after reviewing. A fresh harvest sweep
+(`node prep_console.js harvest_participation_console.js`) comes after, to
+catch post-Jul-14 events (dcmp38 confirmed missing; likely FFC 283+).
+
 ### Current state (as of Jul 17 2026 — challonge_import_console.js BUILT; run the import)
 
 The browser-console bulk importer decided on Jul 16 is built (worktree
