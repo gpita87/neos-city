@@ -16,6 +16,7 @@ const {
   PLACEMENT_TIERS,
   ONLINE_SERIES,
   SCOPES,
+  ALL_SCOPES,
   MATCH_TYPES,
   META_TYPES,
   detectSeries,
@@ -114,14 +115,17 @@ describe('Achievement catalog', () => {
     }
   });
 
-  it('has correct number of placement achievements (9 scopes x 4 tiers x 8 regions)', () => {
+  it('has correct number of placement achievements (all scopes x 4 tiers x all regions)', () => {
     const placement = ACHIEVEMENTS.filter(a => a.pass === 1 && a.tier !== 'participation' && a.tier !== 'special');
-    assert.equal(placement.length, 9 * 4 * 8, `Expected 288 placement achievements, got ${placement.length}`);
+    const expected = ALL_SCOPES.length * PLACEMENT_TIERS.length * REGIONS.length;
+    assert.equal(placement.length, expected,
+      `Expected ${expected} placement achievements, got ${placement.length}`);
   });
 
-  it('has correct number of participation achievements (9 scopes x 8 regions)', () => {
+  it('has correct number of participation achievements (online scopes x all regions)', () => {
     const participation = ACHIEVEMENTS.filter(a => a.tier === 'participation');
-    assert.equal(participation.length, 9 * 8, `Expected 72 participation achievements, got ${participation.length}`);
+    assert.equal(participation.length, SCOPES.length * REGIONS.length,
+      `Expected ${SCOPES.length * REGIONS.length} participation achievements, got ${participation.length}`);
   });
 
   it('has one World Traveler (multi-series) achievement', () => {
@@ -249,13 +253,14 @@ describe('detectOfflineTier', () => {
     assert.equal(detectOfflineTier('Genesis 5'), 'major');
   });
 
-  it('classifies NEC as regional', () => {
-    assert.equal(detectOfflineTier('Northeast Championship 2019'), 'regional');
-    assert.equal(detectOfflineTier('NEC 20'), 'regional');
+  it('classifies NEC as major (full series promoted 2026-05-08)', () => {
+    assert.equal(detectOfflineTier('Northeast Championship 2019'), 'major');
+    assert.equal(detectOfflineTier('NEC 20'), 'major');
   });
 
-  it('classifies Winter Brawl as regional', () => {
-    assert.equal(detectOfflineTier('Winter Brawl 12'), 'regional');
+  it('classifies Winter Brawl 12 as major, other years regional', () => {
+    assert.equal(detectOfflineTier('Winter Brawl 12'), 'major');
+    assert.equal(detectOfflineTier('Winter Brawl 11'), 'regional');
   });
 
   it('classifies BAM as regional', () => {
@@ -275,21 +280,21 @@ describe('detectOfflineTier', () => {
 
 describe('regionsAtOrAbove', () => {
 
-  it('kanto returns all 8 regions', () => {
+  it('kanto returns all regions', () => {
     const result = regionsAtOrAbove('kanto');
-    assert.equal(result.length, 8);
+    assert.equal(result.length, REGIONS.length);
     assert.equal(result[0], 'kanto');
-    assert.equal(result[7], 'galar');
+    assert.equal(result[result.length - 1], REGIONS[REGIONS.length - 1].id);
   });
 
-  it('galar returns only galar', () => {
-    const result = regionsAtOrAbove('galar');
-    assert.deepEqual(result, ['galar']);
+  it('the highest region returns only itself', () => {
+    const highest = REGIONS[REGIONS.length - 1].id;
+    assert.deepEqual(regionsAtOrAbove(highest), [highest]);
   });
 
-  it('hoenn returns hoenn through galar (6 regions)', () => {
+  it('hoenn returns hoenn through the highest region', () => {
     const result = regionsAtOrAbove('hoenn');
-    assert.equal(result.length, 6);
+    assert.equal(result.length, REGIONS.length - REGION_INDEX.hoenn);
     assert.equal(result[0], 'hoenn');
   });
 });
@@ -1093,10 +1098,11 @@ describe('getAchievementById', () => {
 
 describe('Region constants', () => {
 
-  it('has 8 regions in order', () => {
-    assert.equal(REGIONS.length, 8);
+  it('has 9 regions in order', () => {
+    assert.equal(REGIONS.length, 9);
     assert.equal(REGIONS[0].id, 'kanto');
     assert.equal(REGIONS[7].id, 'galar');
+    assert.equal(REGIONS[8].id, 'paldea');
   });
 
   it('thresholds are strictly increasing', () => {
@@ -1109,70 +1115,6 @@ describe('Region constants', () => {
   it('REGION_INDEX maps correctly', () => {
     assert.equal(REGION_INDEX.kanto, 0);
     assert.equal(REGION_INDEX.galar, 7);
-    assert.equal(REGION_INDEX.hoenn, 2);
-  });
-});
-    assert.equal(ach.region, 'kanto');
-  });
-
-  it('returns null for unknown ID', () => {
-    assert.equal(getAchievementById('nonexistent_xyz'), null);
-  });
-});
-
-// ═══════════════════════════════════════════════════════════════════════════════
-//  Region constants
-// ═══════════════════════════════════════════════════════════════════════════════
-
-describe('Region constants', () => {
-
-  it('has 8 regions in order', () => {
-    assert.equal(REGIONS.length, 8);
-    assert.equal(REGIONS[0].id, 'kanto');
-    assert.equal(REGIONS[7].id, 'galar');
-  });
-
-  it('thresholds are strictly increasing', () => {
-    for (let i = 1; i < REGIONS.length; i++) {
-      assert.ok(REGIONS[i].threshold > REGIONS[i - 1].threshold,
-        `${REGIONS[i].id} threshold (${REGIONS[i].threshold}) should be > ${REGIONS[i - 1].id} (${REGIONS[i - 1].threshold})`);
-    }
-  });
-
-  it('REGION_INDEX maps correctly', () => {
-    assert.equal(REGION_INDEX.kanto, 0);
-    assert.equal(REGION_INDEX.galar, 7);
-    assert.equal(REGION_INDEX.hoenn, 2);
-  });
-});
-
-describe('getAchievementById', () => {
-
-  it('returns the correct achievement', () => {
-    const ach = getAchievementById('global_champion_kanto');
-    assert.ok(ach);
-    assert.equal(ach.id, 'global_champion_kanto');
-    assert.equal(ach.tier, 'champion');
-    assert.equal(ach.region, 'kanto');
-  });
-
-  it('returns null for unknown ID', () => {
-    assert.equal(getAchievementById('nonexistent_xyz'), null);
-  });
-});
-
-describe('Region constants', () => {
-
-  it('thresholds are strictly increasing', () => {
-    for (let i = 1; i < REGIONS.length; i++) {
-      assert.ok(REGIONS[i].threshold > REGIONS[i - 1].threshold,
-        `${REGIONS[i].id} threshold (${REGIONS[i].threshold}) should be > ${REGIONS[i - 1].id} (${REGIONS[i - 1].threshold})`);
-    }
-  });
-
-  it('REGION_INDEX maps correctly', () => {
-    assert.equal(REGION_INDEX.kanto, 0);
-    assert.equal(REGION_INDEX[REGIONS[REGIONS.length - 1].id], REGIONS.length - 1);
     assert.equal(REGION_INDEX.hoenn, 2);
   });
 });

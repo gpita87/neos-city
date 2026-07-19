@@ -178,53 +178,27 @@ describe('calculateNewRatings', () => {
 //  placementBonus
 // ═══════════════════════════════════════════════════════════════════════════════
 
+// Placement bonuses are deliberately disabled (see elo.js): the old
+// +50/+30/+20/+10/+5 tiers caused runaway ELO inflation. The function is kept
+// so call sites (tournaments.js, recalculate_elo.js) can guard on bonus > 0.
 describe('placementBonus', () => {
 
-  it('1st place gets 50 bonus', () => {
-    assert.equal(placementBonus(1, 16), 50);
-    assert.equal(placementBonus(1, 64), 50);
-  });
-
-  it('2nd place gets 30 bonus', () => {
-    assert.equal(placementBonus(2, 16), 30);
-  });
-
-  it('3rd-4th get 20 bonus', () => {
-    assert.equal(placementBonus(3, 16), 20);
-    assert.equal(placementBonus(4, 16), 20);
-  });
-
-  it('top 8 (12.5%) gets 10 bonus', () => {
-    // 8/64 = 12.5% — exactly at the boundary
-    assert.equal(placementBonus(8, 64), 10);
-    // 5th in a 16-player bracket: 5/16 = 31.25% — NOT top 8 percentile, but rank <= 8 counts
-    // Wait: placement=5, total=16 → percentile = 5/16 = 0.3125 → > 0.125
-    // BUT: rank <= 4 check failed, and percentile > 0.125, so actually:
-    // placement=5, total=64 → 5/64 = 0.078 ≤ 0.125 → top 8 → 10
-    assert.equal(placementBonus(5, 64), 10);
-  });
-
-  it('top 25% (but not top 12.5%) gets 5 bonus', () => {
-    // 12/64 = 0.1875 (not top 12.5%) but ≤ 0.25 → 5
-    assert.equal(placementBonus(12, 64), 5);
-    // 16/64 = 0.25 → exactly at boundary → 5
-    assert.equal(placementBonus(16, 64), 5);
-  });
-
-  it('below top 25% gets 0', () => {
+  it('returns 0 for every placement — bonuses are disabled', () => {
+    assert.equal(placementBonus(1, 16), 0);
+    assert.equal(placementBonus(1, 64), 0);
+    assert.equal(placementBonus(2, 16), 0);
+    assert.equal(placementBonus(3, 16), 0);
+    assert.equal(placementBonus(4, 16), 0);
+    assert.equal(placementBonus(8, 64), 0);
+    assert.equal(placementBonus(16, 64), 0);
     assert.equal(placementBonus(32, 64), 0);
-    assert.equal(placementBonus(17, 64), 0);
   });
 
-  it('no bonus for tournaments with < 4 participants', () => {
-    assert.equal(placementBonus(1, 3), 0);
-    assert.equal(placementBonus(1, 2), 0);
+  it('returns 0 for tiny brackets too', () => {
     assert.equal(placementBonus(1, 1), 0);
-  });
-
-  it('4 participants is the minimum for bonuses', () => {
-    assert.equal(placementBonus(1, 4), 50);
-    assert.equal(placementBonus(2, 4), 30);
+    assert.equal(placementBonus(1, 2), 0);
+    assert.equal(placementBonus(1, 3), 0);
+    assert.equal(placementBonus(1, 4), 0);
   });
 });
 
@@ -267,7 +241,7 @@ describe('processTournamentResults', () => {
     assert.ok(eloUpdates[1].delta < 0, 'loser lost ELO');
   });
 
-  it('applies placement bonuses for large enough brackets', () => {
+  it('emits no placement-bonus updates (bonuses are disabled)', () => {
     const participants = [
       makeParticipant(1, 'p1', 1200, 0, 1, 8),
       makeParticipant(2, 'p2', 1200, 0, 2, 8),
@@ -280,12 +254,10 @@ describe('processTournamentResults', () => {
 
     const { eloUpdates } = processTournamentResults(matches, participants);
 
-    // 2 matches × 2 updates + 3 placement bonuses = 7
+    // 2 matches × 2 updates, and nothing else — no bonus rows even with ranks set
     const bonuses = eloUpdates.filter(u => u.reason);
-    assert.equal(bonuses.length, 3, 'should have 3 placement bonuses');
-    assert.equal(bonuses.find(b => b.player_id === 1).delta, 50, '1st place gets 50');
-    assert.equal(bonuses.find(b => b.player_id === 2).delta, 30, '2nd place gets 30');
-    assert.equal(bonuses.find(b => b.player_id === 3).delta, 20, '3rd place gets 20');
+    assert.equal(bonuses.length, 0, 'placement bonuses are disabled');
+    assert.equal(eloUpdates.length, 4);
   });
 
   it('skips matches with missing players', () => {
