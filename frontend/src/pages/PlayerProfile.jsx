@@ -226,6 +226,13 @@ export default function PlayerProfile() {
   const collapsedAchievements = collapseToHighestTier(player.achievements || []);
   const achGroups = groupAchievements(collapsedAchievements);
 
+  // Latest dated unlocks, cascade tiers already collapsed to the highest region
+  // per type. Undated unlocks (NULL unlocked_at) can't be ordered, so skip them.
+  const recentAchievements = collapsedAchievements
+    .filter(a => a.unlocked_at)
+    .sort((x, y) => new Date(y.unlocked_at) - new Date(x.unlocked_at))
+    .slice(0, 5);
+
   return (
     <div className="space-y-6">
       {/* Header */}
@@ -288,6 +295,42 @@ export default function PlayerProfile() {
                 </Link>
               );
             })}
+          </div>
+        </div>
+      )}
+
+      {/* Recent Achievements */}
+      {recentAchievements.length > 0 && (
+        <div className="bg-[#0c1425] border border-[#1a2744] rounded-xl p-5">
+          <div className="flex items-baseline justify-between mb-4">
+            <h2 className="font-display text-sm tracking-widest text-cyan-400">RECENT ACHIEVEMENTS</h2>
+            <span className="text-xs text-slate-500">
+              <span className="text-white font-bold">{collapsedAchievements.length}</span> unlocked
+            </span>
+          </div>
+          <div className="space-y-1.5">
+            {recentAchievements.map(a => (
+              <button
+                type="button"
+                key={a.achievement_id}
+                onClick={() => setOpenAchievement({
+                  id: a.achievement_id,
+                  name: a.name,
+                  description: a.description,
+                  icon: a.icon,
+                  category: a.category,
+                })}
+                className="w-full flex items-center gap-3 p-2 rounded-lg hover:bg-white/5 text-left transition-colors"
+                title="Click to see contributing tournaments"
+              >
+                <AchievementIcon icon={a.icon} regionFromId={a.achievement_id} size="md" />
+                <div className="flex-1 min-w-0">
+                  <p className="text-sm font-medium text-white truncate">{a.name}</p>
+                  <p className="text-xs text-slate-500 truncate">{a.description}</p>
+                </div>
+                <span className="text-xs text-slate-600 shrink-0 w-16 sm:w-20 text-right">{formatDate(a.unlocked_at)}</span>
+              </button>
+            ))}
           </div>
         </div>
       )}
