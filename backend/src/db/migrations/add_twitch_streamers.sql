@@ -42,5 +42,6 @@ INSERT INTO twitch_streamers (login, sort_order) VALUES
   ('shadowcat8088',    110),
   ('jda7',             120),
   ('theclassyfenn',    130),
-  ('nannerpus_pokken', 140)
+  ('nannerpus_pokken', 140),
+  ('yaboypokken',      150)
 ON CONFLICT (login) DO NOTHING;
