@@ -1676,12 +1676,20 @@ function deriveChallongePartialPlacements(matchList, playerMap, tournamentType) 
   // positive-round match) sinks BELOW losers-bracket finishers. In double elim
   // the grand finals is the only positive round that is ever an *eliminating*
   // loss (every other winners loss just drops you to losers), so we single out
-  // the deciding round — the deepest positive round with a completed match —
-  // and weight losses there above every losers round.
+  // the deciding round and weight losses there above every losers round.
+  //
+  // The deciding round is the deepest positive round in the bracket
+  // STRUCTURE — pending matches included. Scanning only *completed* matches
+  // is right for a finished bracket but wrong for a partial one: with the
+  // grand finals unplayed it drifts down to whatever winners round happened
+  // to be played last and hoists those losses to grand-finals weight, even
+  // though a winners loss mid-bracket just drops you to losers. On a
+  // finished bracket both definitions pick the same round, so this only
+  // changes partial behaviour.
   let gfRound = 0;
   for (const m of matchList) {
     const a = normalize(m);
-    if (a.state === 'complete' && a.round != null && a.round > gfRound) gfRound = a.round;
+    if (a.round != null && a.round > gfRound) gfRound = a.round;
   }
   const GF_WEIGHT_BASE = 100000; // safely above any 2×|round|
   const weightOf = (round) =>
@@ -2283,8 +2291,11 @@ async function importOneChallongeScraped(payload) {
   // last — the same weighting deriveChallongePartialPlacements() uses.
   const mainMatches  = completeMatches.filter(m => m.group == null);
   const groupMatches = completeMatches.filter(m => m.group != null);
+  // Deepest positive round in the bracket structure (see the note in
+  // deriveChallongePartialPlacements) — scanning only completed matches
+  // mis-hoists ordinary winners rounds on a partial bracket.
   let gfRound = 0;
-  for (const m of mainMatches) if (m.round > gfRound) gfRound = m.round;
+  for (const m of matches) if (m.group == null && m.round > gfRound) gfRound = m.round;
   const weightOf = (m) => m.round > 0
     ? (m.round === gfRound ? 100000 + m.round : m.round * 2 - 1)
     : Math.abs(m.round) * 2;
@@ -2331,12 +2342,22 @@ async function importOneChallongeScraped(payload) {
   }
 
   // ── Placement ranks ─────────────────────────────────────────────────────────
-  // Prefer Challonge's own standings ranks. Fall back to deriving from the
-  // match graph (same helper importOne's partial path uses) — group-stage
-  // matches are excluded from derivation because a group loss isn't an
-  // eliminating loss.
+  // Prefer Challonge's own standings ranks — but only once the bracket is
+  // settled. For an in-progress event /standings serves LIVE standings: rows
+  // grouped by win-loss record, so a mid-reveal RTG bracket renders two
+  // players at "rank 1" (both still undefeated), two at "rank 2", and so on.
+  // Writing those into final_rank hands every player a non-null rank, which
+  // both shows duplicate 1st/2nd places on the site and leaves nobody at
+  // final_rank = NULL — so unrevealed_top_n computes to 0 and the
+  // "TOP N UNREVEALED" banner never renders.
+  //
+  // Partial brackets therefore fall through to the match-graph derivation
+  // (the same helper importOne's partial path uses), which leaves the
+  // still-alive top N at NULL; a finalize re-import picks the standings
+  // table back up. Group-stage matches are excluded from derivation because
+  // a group loss isn't an eliminating loss.
   const rankByPlayerId = new Map();
-  if (rankedStandings.length > 0) {
+  if (!isPartial && rankedStandings.length > 0) {
     for (const s of rankedStandings) {
       const player = playerByName.get(s.name);
       const rank = parseInt(s.rank);
@@ -2349,13 +2370,19 @@ async function importOneChallongeScraped(payload) {
       if (prev == null || rank < prev) rankByPlayerId.set(player.id, rank);
     }
   } else {
-    const v1Shaped = mainMatches.map(m => ({
-      state: 'complete',
-      round: m.round,
-      player1_id: String(m.player1.id),
-      player2_id: String(m.player2.id),
-      winner_id: String(m.winner_id),
-    }));
+    // Pass the real match list — pending matches included, real states. The
+    // helper needs them to find the grand-finals round and to tell a genuine
+    // mid-reveal hold from a played-out-but-never-finalized bracket. Forcing
+    // every row to state 'complete' blinded it to both.
+    const v1Shaped = matches
+      .filter(m => m.group == null)
+      .map(m => ({
+        state: m.state,
+        round: m.round,
+        player1_id: m.player1 && m.player1.id != null ? String(m.player1.id) : null,
+        player2_id: m.player2 && m.player2.id != null ? String(m.player2.id) : null,
+        winner_id: m.winner_id != null ? String(m.winner_id) : null,
+      }));
     const derived = deriveChallongePartialPlacements(v1Shaped, playerMap, tournament_type);
     for (const [playerId, rank] of derived) rankByPlayerId.set(playerId, rank);
   }
